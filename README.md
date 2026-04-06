@@ -12,6 +12,7 @@ Personal knowledge base built and maintained by LLMs.
 
 - [LLM Wiki - Knowledge Base Pattern](docs/LLM%20Wiki%20-%20Knowledge%20Base%20Pattern.md) — The full pattern description with architecture, operations, and critical analysis
 - [Multi-Turn Traversal Pattern](docs/Multi-Turn%20Traversal%20Pattern.md) — How agents navigate the wiki without reading all pages at once
+- [Traversal Implementation](docs/Traversal%20Implementation.md) — Concrete tool contracts, working memory format, decision logic, and Python prototype
 
 ## Quick Start
 
@@ -41,3 +42,24 @@ Personal knowledge base built and maintained by LLMs.
 > — Andrej Karpathy
 
 The wiki is a persistent, compounding artifact. Knowledge is compiled once and kept current, not re-derived on every query.
+
+## Prototype
+
+A working prototype is available in `src/traversal.py`:
+
+```bash
+cd src
+python3 traversal.py
+```
+
+The demo shows multi-turn traversal:
+- Searches index for relevant pages
+- Reads pages incrementally across 3 turns
+- Maintains working memory of what was learned
+- Returns answer with full citation path
+
+**Note:** The prototype uses hardcoded mock LLM learning for demonstration. Real implementation would replace `_mock_learn_from_page()` with actual LLM calls for:
+- Extracting learned information from pages
+- Scoring candidate pages
+- Deciding continue/stop
+- Synthesizing final answers
