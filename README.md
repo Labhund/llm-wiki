@@ -14,6 +14,7 @@ Personal knowledge base built and maintained by LLMs.
 - [Multi-Turn Traversal Pattern](docs/Multi-Turn%20Traversal%20Pattern.md) — How agents navigate wiki without reading all pages at once
 - [Traversal Implementation](docs/Traversal%20Implementation.md) — Concrete tool contracts, working memory format, decision logic, and Python prototype
 - **[Implementation Ideas](docs/implementation-ideas/README.md)** — Draft design documents for open questions and future development
+- **[What is an Agent? - Identity and Soul](docs/what-is-an-agent-identity-and-soul.md)** — Philosophical question about what makes an agent "real" — simulated vs. persistent identity, the "genetic SOUL.md" concept, and the UI/UX parallel to the birth of the internet
 ## Quick Start
 
 1. Ingest a source:
