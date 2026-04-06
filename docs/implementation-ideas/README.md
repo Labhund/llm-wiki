@@ -24,6 +24,7 @@ Each document describes:
 4. [[04-turn-0-optimization.md]] — Fast path for simple queries (direct page read)
 5. [[05-parallel-agents.md]] — Parallel strategies for latency reduction
 6. [[06-programmatic-context-tuning.md]] — Profiles + hard budgets for memory management
+7. [[07-attention-aware-prompt-ordering.md]] — Double prompting with query at start/end to leverage attention
 
 ---
 

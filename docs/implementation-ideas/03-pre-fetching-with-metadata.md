@@ -33,19 +33,20 @@ Bad decisions lead to:
 | **First paragraph** | Parse from page content | Quick preview |
 | **Link count** | Parse wikilinks | Hub pages vs. leaf pages |
 | **Last modified** | File stat | Freshness |
+| **Tags** | Parse from frontmatter / metadata | Page classification, domain, relevance |
 
 ### Pre-Fetch Flow
 
 ```
-Turn 1: Agent reads [[srna-embeddings.md]]
+Turn1: Agent reads [[srna-embeddings.md]]
 
 Harness:
   1. Read page content
   2. Extract all wikilinks: [[clustering-metrics.md]], [[inter-rep-variant-analysis.md]], [[machine-learning/pca.md]]
   3. Pre-fetch metadata for each:
-     - [[clustering-metrics.md]]: 500 tokens, relevance: 0.92, first_para: "Silhouette scores..."
-     - [[inter-rep-variant-analysis.md]]: 1200 tokens, relevance: 0.78
-     - [[machine-learning/pca.md]]: 8000 tokens, relevance: 0.45
+     - [[clustering-metrics.md]]: 500 tokens, relevance: 0.92, tags: [validation, metrics]
+     - [[inter-rep-variant-analysis.md]]: 1200 tokens, relevance: 0.78, tags: [variants, bioinformatics]
+     - [[machine-learning/pca.md]]: 8000 tokens, relevance: 0.45, tags: [background, linear-algebra]
   4. Return page + metadata to agent
 
 Agent decision:
@@ -69,6 +70,7 @@ class PageMetadata:
     first_paragraph: str
     link_count: int
     last_modified: str
+    tags: List[str]         # Page tags from frontmatter
 
 class MetadataPrefetcher:
     def __init__(self, wiki_root: str):
@@ -114,6 +116,9 @@ class MetadataPrefetcher:
             # Link count
             link_count = len(re.findall(r'\[\[(.*?)\]\]', link_content))
 
+            # Tags (from frontmatter)
+            tags = self._parse_tags(link_content)
+
             # Last modified
             last_modified = datetime.fromtimestamp(
                 (self.wiki_root / link).stat().st_mtime
@@ -126,9 +131,20 @@ class MetadataPrefetcher:
                 first_paragraph=first_para[:200],  # Truncate
                 link_count=link_count,
                 last_modified=last_modified,
+                tags=tags,
             ))
 
         return metadata_list
+
+    def _parse_tags(self, content: str) -> List[str]:
+        """Parse tags from YAML frontmatter."""
+        # Format: ---\ntags: [tag1, tag2]\n---\nContent
+        match = re.match(r'^---\ntags:\s*\[([^\]]+)\]\n---', content, re.MULTILINE)
+        if match:
+            tags_str = match.group(1)
+            # Split by comma and trim
+            return [tag.strip() for tag in tags_str.split(',')]
+        return []
 ```
 
 ### Agent Decision-Making with Metadata
@@ -138,23 +154,23 @@ Agent internal:
 
 "Pre-fetched candidates:
 1. [[clustering-metrics.md]] - 500 tokens, relevance: 0.92
+   Tags: [validation, metrics]
    Preview: Silhouette scores measure cluster quality, ranging from -1 to 1...
 
 2. [[inter-rep-variant-analysis.md]] - 1200 tokens, relevance: 0.78
+   Tags: [variants, bioinformatics]
    Preview: Analysis of variant behavior across different embeddings...
 
 3. [[machine-learning/pca.md]] - 8000 tokens, relevance: 0.45
+   Tags: [background, linear-algebra]
    Preview: PCA reduces dimensionality via orthogonal transformation...
 
 Decision:
-- clustering-metrics.md is directly relevant and small → read immediately
-- inter-rep-variant-analysis.md is relevant → keep as backup
-- pca.md is low relevance and huge → skip unless I need it later
+- clustering-metrics.md: High relevance + 'validation' tag matches query → read next
+- inter-rep-variant-analysis.md: Moderate relevance + 'bioinformatics' tag → candidate
+- pca.md: Low relevance + 'background' tag → skip unless needed
 
 Next action: read [[clustering-metrics.md]]"
-```
-
----
 
 ## Programmatic Harness Choices
 
