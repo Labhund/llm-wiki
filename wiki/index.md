@@ -4,13 +4,20 @@
 
 ## Quick Stats
 
-- Total articles: 0
-- Topics: 0
-- Last updated: Never
+- Total articles: 3
+- Topics: 2
+- Last updated: 2026-04-07
 
 ## Topics
 
-*No topics yet. Run an ingest to initialize.*
+### Bioinformatics
+
+- [[wiki/bioinformatics/srna-embeddings.md]] - sRNA embeddings validation using PCA and k-means clustering
+- [[wiki/bioinformatics/inter-rep-variant-analysis.md]] - Inter-rep variant analysis using silhouette scores
+
+### Machine Learning
+
+- [[wiki/machine-learning/clustering-metrics.md]] - Clustering evaluation metrics including silhouette scores
 
 ---
 
