@@ -11,9 +11,9 @@ Personal knowledge base built and maintained by LLMs.
 ## Documentation
 
 - [LLM Wiki - Knowledge Base Pattern](docs/LLM%20Wiki%20-%20Knowledge%20Base%20Pattern.md) — The full pattern description with architecture, operations, and critical analysis
-- [Multi-Turn Traversal Pattern](docs/Multi-Turn%20Traversal%20Pattern.md) — How agents navigate the wiki without reading all pages at once
+- [Multi-Turn Traversal Pattern](docs/Multi-Turn%20Traversal%20Pattern.md) — How agents navigate wiki without reading all pages at once
 - [Traversal Implementation](docs/Traversal%20Implementation.md) — Concrete tool contracts, working memory format, decision logic, and Python prototype
-
+- **[Implementation Ideas](docs/implementation-ideas/README.md)** — Draft design documents for open questions and future development
 ## Quick Start
 
 1. Ingest a source:
