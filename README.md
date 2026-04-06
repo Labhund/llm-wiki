@@ -5,10 +5,13 @@ Personal knowledge base built and maintained by LLMs.
 ## Structure
 
 - `raw/` — Immutable source documents
-- `wiki/` — Compiled knowledge articles
+- `wiki/` — Compiled knowledge articles (index.md, log.md)
 - `docs/` — Documentation and pattern notes
 
-See [docs/LLM Wiki - Knowledge Base Pattern.md](docs/LLM%20Wiki%20-%20Knowledge%20Base%20Pattern.md) for the full pattern description.
+## Documentation
+
+- [LLM Wiki - Knowledge Base Pattern](docs/LLM%20Wiki%20-%20Knowledge%20Base%20Pattern.md) — The full pattern description with architecture, operations, and critical analysis
+- [Multi-Turn Traversal Pattern](docs/Multi-Turn%20Traversal%20Pattern.md) — How agents navigate the wiki without reading all pages at once
 
 ## Quick Start
 
@@ -19,9 +22,11 @@ See [docs/LLM Wiki - Knowledge Base Pattern.md](docs/LLM%20Wiki%20-%20Knowledge%
    Update index + log
    ```
 
-2. Query:
+2. Query (using multi-turn traversal):
    ```
-   Search index → read pages → synthesize with citations
+   Search index → read page → summarize internally → decide next page
+   → read next page → repeat until answer synthesized
+   Emit answer with full citation path
    ```
 
 3. Lint:
