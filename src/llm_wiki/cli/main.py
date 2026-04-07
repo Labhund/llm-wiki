@@ -217,3 +217,30 @@ def query(question: str, vault_path: Path, budget: int | None) -> None:
             "\nNote: answer may be incomplete — increase --budget for more detail.",
             err=True,
         )
+
+
+@cli.command()
+@click.argument("source_path", type=click.Path(exists=True, path_type=Path))
+@click.option(
+    "--vault", "vault_path", type=click.Path(exists=True, path_type=Path),
+    default=".", help="Path to vault",
+)
+def ingest(source_path: Path, vault_path: Path) -> None:
+    """Ingest a source document — extracts concepts and creates wiki pages."""
+    client = _get_client(vault_path)
+    resp = client.request({
+        "type": "ingest",
+        "source_path": str(source_path.resolve()),
+    })
+    if resp["status"] != "ok":
+        raise click.ClickException(resp.get("message", "Ingest failed"))
+
+    created = resp.get("pages_created", [])
+    updated = resp.get("pages_updated", [])
+    click.echo(f"Ingested: {resp['concepts_found']} concept(s) identified.")
+    if created:
+        click.echo(f"  Created: {', '.join(created)}")
+    if updated:
+        click.echo(f"  Updated: {', '.join(updated)}")
+    if not created and not updated:
+        click.echo("  No pages created — no concepts identified in source.")

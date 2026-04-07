@@ -95,6 +95,8 @@ class DaemonServer:
                 return {"status": "ok", "page_count": self._vault.page_count}
             case "query":
                 return await self._handle_query(request)
+            case "ingest":
+                return await self._handle_ingest(request)
             case _:
                 return {"status": "error", "message": f"Unknown request type: {req_type}"}
 
@@ -158,6 +160,32 @@ class DaemonServer:
             "outcome": result.outcome,
             "needs_more_budget": result.needs_more_budget,
             "log": result.log.to_dict(),
+        }
+
+    async def _handle_ingest(self, request: dict) -> dict:
+        if "source_path" not in request:
+            return {"status": "error", "message": "Missing required field: source_path"}
+
+        from llm_wiki.ingest.agent import IngestAgent
+        from llm_wiki.traverse.llm_client import LLMClient
+
+        source_path = Path(request["source_path"])
+        llm = LLMClient(
+            self._llm_queue,
+            model=self._config.llm.default,
+            api_base=self._config.llm.api_base,
+            api_key=self._config.llm.api_key,
+        )
+        agent = IngestAgent(llm, self._config)
+        result = await agent.ingest(source_path, self._vault_root)
+
+        await self.rescan()
+
+        return {
+            "status": "ok",
+            "pages_created": result.pages_created,
+            "pages_updated": result.pages_updated,
+            "concepts_found": result.concepts_found,
         }
 
 
