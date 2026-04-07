@@ -15,6 +15,7 @@ class LLMQueue:
     calls through this queue.
     """
 
+    # Accepted for API compatibility; scheduling is currently FIFO via semaphore.
     PRIORITY_MAP = {"query": 0, "ingest": 1, "maintenance": 2}
 
     def __init__(self, max_concurrent: int = 2) -> None:

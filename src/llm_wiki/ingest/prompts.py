@@ -125,6 +125,8 @@ def parse_concept_extraction(text: str) -> list[ConceptPlan]:
     from llm_wiki.ingest.agent import ConceptPlan  # avoid circular at module level
     try:
         data = _parse_json_response(text)
+        if not isinstance(data, dict):
+            return []
         concepts = data.get("concepts") or []
         return [
             ConceptPlan(
@@ -144,6 +146,8 @@ def parse_page_content(text: str) -> list[PageSection]:
     from llm_wiki.ingest.page_writer import PageSection  # avoid circular at module level
     try:
         data = _parse_json_response(text)
+        if not isinstance(data, dict):
+            return []
         sections = data.get("sections") or []
         return [
             PageSection(

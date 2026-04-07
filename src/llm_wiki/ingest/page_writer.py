@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import re
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -40,7 +41,12 @@ def write_page(
 
     Returns:
         WrittenPage with .path and .was_update flag.
+
+    Raises:
+        ValueError: if concept_name contains path separators or starts with '.'.
     """
+    if Path(concept_name).name != concept_name or concept_name.startswith("."):
+        raise ValueError(f"Invalid concept slug: {concept_name!r}")
     page_path = wiki_dir / f"{concept_name}.md"
 
     if not page_path.exists():
@@ -87,7 +93,8 @@ def _append_source(
     exists; the caller still records an update (page is up-to-date).
     Deduplicates content: skips section bodies already present in the page.
     """
-    source_slug = Path(source_ref).stem  # "raw/paper.pdf" → "paper"
+    raw_stem = Path(source_ref).stem  # "raw/paper.pdf" → "paper"
+    source_slug = re.sub(r"[^a-z0-9-]", "-", raw_stem.lower())  # "my.paper.2024" → "my-paper-2024"
     section_marker = f"%% section: from-{source_slug} %%"
 
     existing = page_path.read_text(encoding="utf-8")
@@ -96,8 +103,8 @@ def _append_source(
 
     appended_parts = [f"\n{section_marker}", f"## From {source_slug}", ""]
     for section in sections:
-        # Skip content that is already present elsewhere in the page
-        if section.content not in existing:
+        # Skip empty content and content already present elsewhere in the page
+        if section.content and section.content not in existing:
             appended_parts.append(section.content)
             appended_parts.append("")
 
