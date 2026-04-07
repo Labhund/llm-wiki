@@ -79,4 +79,11 @@ def sample_vault(tmp_path: Path) -> Path:
 
     (tmp_path / "no-structure.md").write_text(SAMPLE_PAGE_NO_STRUCTURE)
 
-    return tmp_path
+    yield tmp_path
+
+    # Clean up state dir under ~/.llm-wiki/vaults/ for this tmp vault
+    import shutil
+    from llm_wiki.vault import _state_dir_for
+    state_dir = _state_dir_for(tmp_path)
+    if state_dir.exists():
+        shutil.rmtree(state_dir)

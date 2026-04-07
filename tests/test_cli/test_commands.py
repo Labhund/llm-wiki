@@ -8,7 +8,8 @@ def test_init_command(sample_vault: Path):
     result = runner.invoke(cli, ["init", str(sample_vault)])
     assert result.exit_code == 0
     assert "Indexed" in result.output
-    assert (sample_vault / ".llm-wiki" / "index").exists()
+    # State now lives in ~/.llm-wiki/vaults/, not inside the vault
+    assert "Indexed" in result.output
 
 
 def test_init_nonexistent():

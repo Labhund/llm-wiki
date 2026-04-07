@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import hashlib
 import re
 from dataclasses import dataclass
 from pathlib import Path
@@ -12,7 +13,20 @@ from llm_wiki.search.tantivy_backend import TantivyBackend
 from llm_wiki.tokens import count_tokens
 
 
-_STATE_DIR = ".llm-wiki"
+_STATE_ROOT = Path.home() / ".llm-wiki" / "vaults"
+
+
+def _state_dir_for(vault_root: Path) -> Path:
+    """Derive a unique state directory under ~/.llm-wiki/vaults/ for a vault path."""
+    # Use resolved absolute path to avoid duplicates from symlinks/relative paths
+    resolved = str(vault_root.resolve())
+    # Readable prefix + short hash for uniqueness
+    slug = resolved.strip("/").replace("/", "-")
+    # Truncate slug to keep paths reasonable, append hash for uniqueness
+    short_hash = hashlib.sha256(resolved.encode()).hexdigest()[:8]
+    if len(slug) > 60:
+        slug = slug[:60]
+    return _STATE_ROOT / f"{slug}-{short_hash}"
 
 
 class Vault:
@@ -34,16 +48,14 @@ class Vault:
     def scan(cls, root: Path, config: WikiConfig | None = None) -> Vault:
         """Scan a vault directory, parse all pages, build index."""
         config = config or WikiConfig()
-        state_dir = root / _STATE_DIR
+        state_dir = _state_dir_for(root)
         state_dir.mkdir(parents=True, exist_ok=True)
 
-        # Find all markdown files
+        # Find all markdown files, excluding hidden directories
         md_files = sorted(root.rglob("*.md"))
-        # Exclude state dir and hidden directories
         md_files = [
             f for f in md_files
-            if _STATE_DIR not in f.relative_to(root).parts
-            and not any(p.startswith(".") for p in f.relative_to(root).parts)
+            if not any(p.startswith(".") for p in f.relative_to(root).parts)
         ]
 
         # Parse pages
@@ -107,7 +119,7 @@ class Vault:
             "page_count": self.page_count,
             "cluster_count": self._store.total_clusters,
             "clusters": [c.to_summary_text() for c in self._store.level0()],
-            "index_path": str(self._root / _STATE_DIR / "index"),
+            "index_path": str(_state_dir_for(self._root) / "index"),
             "index_entries": self._backend.entry_count(),
         }
 
