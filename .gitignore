@@ -27,3 +27,6 @@ local/
 
 # llm-wiki state (index, manifest cache)
 .llm-wiki/
+
+# Git worktrees (subagent isolation)
+.worktrees/
