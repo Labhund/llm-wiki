@@ -8,6 +8,7 @@ import signal
 import sys
 from pathlib import Path
 
+from llm_wiki.config import WikiConfig
 from llm_wiki.daemon.lifecycle import (
     cleanup_stale,
     pidfile_path_for,
@@ -27,7 +28,8 @@ async def run(vault_root: Path) -> None:
 
     cleanup_stale(sock_path, pid_path)
 
-    server = DaemonServer(vault_root, sock_path)
+    config = WikiConfig.load(vault_root / "schema" / "config.yaml")
+    server = DaemonServer(vault_root, sock_path, config=config)
     await server.start()
     write_pidfile(pid_path, os.getpid())
 

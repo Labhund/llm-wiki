@@ -1,5 +1,7 @@
 import asyncio
+import json
 from pathlib import Path
+from unittest.mock import MagicMock
 
 import pytest
 import pytest_asyncio
@@ -99,3 +101,63 @@ async def test_concurrent_requests(daemon_server):
         _request(sock_path, {"type": "manifest", "budget": 1000}),
     )
     assert all(r["status"] == "ok" for r in results)
+
+
+@pytest.mark.asyncio
+async def test_query(daemon_server, sample_vault, monkeypatch):
+    """Query route returns a synthesized answer and persists log to state dir."""
+    from llm_wiki.vault import _state_dir_for
+
+    server, sock_path = daemon_server
+
+    responses = iter([
+        # Turn 0: manifest analysis — model is selective, picks one page
+        json.dumps({
+            "salient_points": "Manifest mentions sRNA validation page",
+            "remaining_questions": [],
+            "next_candidates": [],
+            "hypothesis": "sRNA validation uses PCA and clustering",
+            "answer_complete": True,
+        }),
+        # Synthesis
+        "sRNA embeddings are validated using PCA and k-means [[srna-embeddings]].",
+    ])
+
+    async def mock_acompletion(**kwargs):
+        content = next(responses)
+        mock_resp = MagicMock()
+        mock_resp.choices = [MagicMock()]
+        mock_resp.choices[0].message.content = content
+        mock_resp.usage = MagicMock()
+        mock_resp.usage.total_tokens = 100
+        return mock_resp
+
+    monkeypatch.setattr("litellm.acompletion", mock_acompletion)
+
+    resp = await _request(sock_path, {
+        "type": "query",
+        "question": "How are sRNA embeddings validated?",
+    })
+    assert resp["status"] == "ok"
+    assert "sRNA" in resp["answer"]
+    assert "srna-embeddings" in resp["citations"]
+    assert resp["outcome"] == "complete"
+    assert "log" in resp
+
+    # Verify the log was persisted to the state directory for the librarian
+    log_file = _state_dir_for(sample_vault) / "traversal_logs" / "traversal_logs.jsonl"
+    assert log_file.exists()
+    line = log_file.read_text().strip()
+    parsed = json.loads(line)
+    assert parsed["query"] == "How are sRNA embeddings validated?"
+    assert parsed["outcome"] == "complete"
+
+
+@pytest.mark.asyncio
+async def test_query_missing_question(daemon_server):
+    """Query route returns clean error when 'question' field is missing."""
+    server, sock_path = daemon_server
+    resp = await _request(sock_path, {"type": "query"})
+    assert resp["status"] == "error"
+    assert "question" in resp["message"]
+    assert "Missing required field" in resp["message"]
