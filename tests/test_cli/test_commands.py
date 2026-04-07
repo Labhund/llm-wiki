@@ -127,3 +127,42 @@ def test_manifest_via_daemon(daemon_for_cli):
     )
     assert result.exit_code == 0
     assert len(result.output) > 0
+
+
+def test_query_via_daemon(daemon_for_cli, monkeypatch):
+    """Query command sends a query request and prints the synthesized answer."""
+    import json
+    from unittest.mock import MagicMock
+
+    responses = iter([
+        json.dumps({
+            "salient_points": "Manifest mentions sRNA validation page",
+            "remaining_questions": [],
+            "next_candidates": [],
+            "hypothesis": "sRNA validation uses PCA and clustering",
+            "answer_complete": True,
+        }),
+        "sRNA embeddings are validated using PCA and k-means [[srna-embeddings]].",
+    ])
+
+    async def mock_acompletion(**kwargs):
+        content = next(responses)
+        mock_resp = MagicMock()
+        mock_resp.choices = [MagicMock()]
+        mock_resp.choices[0].message.content = content
+        mock_resp.usage = MagicMock()
+        mock_resp.usage.total_tokens = 100
+        return mock_resp
+
+    monkeypatch.setattr("litellm.acompletion", mock_acompletion)
+
+    vault_path = daemon_for_cli
+    runner = CliRunner()
+    result = runner.invoke(cli, [
+        "query", "How are sRNA embeddings validated?",
+        "--vault", str(vault_path),
+    ])
+    assert result.exit_code == 0, f"CLI failed: {result.output}"
+    assert "sRNA" in result.output
+    assert "Citations:" in result.output
+    assert "srna-embeddings" in result.output

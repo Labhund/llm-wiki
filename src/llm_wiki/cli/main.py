@@ -188,3 +188,32 @@ def manifest(vault_path: Path, budget: int) -> None:
     if resp["status"] != "ok":
         raise click.ClickException(resp.get("message", "Unknown error"))
     click.echo(resp["content"])
+
+
+@cli.command()
+@click.argument("question")
+@click.option(
+    "--vault", "vault_path", type=click.Path(exists=True, path_type=Path),
+    default=".", help="Path to vault",
+)
+@click.option("--budget", default=None, type=int, help="Token budget for traversal")
+def query(question: str, vault_path: Path, budget: int | None) -> None:
+    """Query the wiki — multi-turn LLM traversal with citations."""
+    client = _get_client(vault_path)
+    req: dict = {"type": "query", "question": question}
+    if budget is not None:
+        req["budget"] = budget
+
+    resp = client.request(req)
+    if resp["status"] != "ok":
+        raise click.ClickException(resp.get("message", "Query failed"))
+
+    click.echo(resp["answer"])
+    click.echo()
+    if resp.get("citations"):
+        click.echo(f"Citations: {', '.join(resp['citations'])}")
+    if resp.get("needs_more_budget"):
+        click.echo(
+            "\nNote: answer may be incomplete — increase --budget for more detail.",
+            err=True,
+        )
