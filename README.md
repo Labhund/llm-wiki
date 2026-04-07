@@ -15,10 +15,10 @@ pip install -e ".[dev]"
 Point it at any directory of markdown files:
 
 ```bash
-# Index a vault
+# Index a vault (no daemon needed)
 llm-wiki init /path/to/your/vault
 
-# Search
+# Search (auto-starts daemon on first use)
 llm-wiki search "sRNA embeddings" --vault /path/to/your/vault
 
 # Read with viewports (don't dump the whole page)
@@ -28,9 +28,13 @@ llm-wiki read sRNA-tQuant --grep "k-means" --vault /path/to/your/vault  # grep w
 
 # Budget-aware manifest (hierarchical index)
 llm-wiki manifest --vault /path/to/your/vault --budget 5000
+
+# Daemon management
+llm-wiki serve /path/to/your/vault   # start daemon in foreground
+llm-wiki stop --vault /path/to/your/vault
 ```
 
-State lives in `~/.llm-wiki/vaults/` — your vault directory stays clean.
+State lives in `~/.llm-wiki/vaults/` — your vault directory stays clean. The daemon keeps the index in memory, watches for file changes (Obsidian edits), and re-indexes automatically.
 
 ## How It Works
 
@@ -67,12 +71,14 @@ No markers? Falls back to `##`/`###` headings. No headings? Treated as one secti
 ```
 Interfaces: CLI  │  MCP Server (Phase 6)  │  Obsidian (file access)
                  │
-Daemon (Phase 2) │  Background workers: librarian, adversary, auditor
+Daemon           │  Unix socket IPC, file watcher, LLM queue,
+                 │  write coordinator, background workers
                  │
 Core Library     │  Page parser, traversal engine, manifest store,
                  │  search (tantivy), LLM abstraction (litellm)
                  │
-Storage          │  Markdown files, tantivy index, config/prompts
+Storage          │  Markdown files, tantivy index (~/.llm-wiki/),
+                 │  config/prompts
 ```
 
 Wikipedia's governance model as agent roles: ingest agents write pages, librarians improve cross-references from usage patterns, adversaries challenge claims against raw sources, auditors check structural integrity. Talk pages for async human-agent discussion.
@@ -89,8 +95,17 @@ src/llm_wiki/          # Core Python package
   search/
     backend.py         # SearchBackend protocol
     tantivy_backend.py # Tantivy (Rust-backed BM25) implementation
+  daemon/
+    protocol.py        # Length-prefixed JSON IPC
+    server.py          # Async Unix socket server + request routing
+    client.py          # Sync client for CLI
+    lifecycle.py       # Pidfile, auto-start, cleanup
+    watcher.py         # File watcher (mtime polling)
+    llm_queue.py       # Concurrency-limited LLM request queue
+    writer.py          # Per-page async write locks
+    __main__.py        # Daemon entry point
   cli/
-    main.py            # Click CLI
+    main.py            # Click CLI (routes through daemon)
 docs/
   superpowers/
     specs/             # Design specification
@@ -105,6 +120,7 @@ raw/                   # Immutable source documents
 
 - **[Design Spec](docs/superpowers/specs/2026-04-07-llm-wiki-tool-design.md)** — Full system design: daemon, traversal, agents, MCP interface, token budgets
 - **[Phase 1 Plan](docs/superpowers/plans/2026-04-07-phase1-core-library-cli.md)** — Implementation plan for core library + CLI
+- **[Phase 2 Plan](docs/superpowers/plans/2026-04-07-phase2-daemon.md)** — Implementation plan for daemon
 - [LLM Wiki - Knowledge Base Pattern](docs/LLM%20Wiki%20-%20Knowledge%20Base%20Pattern.md) — Original pattern description
 - [Multi-Turn Traversal Pattern](docs/Multi-Turn%20Traversal%20Pattern.md) — How agents navigate wiki
 - [Implementation Ideas](docs/implementation-ideas/README.md) — 9 optimization designs
@@ -114,7 +130,7 @@ raw/                   # Immutable source documents
 ## Roadmap
 
 - [x] **Phase 1: Core Library + CLI** — Page parser, tantivy search, manifest store, viewports, CLI
-- [ ] **Phase 2: Daemon** — Persistent process, Unix socket IPC, file watcher, LLM queue, write coordination
+- [x] **Phase 2: Daemon** — Persistent process, Unix socket IPC, file watcher, LLM queue, write coordination
 - [ ] **Phase 3: Traversal Engine** — Multi-turn traversal with working memory, budget management, litellm
 - [ ] **Phase 4: Ingest Pipeline** — liteparse, LLM summarization, concept-oriented page creation
 - [ ] **Phase 5: Maintenance Agents** — Librarian, adversary, auditor, compliance review, talk pages

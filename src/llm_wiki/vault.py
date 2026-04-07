@@ -22,10 +22,12 @@ def _state_dir_for(vault_root: Path) -> Path:
     resolved = str(vault_root.resolve())
     # Readable prefix + short hash for uniqueness
     slug = resolved.strip("/").replace("/", "-")
-    # Truncate slug to keep paths reasonable, append hash for uniqueness
+    # Truncate slug so the final daemon.sock path stays within the 108-char
+    # AF_UNIX limit: prefix (~31) + slug + "-" + 8-char hash + "/daemon.sock" (12)
     short_hash = hashlib.sha256(resolved.encode()).hexdigest()[:8]
-    if len(slug) > 60:
-        slug = slug[:60]
+    max_slug = 107 - len(str(_STATE_ROOT)) - 1 - 1 - 8 - len("/daemon.sock")
+    if len(slug) > max_slug:
+        slug = slug[:max_slug]
     return _STATE_ROOT / f"{slug}-{short_hash}"
 
 

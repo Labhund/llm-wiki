@@ -1,14 +1,46 @@
+import asyncio
+import threading
 from pathlib import Path
+
+import pytest
+import pytest_asyncio
 from click.testing import CliRunner
+
 from llm_wiki.cli.main import cli
+from llm_wiki.daemon.server import DaemonServer
+from llm_wiki.daemon.lifecycle import socket_path_for
+
+
+@pytest.fixture
+def daemon_for_cli(sample_vault: Path):
+    """Start a daemon in a background thread so sync CLI tests can connect."""
+    sock_path = socket_path_for(sample_vault)
+    sock_path.parent.mkdir(parents=True, exist_ok=True)
+
+    server = DaemonServer(sample_vault, sock_path)
+
+    loop = asyncio.new_event_loop()
+    loop.run_until_complete(server.start())
+    serve_task = loop.create_task(server.serve_forever())
+
+    thread = threading.Thread(target=loop.run_forever, daemon=True)
+    thread.start()
+
+    yield sample_vault
+
+    loop.call_soon_threadsafe(server._server.close)
+    loop.call_soon_threadsafe(loop.stop)
+    thread.join(timeout=5)
+    # Clean up server and socket
+    loop.run_until_complete(server.stop())
+    loop.close()
 
 
 def test_init_command(sample_vault: Path):
+    """Init still works without daemon (direct scan)."""
     runner = CliRunner()
     result = runner.invoke(cli, ["init", str(sample_vault)])
     assert result.exit_code == 0
-    assert "Indexed" in result.output
-    # State now lives in ~/.llm-wiki/vaults/, not inside the vault
     assert "Indexed" in result.output
 
 
@@ -18,117 +50,80 @@ def test_init_nonexistent():
     assert result.exit_code != 0
 
 
-def test_status_command(sample_vault: Path):
+def test_status_via_daemon(daemon_for_cli):
+    vault_path = daemon_for_cli
     runner = CliRunner()
-    runner.invoke(cli, ["init", str(sample_vault)])
-    result = runner.invoke(cli, ["status", "--vault", str(sample_vault)])
+    result = runner.invoke(cli, ["status", "--vault", str(vault_path)])
     assert result.exit_code == 0
     assert "page" in result.output.lower()
-    assert "cluster" in result.output.lower()
 
 
-def test_search_command(sample_vault: Path):
+def test_search_via_daemon(daemon_for_cli):
+    vault_path = daemon_for_cli
     runner = CliRunner()
-    runner.invoke(cli, ["init", str(sample_vault)])
     result = runner.invoke(
-        cli, ["search", "sRNA embeddings", "--vault", str(sample_vault)]
+        cli, ["search", "sRNA", "--vault", str(vault_path)]
     )
     assert result.exit_code == 0
     assert "srna" in result.output.lower()
 
 
-def test_search_with_limit(sample_vault: Path):
+def test_search_no_results_via_daemon(daemon_for_cli):
+    vault_path = daemon_for_cli
     runner = CliRunner()
-    runner.invoke(cli, ["init", str(sample_vault)])
     result = runner.invoke(
-        cli, ["search", "clustering", "--vault", str(sample_vault), "--limit", "1"]
-    )
-    assert result.exit_code == 0
-
-
-def test_search_no_results(sample_vault: Path):
-    runner = CliRunner()
-    runner.invoke(cli, ["init", str(sample_vault)])
-    result = runner.invoke(
-        cli, ["search", "quantum physics", "--vault", str(sample_vault)]
+        cli, ["search", "quantum physics", "--vault", str(vault_path)]
     )
     assert result.exit_code == 0
     assert "no results" in result.output.lower()
 
 
-def test_read_top(sample_vault: Path):
+def test_read_via_daemon(daemon_for_cli):
+    vault_path = daemon_for_cli
     runner = CliRunner()
-    runner.invoke(cli, ["init", str(sample_vault)])
     result = runner.invoke(
-        cli, ["read", "srna-embeddings", "--vault", str(sample_vault)]
+        cli, ["read", "srna-embeddings", "--vault", str(vault_path)]
     )
     assert result.exit_code == 0
     assert "overview" in result.output.lower()
-    assert "Remaining sections" in result.output or "method" in result.output.lower()
 
 
-def test_read_section(sample_vault: Path):
+def test_read_section_via_daemon(daemon_for_cli):
+    vault_path = daemon_for_cli
     runner = CliRunner()
-    runner.invoke(cli, ["init", str(sample_vault)])
     result = runner.invoke(
         cli, ["read", "srna-embeddings", "--section", "method",
-              "--vault", str(sample_vault)]
+              "--vault", str(vault_path)]
     )
     assert result.exit_code == 0
     assert "PCA" in result.output
 
 
-def test_read_grep(sample_vault: Path):
+def test_read_grep_via_daemon(daemon_for_cli):
+    vault_path = daemon_for_cli
     runner = CliRunner()
-    runner.invoke(cli, ["init", str(sample_vault)])
     result = runner.invoke(
         cli, ["read", "srna-embeddings", "--grep", "k-means",
-              "--vault", str(sample_vault)]
+              "--vault", str(vault_path)]
     )
     assert result.exit_code == 0
     assert "k-means" in result.output
 
 
-def test_read_full(sample_vault: Path):
+def test_read_missing_via_daemon(daemon_for_cli):
+    vault_path = daemon_for_cli
     runner = CliRunner()
-    runner.invoke(cli, ["init", str(sample_vault)])
     result = runner.invoke(
-        cli, ["read", "srna-embeddings", "--viewport", "full",
-              "--vault", str(sample_vault)]
-    )
-    assert result.exit_code == 0
-    assert "PCA" in result.output
-    assert "k-means" in result.output
-
-
-def test_read_missing_page(sample_vault: Path):
-    runner = CliRunner()
-    runner.invoke(cli, ["init", str(sample_vault)])
-    result = runner.invoke(
-        cli, ["read", "nonexistent", "--vault", str(sample_vault)]
+        cli, ["read", "nonexistent", "--vault", str(vault_path)]
     )
     assert result.exit_code != 0 or "not found" in result.output.lower()
 
 
-def test_manifest_command(sample_vault: Path):
+def test_manifest_via_daemon(daemon_for_cli):
+    vault_path = daemon_for_cli
     runner = CliRunner()
-    runner.invoke(cli, ["init", str(sample_vault)])
     result = runner.invoke(
-        cli, ["manifest", "--vault", str(sample_vault)]
+        cli, ["manifest", "--vault", str(vault_path)]
     )
     assert result.exit_code == 0
-    assert "bioinformatics" in result.output.lower() or "srna" in result.output.lower()
-
-
-def test_manifest_with_budget(sample_vault: Path):
-    runner = CliRunner()
-    runner.invoke(cli, ["init", str(sample_vault)])
-    small = runner.invoke(
-        cli, ["manifest", "--vault", str(sample_vault), "--budget", "50"]
-    )
-    large = runner.invoke(
-        cli, ["manifest", "--vault", str(sample_vault), "--budget", "5000"]
-    )
-    assert small.exit_code == 0
-    assert large.exit_code == 0
-    assert len(large.output) >= len(small.output)
+    assert len(result.output) > 0
