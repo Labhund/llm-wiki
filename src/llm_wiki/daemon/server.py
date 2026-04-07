@@ -8,7 +8,7 @@ from llm_wiki.config import WikiConfig
 from llm_wiki.daemon.llm_queue import LLMQueue
 from llm_wiki.daemon.protocol import read_message, write_message
 from llm_wiki.search.backend import SearchResult
-from llm_wiki.vault import Vault
+from llm_wiki.vault import Vault, _state_dir_for
 
 logger = logging.getLogger(__name__)
 
@@ -134,7 +134,6 @@ class DaemonServer:
         logger.debug("Loading traverse modules (first query incurs litellm import cost)")
         from llm_wiki.traverse.engine import TraversalEngine
         from llm_wiki.traverse.llm_client import LLMClient
-        from llm_wiki.vault import _state_dir_for
 
         llm = LLMClient(
             self._llm_queue,

@@ -6,8 +6,8 @@ def test_default_config():
     config = WikiConfig()
     assert config.llm.default == "openai/local-instruct"
     assert config.llm.embeddings == "openai/text-embedding-3-small"
-    assert config.llm.api_base == "http://localhost:4000"
-    assert config.llm.api_key == "sk-fake"
+    assert config.llm.api_base is None
+    assert config.llm.api_key is None
     assert config.search.backend == "tantivy"
     assert config.budgets.default_query == 16000
     assert config.budgets.hard_ceiling_pct == 0.8

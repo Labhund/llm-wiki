@@ -52,7 +52,7 @@ class TraversalEngine:
         self._log_dir = log_dir
 
     async def query(self, question: str, budget: int | None = None) -> TraversalResult:
-        budget = budget or self._config.budgets.default_query
+        budget = budget if budget is not None else self._config.budgets.default_query
         max_turns = self._config.budgets.max_traversal_turns
         ceiling = budget * self._config.budgets.hard_ceiling_pct
 
@@ -62,87 +62,38 @@ class TraversalEngine:
         traverse_prompt = load_prompt(self._vault_root, "traverse")
         synthesize_prompt = load_prompt(self._vault_root, "synthesize")
 
-        # -- Turn 0: Search -> manifest -> LLM picks starting pages --
-        search_results = self._vault.search(question, limit=10)
-        if not search_results:
-            # Fallback: if the vault has multiple pages, use the full manifest so the
-            # LLM can still orient itself (search may have filtered stop-word queries).
-            # If the vault is a single trivial page with no matching content, bail out.
-            if self._vault.page_count <= 1:
-                log.outcome = "candidates_exhausted"
-                self._persist_log(log)
-                return TraversalResult(
-                    answer="No relevant pages found in the wiki.",
-                    citations=[],
-                    outcome="candidates_exhausted",
-                    needs_more_budget=False,
-                    log=log,
+        try:
+            # -- Turn 0: Search -> manifest -> LLM picks starting pages --
+            search_results = self._vault.search(question, limit=10)
+            if not search_results:
+                # Fallback: if the vault has multiple pages, use the full manifest so the
+                # LLM can still orient itself (search may have filtered stop-word queries).
+                # If the vault is a single trivial page with no matching content, bail out.
+                if self._vault.page_count <= 1:
+                    log.outcome = "candidates_exhausted"
+                    self._persist_log(log)
+                    return TraversalResult(
+                        answer="No relevant pages found in the wiki.",
+                        citations=[],
+                        outcome="candidates_exhausted",
+                        needs_more_budget=False,
+                        log=log,
+                    )
+                manifest_text = self._vault.manifest_text(budget=budget // 2)
+            else:
+                manifest_text = "\n\n".join(
+                    r.entry.to_manifest_text() for r in search_results
                 )
-            manifest_text = self._vault.manifest_text(budget=budget // 2)
-        else:
-            manifest_text = "\n\n".join(
-                r.entry.to_manifest_text() for r in search_results
-            )
-        # Capture tokens_used for the Turn 0 call as a delta (consistent with Turn N).
-        tokens_before_turn0 = memory.budget_used
-        turn_data = await self._llm_turn(
-            question, memory, manifest_text, traverse_prompt
-        )
-        self._apply_turn(memory, turn_data)
-        log.add_turn(TurnLog(
-            turn=0,
-            pages_read=[],  # Turn 0 doesn't read a page, just manifest
-            tokens_used=memory.budget_used - tokens_before_turn0,
-            hypothesis=memory.hypothesis,
-            remaining_questions=list(memory.remaining_questions),
-            next_candidates=[c.name for c in memory.next_candidates],
-        ))
-
-        outcome = self._check_done(memory, ceiling)
-        if outcome:
-            return await self._finish(
-                question, memory, outcome, log, synthesize_prompt
-            )
-
-        # -- Turns 1..max_turns: Read -> update -> decide --
-        visited: set[str] = set()
-        for turn_num in range(1, max_turns + 1):
-            memory.turn = turn_num
-
-            candidate = self._pick_candidate(memory, visited)
-            if candidate is None:
-                outcome = "candidates_exhausted"
-                break
-
-            visited.add(candidate.name)
-            content = self._vault.read_viewport(candidate.name, viewport="top")
-            if content is None:
-                logger.warning("Page not found: %s", candidate.name)
-                continue
-
-            # Compact working memory if getting large
-            remaining_turns = max(1, max_turns - turn_num + 2)
-            memory.compact(budget // remaining_turns)
-
-            tokens_before = memory.budget_used
+            # Capture tokens_used for the Turn 0 call as a delta (consistent with Turn N).
+            tokens_before_turn0 = memory.budget_used
             turn_data = await self._llm_turn(
-                question, memory, content, traverse_prompt
+                question, memory, manifest_text, traverse_prompt
             )
-
-            page_read = PageRead(
-                name=candidate.name,
-                sections_read=["top"],
-                salient_points=turn_data.get("salient_points", ""),
-                relevance=candidate.priority,
-            )
-            memory.pages_read.append(page_read)
             self._apply_turn(memory, turn_data)
-
-            tokens_this_turn = memory.budget_used - tokens_before
             log.add_turn(TurnLog(
-                turn=turn_num,
-                pages_read=[page_read],  # Rich PageRead with salient_points
-                tokens_used=tokens_this_turn,
+                turn=0,
+                pages_read=[],  # Turn 0 doesn't read a page, just manifest
+                tokens_used=memory.budget_used - tokens_before_turn0,
                 hypothesis=memory.hypothesis,
                 remaining_questions=list(memory.remaining_questions),
                 next_candidates=[c.name for c in memory.next_candidates],
@@ -150,13 +101,70 @@ class TraversalEngine:
 
             outcome = self._check_done(memory, ceiling)
             if outcome:
-                break
-        else:
-            outcome = "turn_limit"
+                return await self._finish(
+                    question, memory, outcome, log, synthesize_prompt
+                )
 
-        return await self._finish(
-            question, memory, outcome, log, synthesize_prompt
-        )
+            # -- Turns 1..max_turns: Read -> update -> decide --
+            visited: set[str] = {p.name for p in memory.pages_read}
+            for turn_num in range(1, max_turns + 1):
+                memory.turn = turn_num
+
+                candidate = self._pick_candidate(memory, visited)
+                if candidate is None:
+                    outcome = "candidates_exhausted"
+                    break
+
+                visited.add(candidate.name)
+                content = self._vault.read_viewport(candidate.name, viewport="top")
+                if content is None:
+                    logger.warning("Page not found: %s", candidate.name)
+                    continue
+
+                # Compact working memory if getting large
+                remaining_turns = max(1, max_turns - turn_num + 2)
+                memory.compact(budget // remaining_turns)
+
+                tokens_before = memory.budget_used
+                turn_data = await self._llm_turn(
+                    question, memory, content, traverse_prompt
+                )
+
+                page_read = PageRead(
+                    name=candidate.name,
+                    sections_read=["top"],
+                    salient_points=turn_data.get("salient_points", ""),
+                    relevance=candidate.priority,
+                )
+                memory.pages_read.append(page_read)
+                self._apply_turn(memory, turn_data)
+
+                tokens_this_turn = memory.budget_used - tokens_before
+                log.add_turn(TurnLog(
+                    turn=turn_num,
+                    pages_read=[page_read],  # Rich PageRead with salient_points
+                    tokens_used=tokens_this_turn,
+                    hypothesis=memory.hypothesis,
+                    remaining_questions=list(memory.remaining_questions),
+                    next_candidates=[c.name for c in memory.next_candidates],
+                ))
+
+                outcome = self._check_done(memory, ceiling)
+                if outcome:
+                    break
+            else:
+                outcome = "turn_limit"
+
+            return await self._finish(
+                question, memory, outcome, log, synthesize_prompt
+            )
+        except Exception:
+            if not log.outcome:
+                log.outcome = "error"
+                log.total_tokens_used = memory.budget_used
+                log.pages_visited = [p.name for p in memory.pages_read]
+                self._persist_log(log)
+            raise
 
     # -- Internal helpers --
 

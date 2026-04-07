@@ -23,8 +23,10 @@ def _merge(dc_class, data: dict):
 class LLMConfig:
     default: str = "openai/local-instruct"
     embeddings: str = "openai/text-embedding-3-small"
-    api_base: Optional[str] = "http://localhost:4000"
-    api_key: Optional[str] = "sk-fake"  # litellm proxy doesn't validate
+    # Set api_base/api_key when using the litellm proxy or any non-default endpoint.
+    # Example for local litellm proxy: api_base="http://localhost:4000", api_key="sk-fake"
+    api_base: Optional[str] = None
+    api_key: Optional[str] = None
 
 
 @dataclass
