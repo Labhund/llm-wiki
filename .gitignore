@@ -21,3 +21,6 @@ ENV/
 # Local data (if any)
 local/
 .cache/
+
+# Superpowers brainstorm sessions
+.superpowers/
