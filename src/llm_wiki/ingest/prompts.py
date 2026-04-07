@@ -125,16 +125,17 @@ def parse_concept_extraction(text: str) -> list[ConceptPlan]:
     from llm_wiki.ingest.agent import ConceptPlan  # avoid circular at module level
     try:
         data = _parse_json_response(text)
+        concepts = data.get("concepts") or []
         return [
             ConceptPlan(
                 name=c["name"],
                 title=c.get("title", c["name"]),
-                passages=c.get("passages", []),
+                passages=c.get("passages") if isinstance(c.get("passages"), list) else [],
             )
-            for c in data.get("concepts", [])
-            if isinstance(c, dict) and "name" in c
+            for c in concepts
+            if isinstance(c, dict) and isinstance(c.get("name"), str) and c.get("name")
         ]
-    except (ValueError, KeyError):
+    except (ValueError, KeyError, TypeError):
         return []
 
 
@@ -143,14 +144,15 @@ def parse_page_content(text: str) -> list[PageSection]:
     from llm_wiki.ingest.page_writer import PageSection  # avoid circular at module level
     try:
         data = _parse_json_response(text)
+        sections = data.get("sections") or []
         return [
             PageSection(
                 name=s["name"],
                 heading=s.get("heading", s["name"]),
                 content=s.get("content", ""),
             )
-            for s in data.get("sections", [])
-            if isinstance(s, dict) and "name" in s
+            for s in sections
+            if isinstance(s, dict) and isinstance(s.get("name"), str) and s.get("name")
         ]
-    except (ValueError, KeyError):
+    except (ValueError, KeyError, TypeError):
         return []
