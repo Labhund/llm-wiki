@@ -12,6 +12,7 @@ dependencies = [
     "tantivy>=0.22.0",
     "click>=8.0",
     "litellm>=1.0.0",
+    "liteparse>=0.2.0",
 ]
 
 [project.scripts]
