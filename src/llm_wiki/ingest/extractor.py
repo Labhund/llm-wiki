@@ -66,13 +66,21 @@ async def extract_text(
 
 def _extract_markdown(path: Path) -> ExtractionResult:
     """Read a markdown file directly — no liteparse needed."""
-    content = path.read_text(encoding="utf-8")
-    return ExtractionResult(
-        success=True,
-        content=content,
-        extraction_method="markdown",
-        token_count=count_tokens(content),
-    )
+    try:
+        content = path.read_text(encoding="utf-8")
+        return ExtractionResult(
+            success=True,
+            content=content,
+            extraction_method="markdown",
+            token_count=count_tokens(content),
+        )
+    except (UnicodeDecodeError, OSError) as exc:
+        return ExtractionResult(
+            success=False,
+            content="",
+            extraction_method="markdown",
+            error=str(exc),
+        )
 
 
 async def _extract_via_liteparse(
