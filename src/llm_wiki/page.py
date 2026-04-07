@@ -153,8 +153,15 @@ def _slugify(text: str) -> str:
     return re.sub(r"[^a-z0-9]+", "-", text.lower()).strip("-")
 
 
+_NON_PAGE_EXTENSIONS = {".pdf", ".png", ".jpg", ".jpeg", ".gif", ".svg", ".zip"}
+
+
 def _extract_wikilinks(text: str) -> list[str]:
-    """Extract wikilink targets, normalized to page name only."""
+    """Extract wikilink targets, normalized to page name only.
+
+    Skips links to non-page files (PDFs, images, etc.) that appear in
+    frontmatter source fields or elsewhere.
+    """
     raw_links = _WIKILINK_RE.findall(text)
     result = []
     for link in raw_links:
@@ -162,6 +169,10 @@ def _extract_wikilinks(text: str) -> list[str]:
         name = link.split("/")[-1]
         if name.endswith(".md"):
             name = name[:-3]
+        # Skip links to non-page files
+        ext = "." + name.rsplit(".", 1)[-1] if "." in name else ""
+        if ext in _NON_PAGE_EXTENSIONS:
+            continue
         if name not in result:
             result.append(name)
     return result
