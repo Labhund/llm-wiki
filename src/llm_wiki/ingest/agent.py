@@ -7,7 +7,7 @@ from typing import TYPE_CHECKING
 
 from llm_wiki.config import WikiConfig
 from llm_wiki.ingest.extractor import extract_text
-from llm_wiki.ingest.page_writer import PageSection, WrittenPage, write_page
+from llm_wiki.ingest.page_writer import write_page
 from llm_wiki.ingest.prompts import (
     compose_concept_extraction_messages,
     compose_page_content_messages,
@@ -46,7 +46,8 @@ class IngestAgent:
 
     Args:
         llm:    LLMClient instance (from traverse.llm_client). All calls are
-                submitted at priority="ingest" so they yield to user queries.
+                submitted at priority="ingest". The queue wires this for future
+                priority scheduling — currently FIFO.
         config: WikiConfig — uses config.vault.wiki_dir to locate wiki directory.
     """
 

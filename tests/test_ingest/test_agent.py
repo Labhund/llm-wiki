@@ -6,7 +6,7 @@ from pathlib import Path
 import pytest
 
 from llm_wiki.config import WikiConfig
-from llm_wiki.ingest.agent import ConceptPlan, IngestAgent, IngestResult
+from llm_wiki.ingest.agent import IngestAgent, IngestResult
 from llm_wiki.traverse.llm_client import LLMResponse
 
 
@@ -168,4 +168,4 @@ async def test_ingest_extraction_failure_returns_error(tmp_path: Path):
 
     assert result.pages_created == []
     assert result.pages_updated == []
-    assert mock_llm._idx == 0   # No LLM calls made
+    assert mock_llm.calls == []
