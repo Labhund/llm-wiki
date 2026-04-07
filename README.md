@@ -1,40 +1,124 @@
 # LLM Wiki
 
-Personal knowledge base built and maintained by LLMs.
+Agent-first knowledge base tool — wiki over RAG. Inspired by [Andrej Karpathy's idea](https://x.com/karpathy/status/1908534332534366468) that LLMs should maintain persistent, self-updating wikis instead of re-deriving knowledge from sources on every query.
 
-## Structure
+Plain markdown with wikilinks — natively browsable in Obsidian by humans, natively navigable by agents via CLI and MCP.
 
-- `raw/` — Immutable source documents
-- `wiki/` — Compiled knowledge articles (index.md, log.md)
-- `docs/` — Documentation and pattern notes
+## Install
+
+```bash
+pip install -e ".[dev]"
+```
+
+## Quick Start
+
+Point it at any directory of markdown files:
+
+```bash
+# Index a vault
+llm-wiki init /path/to/your/vault
+
+# Search
+llm-wiki search "sRNA embeddings" --vault /path/to/your/vault
+
+# Read with viewports (don't dump the whole page)
+llm-wiki read sRNA-tQuant --vault /path/to/your/vault              # top section + TOC
+llm-wiki read sRNA-tQuant --section method --vault /path/to/your/vault  # specific section
+llm-wiki read sRNA-tQuant --grep "k-means" --vault /path/to/your/vault  # grep within page
+
+# Budget-aware manifest (hierarchical index)
+llm-wiki manifest --vault /path/to/your/vault --budget 5000
+```
+
+State lives in `~/.llm-wiki/vaults/` — your vault directory stays clean.
+
+## How It Works
+
+The core insight: RAG re-derives on every query. A compiled wiki accumulates knowledge, maintains cross-references, tracks provenance, and improves over time. The agent navigates the wiki like a human browses the web — search, scan snippets, click through, skim headings, Ctrl+F — but with token budgets instead of screen pixels.
+
+### Token Budgets
+
+Every operation is budget-aware. A 100-page wiki doesn't dump everything into context:
+
+- **Hierarchical manifest** — Level 0 (cluster summaries) → Level 1 (page entries) → Level 2 (full entry) → Level 3 (page content). Budget determines how deep you go.
+- **Intra-page viewports** — `top` (first section + TOC), `section` (by name), `grep` (pattern match), `full`. Pages with `%%` section markers get precise slicing; plain headings work too.
+- **Pagination** — search results, manifest entries, and viewport content all support cursor-based pagination within budget.
+
+### Section Markers
+
+Pages can use Obsidian-native hidden comments for machine-readable section boundaries (invisible in Obsidian preview):
+
+```markdown
+%% section: overview, tokens: 120 %%
+## Overview
+
+Content here...
+
+%% section: method, tokens: 280 %%
+## Method
+
+Content here...
+```
+
+No markers? Falls back to `##`/`###` headings. No headings? Treated as one section.
+
+## Architecture
+
+```
+Interfaces: CLI  │  MCP Server (Phase 6)  │  Obsidian (file access)
+                 │
+Daemon (Phase 2) │  Background workers: librarian, adversary, auditor
+                 │
+Core Library     │  Page parser, traversal engine, manifest store,
+                 │  search (tantivy), LLM abstraction (litellm)
+                 │
+Storage          │  Markdown files, tantivy index, config/prompts
+```
+
+Wikipedia's governance model as agent roles: ingest agents write pages, librarians improve cross-references from usage patterns, adversaries challenge claims against raw sources, auditors check structural integrity. Talk pages for async human-agent discussion.
+
+## Project Structure
+
+```
+src/llm_wiki/          # Core Python package
+  config.py            # Config dataclasses + YAML loading
+  tokens.py            # Token counting heuristic
+  page.py              # Page parser (markers, headings, wikilinks)
+  manifest.py          # ManifestEntry, ManifestStore (hierarchical, budget-aware)
+  vault.py             # Vault scanner + viewport reading
+  search/
+    backend.py         # SearchBackend protocol
+    tantivy_backend.py # Tantivy (Rust-backed BM25) implementation
+  cli/
+    main.py            # Click CLI
+docs/
+  superpowers/
+    specs/             # Design specification
+    plans/             # Implementation plans
+  implementation-ideas/ # 9 optimization design documents
+  *.md                 # Philosophy and exploration docs
+wiki/                  # Sample compiled knowledge base
+raw/                   # Immutable source documents
+```
 
 ## Documentation
 
-- [LLM Wiki - Knowledge Base Pattern](docs/LLM%20Wiki%20-%20Knowledge%20Base%20Pattern.md) — The full pattern description with architecture, operations, and critical analysis
-- [Multi-Turn Traversal Pattern](docs/Multi-Turn%20Traversal%20Pattern.md) — How agents navigate wiki without reading all pages at once
-- [Traversal Implementation](docs/Traversal%20Implementation.md) — Concrete tool contracts, working memory format, decision logic, and Python prototype
-- **[Implementation Ideas](docs/implementation-ideas/README.md)** — Draft design documents for open questions and future development
-- **[What is an Agent? - Identity and Soul](docs/what-is-an-agent-identity-and-soul.md)** — Philosophical question about what makes an agent "real" — simulated vs. persistent identity, the "genetic SOUL.md" concept, and the UI/UX parallel to the birth of the internet
-## Quick Start
+- **[Design Spec](docs/superpowers/specs/2026-04-07-llm-wiki-tool-design.md)** — Full system design: daemon, traversal, agents, MCP interface, token budgets
+- **[Phase 1 Plan](docs/superpowers/plans/2026-04-07-phase1-core-library-cli.md)** — Implementation plan for core library + CLI
+- [LLM Wiki - Knowledge Base Pattern](docs/LLM%20Wiki%20-%20Knowledge%20Base%20Pattern.md) — Original pattern description
+- [Multi-Turn Traversal Pattern](docs/Multi-Turn%20Traversal%20Pattern.md) — How agents navigate wiki
+- [Implementation Ideas](docs/implementation-ideas/README.md) — 9 optimization designs
+- [What is an Agent?](docs/what-is-an-agent-identity-and-soul.md) — Philosophy of agent identity and persistence
+- [Agent Individuality](docs/agent-individuality-philosophy-session-2026-04-07.md) — What makes agents genuinely distinct
 
-1. Ingest a source:
-   ```
-   Raw source → raw/<topic>/YYYY-MM-DD-slug.md
-   LLM compiles → wiki/<topic>/concept.md
-   Update index + log
-   ```
+## Roadmap
 
-2. Query (using multi-turn traversal):
-   ```
-   Search index → read page → summarize internally → decide next page
-   → read next page → repeat until answer synthesized
-   Emit answer with full citation path
-   ```
-
-3. Lint:
-   ```
-   Check consistency → fix broken links → flag contradictions
-   ```
+- [x] **Phase 1: Core Library + CLI** — Page parser, tantivy search, manifest store, viewports, CLI
+- [ ] **Phase 2: Daemon** — Persistent process, Unix socket IPC, file watcher, LLM queue, write coordination
+- [ ] **Phase 3: Traversal Engine** — Multi-turn traversal with working memory, budget management, litellm
+- [ ] **Phase 4: Ingest Pipeline** — liteparse, LLM summarization, concept-oriented page creation
+- [ ] **Phase 5: Maintenance Agents** — Librarian, adversary, auditor, compliance review, talk pages
+- [ ] **Phase 6: MCP Server** — High-level + low-level tools for agent integration
 
 ## Philosophy
 
@@ -43,24 +127,3 @@ Personal knowledge base built and maintained by LLMs.
 > — Andrej Karpathy
 
 The wiki is a persistent, compounding artifact. Knowledge is compiled once and kept current, not re-derived on every query.
-
-## Prototype
-
-A working prototype is available in `src/traversal.py`:
-
-```bash
-cd src
-python3 traversal.py
-```
-
-The demo shows multi-turn traversal:
-- Searches index for relevant pages
-- Reads pages incrementally across 3 turns
-- Maintains working memory of what was learned
-- Returns answer with full citation path
-
-**Note:** The prototype uses hardcoded mock LLM learning for demonstration. Real implementation would replace `_mock_learn_from_page()` with actual LLM calls for:
-- Extracting learned information from pages
-- Scoring candidate pages
-- Deciding continue/stop
-- Synthesizing final answers
