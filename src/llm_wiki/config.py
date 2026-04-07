@@ -21,9 +21,10 @@ def _merge(dc_class, data: dict):
 
 @dataclass
 class LLMConfig:
-    default: str = "litellm/gemma4"
-    embeddings: str = "ollama/nomic-embed-text"
-    api_key: Optional[str] = None
+    default: str = "openai/local-instruct"
+    embeddings: str = "openai/text-embedding-3-small"
+    api_base: Optional[str] = "http://localhost:4000"
+    api_key: Optional[str] = "sk-fake"  # litellm proxy doesn't validate
 
 
 @dataclass
