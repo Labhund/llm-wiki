@@ -83,8 +83,9 @@ def _append_source(
 ) -> WrittenPage:
     """Append a 'from-{source-slug}' section to an existing page.
 
-    Does nothing if a section from this source already exists (idempotent).
-    Deduplicates content: skips content that already appears elsewhere in the page.
+    Returns without modifying the file if a section from this source already
+    exists; the caller still records an update (page is up-to-date).
+    Deduplicates content: skips section bodies already present in the page.
     """
     source_slug = Path(source_ref).stem  # "raw/paper.pdf" → "paper"
     section_marker = f"%% section: from-{source_slug} %%"

@@ -160,7 +160,8 @@ async def test_reingest_same_source_appends_not_duplicates(managed_vault: Path):
     # Verify page is parseable
     page = Page.parse(managed_vault / "wiki" / "topic-a.md")
     assert page.title == "Topic A"
-    assert len(page.sections) >= 2  # overview + from-paper
+    assert len(page.sections) == 2  # overview + from-paper
+    assert page.sections[1].name == "from-paper"
 
     # No duplicate sections
     text = (managed_vault / "wiki" / "topic-a.md").read_text()
