@@ -38,7 +38,10 @@ class LLMClient:
         self._api_key = api_key
 
     async def complete(
-        self, messages: list[dict[str, str]], temperature: float = 0.7
+        self,
+        messages: list[dict[str, str]],
+        temperature: float = 0.7,
+        priority: str = "query",
     ) -> LLMResponse:
         """Send a completion request through the concurrency-limited queue."""
 
@@ -59,4 +62,4 @@ class LLMClient:
             self._queue.record_tokens(tokens)
             return LLMResponse(content=content, tokens_used=tokens)
 
-        return await self._queue.submit(_call, priority="query")
+        return await self._queue.submit(_call, priority=priority)
