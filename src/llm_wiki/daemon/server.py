@@ -177,9 +177,13 @@ class DaemonServer:
             api_key=self._config.llm.api_key,
         )
         agent = IngestAgent(llm, self._config)
-        result = await agent.ingest(source_path, self._vault_root)
-
-        await self.rescan()
+        try:
+            result = await agent.ingest(source_path, self._vault_root)
+        finally:
+            try:
+                await self.rescan()
+            except Exception:
+                logger.warning("Failed to rescan vault after ingest")
 
         return {
             "status": "ok",
