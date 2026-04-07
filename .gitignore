@@ -24,3 +24,6 @@ local/
 
 # Superpowers brainstorm sessions
 .superpowers/
+
+# llm-wiki state (index, manifest cache)
+.llm-wiki/
