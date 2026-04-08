@@ -5,8 +5,11 @@ import logging
 from pathlib import Path
 
 from llm_wiki.config import WikiConfig
+from llm_wiki.daemon.dispatcher import ChangeDispatcher
 from llm_wiki.daemon.llm_queue import LLMQueue
 from llm_wiki.daemon.protocol import read_message, write_message
+from llm_wiki.daemon.scheduler import IntervalScheduler, ScheduledWorker, parse_interval
+from llm_wiki.daemon.snapshot import PageSnapshotStore
 from llm_wiki.search.backend import SearchResult
 from llm_wiki.vault import Vault, _state_dir_for
 
@@ -28,18 +31,42 @@ class DaemonServer:
         self._vault: Vault | None = None
         self._server: asyncio.Server | None = None
         self._llm_queue = LLMQueue(self._config.llm_queue.max_concurrent)
+        self._scheduler: IntervalScheduler | None = None
+        self._snapshot_store: PageSnapshotStore | None = None
+        self._compliance_reviewer = None  # type: ignore[assignment]  # set in start()
+        self._dispatcher: ChangeDispatcher | None = None
 
     async def start(self) -> None:
-        """Scan vault and start listening on Unix socket."""
+        """Scan vault, construct maintenance substrate, start listening."""
         self._vault = Vault.scan(self._vault_root)
+
+        # Phase 5b substrate
+        from llm_wiki.audit.compliance import ComplianceReviewer
+        from llm_wiki.issues.queue import IssueQueue
+        state_dir = _state_dir_for(self._vault_root)
+        wiki_dir = self._vault_root / self._config.vault.wiki_dir.rstrip("/")
+        self._snapshot_store = PageSnapshotStore(state_dir)
+        self._compliance_reviewer = ComplianceReviewer(
+            self._vault_root, IssueQueue(wiki_dir), self._config
+        )
+        self._dispatcher = ChangeDispatcher(
+            debounce_secs=float(self._config.maintenance.compliance_debounce_secs),
+            on_settled=self._handle_settled_change,
+        )
+
+        self._scheduler = IntervalScheduler()
+        self._register_maintenance_workers()
+        await self._scheduler.start()
+
         if self._socket_path.exists():
             self._socket_path.unlink()
         self._server = await asyncio.start_unix_server(
             self._handle_client, path=str(self._socket_path)
         )
         logger.info(
-            "Daemon started: %d pages, socket %s",
+            "Daemon started: %d pages, socket %s, workers=%s",
             self._vault.page_count, self._socket_path,
+            self._scheduler.worker_names,
         )
 
     async def serve_forever(self) -> None:
@@ -49,7 +76,13 @@ class DaemonServer:
                 await self._server.serve_forever()
 
     async def stop(self) -> None:
-        """Shut down the server and clean up socket."""
+        """Shut down the maintenance substrate, then the server."""
+        if self._scheduler is not None:
+            await self._scheduler.stop()
+            self._scheduler = None
+        if self._dispatcher is not None:
+            await self._dispatcher.stop()
+            self._dispatcher = None
         if self._server:
             self._server.close()
             await self._server.wait_closed()
@@ -61,6 +94,157 @@ class DaemonServer:
         """Re-scan the vault (called by file watcher)."""
         self._vault = Vault.scan(self._vault_root)
         logger.info("Rescanned: %d pages", self._vault.page_count)
+
+    def _register_maintenance_workers(self) -> None:
+        """Register all maintenance workers with the scheduler.
+
+        Sub-phase 5b registers the auditor.
+        Sub-phase 5c adds librarian + authority_recalc.
+        Sub-phase 5d will add the adversary.
+        """
+        assert self._scheduler is not None
+
+        async def run_auditor() -> None:
+            from llm_wiki.audit.auditor import Auditor
+            from llm_wiki.issues.queue import IssueQueue
+            wiki_dir = self._vault_root / self._config.vault.wiki_dir.rstrip("/")
+            queue = IssueQueue(wiki_dir)
+            auditor = Auditor(self._vault, queue, self._vault_root)
+            report = auditor.audit()
+            logger.info(
+                "Auditor: %d new issues, %d existing",
+                len(report.new_issue_ids), len(report.existing_issue_ids),
+            )
+
+        async def run_librarian() -> None:
+            from llm_wiki.issues.queue import IssueQueue
+            from llm_wiki.librarian.agent import LibrarianAgent
+            from llm_wiki.traverse.llm_client import LLMClient
+            wiki_dir = self._vault_root / self._config.vault.wiki_dir.rstrip("/")
+            queue = IssueQueue(wiki_dir)
+            llm = LLMClient(
+                self._llm_queue,
+                model=self._config.llm.default,
+                api_base=self._config.llm.api_base,
+                api_key=self._config.llm.api_key,
+            )
+            agent = LibrarianAgent(self._vault, self._vault_root, llm, queue, self._config)
+            result = await agent.run()
+            logger.info(
+                "Librarian: refined=%d authorities=%d issues=%d",
+                len(result.pages_refined), result.authorities_updated, len(result.issues_filed),
+            )
+
+        async def run_authority_recalc() -> None:
+            from llm_wiki.issues.queue import IssueQueue
+            from llm_wiki.librarian.agent import LibrarianAgent
+            from llm_wiki.traverse.llm_client import LLMClient
+            wiki_dir = self._vault_root / self._config.vault.wiki_dir.rstrip("/")
+            queue = IssueQueue(wiki_dir)
+            llm = LLMClient(
+                self._llm_queue,
+                model=self._config.llm.default,
+                api_base=self._config.llm.api_base,
+                api_key=self._config.llm.api_key,
+            )
+            agent = LibrarianAgent(self._vault, self._vault_root, llm, queue, self._config)
+            count = await agent.recalc_authority()
+            logger.info("Authority recalc: %d entries updated", count)
+
+        async def run_adversary() -> None:
+            from llm_wiki.adversary.agent import AdversaryAgent
+            from llm_wiki.issues.queue import IssueQueue
+            from llm_wiki.traverse.llm_client import LLMClient
+            wiki_dir = self._vault_root / self._config.vault.wiki_dir.rstrip("/")
+            queue = IssueQueue(wiki_dir)
+            llm = LLMClient(
+                self._llm_queue,
+                model=self._config.llm.default,
+                api_base=self._config.llm.api_base,
+                api_key=self._config.llm.api_key,
+            )
+            agent = AdversaryAgent(self._vault, self._vault_root, llm, queue, self._config)
+            result = await agent.run()
+            logger.info(
+                "Adversary: checked=%d validated=%d failed=%d talk=%d issues=%d",
+                result.claims_checked, len(result.validated), len(result.failed),
+                len(result.talk_posts), len(result.issues_filed),
+            )
+
+        self._scheduler.register(
+            ScheduledWorker(
+                name="auditor",
+                interval_seconds=parse_interval(self._config.maintenance.auditor_interval),
+                coro_factory=run_auditor,
+            )
+        )
+        self._scheduler.register(
+            ScheduledWorker(
+                name="librarian",
+                interval_seconds=parse_interval(self._config.maintenance.librarian_interval),
+                coro_factory=run_librarian,
+            )
+        )
+        self._scheduler.register(
+            ScheduledWorker(
+                name="authority_recalc",
+                interval_seconds=parse_interval(self._config.maintenance.authority_recalc),
+                coro_factory=run_authority_recalc,
+            )
+        )
+        self._scheduler.register(
+            ScheduledWorker(
+                name="adversary",
+                interval_seconds=parse_interval(self._config.maintenance.adversary_interval),
+                coro_factory=run_adversary,
+            )
+        )
+
+    async def handle_file_changes(
+        self, changed: list[Path], removed: list[Path]
+    ) -> None:
+        """File-watcher callback. Replaces __main__.on_file_change.
+
+        Rescans the vault, then queues each changed page for compliance review
+        via the debouncer. Removed pages purge their snapshot.
+        """
+        await self.rescan()
+        for path in changed:
+            try:
+                rel = path.relative_to(self._vault_root)
+            except ValueError:
+                continue
+            if any(p.startswith(".") for p in rel.parts):
+                continue  # skip hidden dirs (e.g. .issues)
+            if self._dispatcher is not None:
+                self._dispatcher.submit(path)
+        for path in removed:
+            if self._snapshot_store is not None:
+                self._snapshot_store.remove(path.stem)
+
+    async def _handle_settled_change(self, path: Path) -> None:
+        """Called by ChangeDispatcher after a path has settled past the debounce window."""
+        if self._compliance_reviewer is None or self._snapshot_store is None:
+            return
+        if not path.exists():
+            self._snapshot_store.remove(path.stem)
+            return
+        try:
+            new_content = path.read_text(encoding="utf-8")
+        except OSError:
+            logger.exception("Failed to read %s for compliance review", path)
+            return
+        old_content = self._snapshot_store.get(path.stem)
+        result = self._compliance_reviewer.review_change(path, old_content, new_content)
+        # Re-read in case the reviewer auto-fixed the file
+        try:
+            self._snapshot_store.set(path.stem, path.read_text(encoding="utf-8"))
+        except OSError:
+            logger.exception("Failed to update snapshot for %s", path)
+        logger.info(
+            "Compliance review %s: auto_approved=%s reasons=%s issues=%d",
+            path.stem, result.auto_approved, result.reasons, len(result.issues_filed),
+        )
 
     async def _handle_client(
         self, reader: asyncio.StreamReader, writer: asyncio.StreamWriter
@@ -97,6 +281,22 @@ class DaemonServer:
                 return await self._handle_query(request)
             case "ingest":
                 return await self._handle_ingest(request)
+            case "lint":
+                return self._handle_lint()
+            case "issues-list":
+                return self._handle_issues_list(request)
+            case "issues-get":
+                return self._handle_issues_get(request)
+            case "issues-update":
+                return self._handle_issues_update(request)
+            case "scheduler-status":
+                return self._handle_scheduler_status()
+            case "talk-read":
+                return self._handle_talk_read(request)
+            case "talk-append":
+                return self._handle_talk_append(request)
+            case "talk-list":
+                return self._handle_talk_list()
             case _:
                 return {"status": "error", "message": f"Unknown request type: {req_type}"}
 
@@ -128,6 +328,118 @@ class DaemonServer:
     def _handle_status(self) -> dict:
         info = self._vault.status()
         return {"status": "ok", **info}
+
+    def _handle_scheduler_status(self) -> dict:
+        if self._scheduler is None:
+            return {"status": "ok", "workers": []}
+        workers = [
+            {
+                "name": name,
+                "interval_seconds": interval_seconds,
+                "last_run": last_run,
+            }
+            for name, interval_seconds, last_run in self._scheduler.workers_info()
+        ]
+        return {"status": "ok", "workers": workers}
+
+    def _handle_lint(self) -> dict:
+        from llm_wiki.audit.auditor import Auditor
+
+        queue = self._issue_queue()
+        auditor = Auditor(self._vault, queue, self._vault_root)
+        report = auditor.audit()
+        return {"status": "ok", **report.to_dict()}
+
+    def _issue_queue(self) -> "IssueQueue":
+        from llm_wiki.issues.queue import IssueQueue
+        wiki_dir = self._vault_root / self._config.vault.wiki_dir.rstrip("/")
+        return IssueQueue(wiki_dir)
+
+    def _handle_issues_list(self, request: dict) -> dict:
+        queue = self._issue_queue()
+        issues = queue.list(
+            status=request.get("status_filter"),
+            type=request.get("type_filter"),
+        )
+        return {
+            "status": "ok",
+            "issues": [_serialize_issue(i) for i in issues],
+        }
+
+    def _handle_issues_get(self, request: dict) -> dict:
+        if "id" not in request:
+            return {"status": "error", "message": "Missing required field: id"}
+        queue = self._issue_queue()
+        try:
+            issue = queue.get(request["id"])
+        except ValueError as exc:
+            return {"status": "error", "message": str(exc)}
+        if issue is None:
+            return {"status": "error", "message": f"Issue not found: {request['id']}"}
+        return {"status": "ok", "issue": _serialize_issue(issue, include_body=True)}
+
+    def _handle_issues_update(self, request: dict) -> dict:
+        if "id" not in request or "status" not in request:
+            return {"status": "error", "message": "Missing required fields: id, status"}
+        queue = self._issue_queue()
+        try:
+            ok = queue.update_status(request["id"], request["status"])
+        except ValueError as exc:
+            return {"status": "error", "message": str(exc)}
+        if not ok:
+            return {"status": "error", "message": f"Issue not found: {request['id']}"}
+        return {"status": "ok"}
+
+    def _handle_talk_read(self, request: dict) -> dict:
+        from llm_wiki.talk.page import TalkPage
+        if "page" not in request:
+            return {"status": "error", "message": "Missing required field: page"}
+        wiki_dir = self._vault_root / self._config.vault.wiki_dir.rstrip("/")
+        page_path = wiki_dir / f"{request['page']}.md"
+        talk = TalkPage.for_page(page_path)
+        entries = [
+            {"timestamp": e.timestamp, "author": e.author, "body": e.body}
+            for e in talk.load()
+        ]
+        return {"status": "ok", "entries": entries}
+
+    def _handle_talk_append(self, request: dict) -> dict:
+        import datetime as _dt
+        from llm_wiki.talk.discovery import ensure_talk_marker
+        from llm_wiki.talk.page import TalkEntry, TalkPage
+
+        for field_name in ("page", "author", "body"):
+            if field_name not in request:
+                return {"status": "error", "message": f"Missing required field: {field_name}"}
+
+        wiki_dir = self._vault_root / self._config.vault.wiki_dir.rstrip("/")
+        page_path = wiki_dir / f"{request['page']}.md"
+        if not page_path.exists():
+            return {"status": "error", "message": f"Page not found: {request['page']}"}
+
+        talk = TalkPage.for_page(page_path)
+        entry = TalkEntry(
+            timestamp=_dt.datetime.now(_dt.timezone.utc).isoformat(),
+            author=request["author"],
+            body=request["body"],
+        )
+        talk.append(entry)
+        ensure_talk_marker(page_path)
+        return {"status": "ok"}
+
+    def _handle_talk_list(self) -> dict:
+        wiki_dir = self._vault_root / self._config.vault.wiki_dir.rstrip("/")
+        pages: list[str] = []
+        if wiki_dir.exists():
+            for talk_file in sorted(wiki_dir.rglob("*.talk.md")):
+                # Skip files inside hidden directories
+                rel = talk_file.relative_to(wiki_dir)
+                if any(p.startswith(".") for p in rel.parts):
+                    continue
+                stem = talk_file.stem  # foo.talk
+                if stem.endswith(".talk"):
+                    pages.append(stem[: -len(".talk")])
+        return {"status": "ok", "pages": pages}
 
     async def _handle_query(self, request: dict) -> dict:
         if "question" not in request:
@@ -199,3 +511,19 @@ def _serialize_result(r: SearchResult) -> dict:
         "score": r.score,
         "manifest": r.entry.to_manifest_text(),
     }
+
+
+def _serialize_issue(issue: "Issue", include_body: bool = False) -> dict:
+    data = {
+        "id": issue.id,
+        "type": issue.type,
+        "status": issue.status,
+        "title": issue.title,
+        "page": issue.page,
+        "created": issue.created,
+        "detected_by": issue.detected_by,
+        "metadata": issue.metadata,
+    }
+    if include_body:
+        data["body"] = issue.body
+    return data

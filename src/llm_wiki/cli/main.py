@@ -220,6 +220,37 @@ def query(question: str, vault_path: Path, budget: int | None) -> None:
 
 
 @cli.command()
+@click.option(
+    "--vault", "vault_path", type=click.Path(exists=True, path_type=Path),
+    default=".", help="Path to vault",
+)
+def lint(vault_path: Path) -> None:
+    """Run structural integrity checks on the vault and file issues."""
+    client = _get_client(vault_path)
+    resp = client.request({"type": "lint"})
+    if resp["status"] != "ok":
+        raise click.ClickException(resp.get("message", "Lint failed"))
+
+    total = resp["total_issues"]
+    new_count = len(resp["new_issue_ids"])
+    existing_count = len(resp["existing_issue_ids"])
+
+    click.echo(f"Ran {resp['total_checks_run']} checks - {total} issue(s) total")
+    click.echo(f"  {new_count} new, {existing_count} already in queue")
+    click.echo()
+
+    for check, count in resp["by_check"].items():
+        marker = "OK" if count == 0 else "!!"
+        click.echo(f"  {marker} {check}: {count}")
+
+    if new_count > 0:
+        click.echo()
+        click.echo("New issue ids:")
+        for issue_id in resp["new_issue_ids"]:
+            click.echo(f"  - {issue_id}")
+
+
+@cli.command()
 @click.argument("source_path", type=click.Path(exists=True, path_type=Path))
 @click.option(
     "--vault", "vault_path", type=click.Path(exists=True, path_type=Path),
@@ -244,3 +275,201 @@ def ingest(source_path: Path, vault_path: Path) -> None:
         click.echo(f"  Updated: {', '.join(updated)}")
     if not created and not updated:
         click.echo("  No pages created — no concepts identified in source.")
+
+
+@cli.group()
+def issues() -> None:
+    """Query and manage the issue queue."""
+    pass
+
+
+@issues.command("list")
+@click.option(
+    "--vault", "vault_path", type=click.Path(exists=True, path_type=Path),
+    default=".", help="Path to vault",
+)
+@click.option("--status", default=None, help="Filter by status (open|resolved|wontfix)")
+@click.option("--type", "type_filter", default=None, help="Filter by issue type")
+def issues_list(vault_path: Path, status: str | None, type_filter: str | None) -> None:
+    """List issues in the queue."""
+    client = _get_client(vault_path)
+    req: dict = {"type": "issues-list"}
+    if status:
+        req["status_filter"] = status
+    if type_filter:
+        req["type_filter"] = type_filter
+    resp = client.request(req)
+    if resp["status"] != "ok":
+        raise click.ClickException(resp.get("message", "Issues list failed"))
+
+    items = resp["issues"]
+    if not items:
+        click.echo("No issues found.")
+        return
+
+    click.echo(f"Found {len(items)} issue(s):\n")
+    for item in items:
+        click.echo(f"  {item['id']} — {item['title']}")
+        click.echo(f"    type: {item['type']} | status: {item['status']} | page: {item['page']}")
+
+
+@issues.command("show")
+@click.argument("issue_id")
+@click.option(
+    "--vault", "vault_path", type=click.Path(exists=True, path_type=Path),
+    default=".", help="Path to vault",
+)
+def issues_show(issue_id: str, vault_path: Path) -> None:
+    """Show full details of a single issue."""
+    client = _get_client(vault_path)
+    resp = client.request({"type": "issues-get", "id": issue_id})
+    if resp["status"] != "ok":
+        raise click.ClickException(resp.get("message", "Issue not found"))
+
+    issue = resp["issue"]
+    click.echo(f"id:          {issue['id']}")
+    click.echo(f"type:        {issue['type']}")
+    click.echo(f"status:      {issue['status']}")
+    click.echo(f"page:        {issue['page']}")
+    click.echo(f"detected_by: {issue['detected_by']}")
+    click.echo(f"created:     {issue['created']}")
+    click.echo()
+    click.echo(issue['title'])
+    click.echo()
+    click.echo(issue['body'])
+
+
+def _set_status(issue_id: str, vault_path: Path, status: str) -> None:
+    client = _get_client(vault_path)
+    resp = client.request({"type": "issues-update", "id": issue_id, "status": status})
+    if resp["status"] != "ok":
+        raise click.ClickException(resp.get("message", "Update failed"))
+    click.echo(f"{issue_id} -> {status}")
+
+
+@issues.command("resolve")
+@click.argument("issue_id")
+@click.option(
+    "--vault", "vault_path", type=click.Path(exists=True, path_type=Path),
+    default=".", help="Path to vault",
+)
+def issues_resolve(issue_id: str, vault_path: Path) -> None:
+    """Mark an issue as resolved."""
+    _set_status(issue_id, vault_path, "resolved")
+
+
+@issues.command("wontfix")
+@click.argument("issue_id")
+@click.option(
+    "--vault", "vault_path", type=click.Path(exists=True, path_type=Path),
+    default=".", help="Path to vault",
+)
+def issues_wontfix(issue_id: str, vault_path: Path) -> None:
+    """Mark an issue as wontfix."""
+    _set_status(issue_id, vault_path, "wontfix")
+
+
+@cli.group()
+def maintenance() -> None:
+    """Inspect and manage maintenance workers."""
+    pass
+
+
+@maintenance.command("status")
+@click.option(
+    "--vault", "vault_path", type=click.Path(exists=True, path_type=Path),
+    default=".", help="Path to vault",
+)
+def maintenance_status(vault_path: Path) -> None:
+    """Show registered maintenance workers and their last-run times."""
+    client = _get_client(vault_path)
+    resp = client.request({"type": "scheduler-status"})
+    if resp["status"] != "ok":
+        raise click.ClickException(resp.get("message", "Status query failed"))
+
+    workers = resp["workers"]
+    if not workers:
+        click.echo("No maintenance workers registered.")
+        return
+
+    click.echo(f"{'name':<14} {'interval':<12} last_run")
+    click.echo("-" * 60)
+    for worker in workers:
+        interval = f"{worker['interval_seconds']:.0f}s"
+        last = worker["last_run"] or "never"
+        click.echo(f"{worker['name']:<14} {interval:<12} {last}")
+
+
+@cli.group()
+def talk() -> None:
+    """Read, post, and list talk-page entries."""
+    pass
+
+
+@talk.command("read")
+@click.argument("page")
+@click.option(
+    "--vault", "vault_path", type=click.Path(exists=True, path_type=Path),
+    default=".", help="Path to vault",
+)
+def talk_read(page: str, vault_path: Path) -> None:
+    """Show all talk entries for a page."""
+    client = _get_client(vault_path)
+    resp = client.request({"type": "talk-read", "page": page})
+    if resp["status"] != "ok":
+        raise click.ClickException(resp.get("message", "Talk read failed"))
+
+    entries = resp["entries"]
+    if not entries:
+        click.echo(f"No entries on {page}.talk.")
+        return
+
+    click.echo(f"{len(entries)} entries on {page}.talk:\n")
+    for entry in entries:
+        click.echo(f"**{entry['timestamp']} — {entry['author']}**")
+        click.echo(entry["body"])
+        click.echo()
+
+
+@talk.command("post")
+@click.argument("page")
+@click.option("--message", "-m", required=True, help="Message body")
+@click.option("--author", default="@human", help="Author tag (defaults to @human)")
+@click.option(
+    "--vault", "vault_path", type=click.Path(exists=True, path_type=Path),
+    default=".", help="Path to vault",
+)
+def talk_post(page: str, message: str, author: str, vault_path: Path) -> None:
+    """Append a talk-page entry."""
+    client = _get_client(vault_path)
+    resp = client.request({
+        "type": "talk-append",
+        "page": page,
+        "author": author,
+        "body": message,
+    })
+    if resp["status"] != "ok":
+        raise click.ClickException(resp.get("message", "Talk post failed"))
+    click.echo(f"Posted to {page}.talk as {author}.")
+
+
+@talk.command("list")
+@click.option(
+    "--vault", "vault_path", type=click.Path(exists=True, path_type=Path),
+    default=".", help="Path to vault",
+)
+def talk_list(vault_path: Path) -> None:
+    """List all pages that have a talk sidecar."""
+    client = _get_client(vault_path)
+    resp = client.request({"type": "talk-list"})
+    if resp["status"] != "ok":
+        raise click.ClickException(resp.get("message", "Talk list failed"))
+
+    pages = resp["pages"]
+    if not pages:
+        click.echo("No talk pages.")
+        return
+
+    click.echo(f"{len(pages)} talk page(s):")
+    for page in pages:
+        click.echo(f"  {page}")

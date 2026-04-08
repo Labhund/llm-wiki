@@ -33,11 +33,9 @@ async def run(vault_root: Path) -> None:
     await server.start()
     write_pidfile(pid_path, os.getpid())
 
-    async def on_file_change(changed, removed):
-        logger.info("Files changed, rescanning vault...")
-        await server.rescan()
-
-    watcher = FileWatcher(vault_root, on_file_change, poll_interval=2.0)
+    watcher = FileWatcher(
+        vault_root, server.handle_file_changes, poll_interval=2.0
+    )
     await watcher.start()
 
     stop_event = asyncio.Event()
