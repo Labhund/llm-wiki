@@ -264,6 +264,12 @@ class DaemonServer:
                 return self._handle_issues_update(request)
             case "scheduler-status":
                 return self._handle_scheduler_status()
+            case "talk-read":
+                return self._handle_talk_read(request)
+            case "talk-append":
+                return self._handle_talk_append(request)
+            case "talk-list":
+                return self._handle_talk_list()
             case _:
                 return {"status": "error", "message": f"Unknown request type: {req_type}"}
 
@@ -356,6 +362,57 @@ class DaemonServer:
         if not ok:
             return {"status": "error", "message": f"Issue not found: {request['id']}"}
         return {"status": "ok"}
+
+    def _handle_talk_read(self, request: dict) -> dict:
+        from llm_wiki.talk.page import TalkPage
+        if "page" not in request:
+            return {"status": "error", "message": "Missing required field: page"}
+        wiki_dir = self._vault_root / self._config.vault.wiki_dir.rstrip("/")
+        page_path = wiki_dir / f"{request['page']}.md"
+        talk = TalkPage.for_page(page_path)
+        entries = [
+            {"timestamp": e.timestamp, "author": e.author, "body": e.body}
+            for e in talk.load()
+        ]
+        return {"status": "ok", "entries": entries}
+
+    def _handle_talk_append(self, request: dict) -> dict:
+        import datetime as _dt
+        from llm_wiki.talk.discovery import ensure_talk_marker
+        from llm_wiki.talk.page import TalkEntry, TalkPage
+
+        for field_name in ("page", "author", "body"):
+            if field_name not in request:
+                return {"status": "error", "message": f"Missing required field: {field_name}"}
+
+        wiki_dir = self._vault_root / self._config.vault.wiki_dir.rstrip("/")
+        page_path = wiki_dir / f"{request['page']}.md"
+        if not page_path.exists():
+            return {"status": "error", "message": f"Page not found: {request['page']}"}
+
+        talk = TalkPage.for_page(page_path)
+        entry = TalkEntry(
+            timestamp=_dt.datetime.now(_dt.timezone.utc).isoformat(),
+            author=request["author"],
+            body=request["body"],
+        )
+        talk.append(entry)
+        ensure_talk_marker(page_path)
+        return {"status": "ok"}
+
+    def _handle_talk_list(self) -> dict:
+        wiki_dir = self._vault_root / self._config.vault.wiki_dir.rstrip("/")
+        pages: list[str] = []
+        if wiki_dir.exists():
+            for talk_file in sorted(wiki_dir.rglob("*.talk.md")):
+                # Skip files inside hidden directories
+                rel = talk_file.relative_to(wiki_dir)
+                if any(p.startswith(".") for p in rel.parts):
+                    continue
+                stem = talk_file.stem  # foo.talk
+                if stem.endswith(".talk"):
+                    pages.append(stem[: -len(".talk")])
+        return {"status": "ok", "pages": pages}
 
     async def _handle_query(self, request: dict) -> dict:
         if "question" not in request:
