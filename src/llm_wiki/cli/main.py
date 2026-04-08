@@ -220,6 +220,37 @@ def query(question: str, vault_path: Path, budget: int | None) -> None:
 
 
 @cli.command()
+@click.option(
+    "--vault", "vault_path", type=click.Path(exists=True, path_type=Path),
+    default=".", help="Path to vault",
+)
+def lint(vault_path: Path) -> None:
+    """Run structural integrity checks on the vault and file issues."""
+    client = _get_client(vault_path)
+    resp = client.request({"type": "lint"})
+    if resp["status"] != "ok":
+        raise click.ClickException(resp.get("message", "Lint failed"))
+
+    total = resp["total_issues"]
+    new_count = len(resp["new_issue_ids"])
+    existing_count = len(resp["existing_issue_ids"])
+
+    click.echo(f"Ran {resp['total_checks_run']} checks - {total} issue(s) total")
+    click.echo(f"  {new_count} new, {existing_count} already in queue")
+    click.echo()
+
+    for check, count in resp["by_check"].items():
+        marker = "OK" if count == 0 else "!!"
+        click.echo(f"  {marker} {check}: {count}")
+
+    if new_count > 0:
+        click.echo()
+        click.echo("New issue ids:")
+        for issue_id in resp["new_issue_ids"]:
+            click.echo(f"  - {issue_id}")
+
+
+@cli.command()
 @click.argument("source_path", type=click.Path(exists=True, path_type=Path))
 @click.option(
     "--vault", "vault_path", type=click.Path(exists=True, path_type=Path),
