@@ -378,6 +378,11 @@ class ComplianceReviewer:
         # qualify as minor. A new appended sentence increases the count.
         old_sentences = cls._extract_body_sentences(cls._strip_frontmatter(old))
         new_sentences = cls._extract_body_sentences(cls._strip_frontmatter(new))
+        # Edge case: a paragraph reformat that splits one sentence into two via \n\n
+        # will fail this check and exit the minor-edit shortcut, which can produce a
+        # false-positive missing-citation issue. The user can resolve such issues
+        # manually. We accept this trade-off to ensure that genuinely new sentences
+        # — which need citations — always get checked.
         if len(new_sentences) > len(old_sentences):
             return False
 
