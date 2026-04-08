@@ -97,6 +97,8 @@ class DaemonServer:
                 return await self._handle_query(request)
             case "ingest":
                 return await self._handle_ingest(request)
+            case "lint":
+                return self._handle_lint()
             case _:
                 return {"status": "error", "message": f"Unknown request type: {req_type}"}
 
@@ -128,6 +130,16 @@ class DaemonServer:
     def _handle_status(self) -> dict:
         info = self._vault.status()
         return {"status": "ok", **info}
+
+    def _handle_lint(self) -> dict:
+        from llm_wiki.audit.auditor import Auditor
+        from llm_wiki.issues.queue import IssueQueue
+
+        wiki_dir = self._vault_root / self._config.vault.wiki_dir.rstrip("/")
+        queue = IssueQueue(wiki_dir)
+        auditor = Auditor(self._vault, queue, self._vault_root)
+        report = auditor.audit()
+        return {"status": "ok", **report.to_dict()}
 
     async def _handle_query(self, request: dict) -> dict:
         if "question" not in request:
