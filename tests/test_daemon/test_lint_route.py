@@ -146,3 +146,33 @@ async def test_issues_get_and_update(sample_vault: Path, tmp_path: Path):
         except asyncio.CancelledError:
             pass
         await server.stop()
+
+
+@pytest.mark.asyncio
+async def test_issues_routes_reject_path_traversal(sample_vault: Path, tmp_path: Path):
+    """issues-get and issues-update must refuse ids that would escape .issues/."""
+    sock_path = tmp_path / "issues-traversal.sock"
+    server = DaemonServer(sample_vault, sock_path)
+    await server.start()
+    serve_task = asyncio.create_task(server.serve_forever())
+
+    try:
+        client = DaemonClient(sock_path)
+
+        get_resp = client.request({"type": "issues-get", "id": "../foo"})
+        assert get_resp["status"] == "error"
+        assert "Invalid issue id" in get_resp["message"]
+
+        update_resp = client.request(
+            {"type": "issues-update", "id": "../foo", "status": "resolved"}
+        )
+        assert update_resp["status"] == "error"
+        assert "Invalid issue id" in update_resp["message"]
+    finally:
+        server._server.close()
+        serve_task.cancel()
+        try:
+            await serve_task
+        except asyncio.CancelledError:
+            pass
+        await server.stop()

@@ -2,10 +2,24 @@ from __future__ import annotations
 
 import datetime
 import hashlib
+import re
 from dataclasses import dataclass, field
 from pathlib import Path
 
 import yaml
+
+# Issue ids are filesystem-sensitive: they're concatenated with `.md` and joined
+# to the `.issues/` directory without further sanitization. Lock the shape to
+# lowercase alnum + hyphen so an attacker-controlled id can't escape the
+# directory via `..`, absolute paths, or other surprises. The shape matches
+# `Issue.make_id`'s output: `<type>-<page-or-vault>-<6hex>` (all lowercase).
+_ISSUE_ID_RE = re.compile(r"^[a-z][a-z0-9-]{0,127}$")
+
+
+def _validate_id(issue_id: str) -> None:
+    """Raise ValueError unless `issue_id` is a safe, well-formed id."""
+    if not isinstance(issue_id, str) or not _ISSUE_ID_RE.match(issue_id):
+        raise ValueError(f"Invalid issue id: {issue_id!r}")
 
 
 @dataclass
@@ -34,12 +48,19 @@ class Issue:
         instance of the issue type — e.g. the broken-link target slug, the
         missing citation path. The hash is content-addressable so the same
         problem always maps to the same file on disk.
+
+        The returned id is validated against `_ISSUE_ID_RE` so callers can
+        trust the shape when joining it to a filesystem path. If `type` or
+        `page` contains characters outside `[a-z0-9-]`, this raises
+        `ValueError` instead of silently producing a malformed id.
         """
         digest = hashlib.sha256(
             f"{type}|{page or ''}|{key}".encode("utf-8")
         ).hexdigest()[:6]
         page_part = page or "vault"
-        return f"{type}-{page_part}-{digest}"
+        issue_id = f"{type}-{page_part}-{digest}"
+        _validate_id(issue_id)
+        return issue_id
 
     @staticmethod
     def now_iso() -> str:
@@ -67,6 +88,7 @@ class IssueQueue:
         return self._wiki_dir / ".issues"
 
     def exists(self, issue_id: str) -> bool:
+        _validate_id(issue_id)
         return (self.issues_dir / f"{issue_id}.md").exists()
 
     def add(self, issue: Issue) -> tuple[Path, bool]:
@@ -98,6 +120,7 @@ class IssueQueue:
         return path, True
 
     def get(self, issue_id: str) -> Issue | None:
+        _validate_id(issue_id)
         path = self.issues_dir / f"{issue_id}.md"
         if not path.exists():
             return None
@@ -127,6 +150,7 @@ class IssueQueue:
 
     def update_status(self, issue_id: str, new_status: str) -> bool:
         """Mutate the status field, preserving all other fields and the body."""
+        _validate_id(issue_id)
         if new_status not in self._VALID_STATUSES:
             raise ValueError(
                 f"Invalid status {new_status!r}; must be one of {sorted(self._VALID_STATUSES)}"

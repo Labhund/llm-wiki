@@ -165,7 +165,10 @@ class DaemonServer:
         if "id" not in request:
             return {"status": "error", "message": "Missing required field: id"}
         queue = self._issue_queue()
-        issue = queue.get(request["id"])
+        try:
+            issue = queue.get(request["id"])
+        except ValueError as exc:
+            return {"status": "error", "message": str(exc)}
         if issue is None:
             return {"status": "error", "message": f"Issue not found: {request['id']}"}
         return {"status": "ok", "issue": _serialize_issue(issue, include_body=True)}

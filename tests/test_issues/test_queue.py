@@ -243,3 +243,14 @@ def test_update_status_validates_value(tmp_path: Path):
 
     with pytest.raises(ValueError):
         queue.update_status(issue.id, "invalid-status")
+
+
+def test_queue_rejects_invalid_id(tmp_path):
+    """Path traversal attempts via issue_id are rejected."""
+    queue = IssueQueue(tmp_path / "wiki")
+    with pytest.raises(ValueError):
+        queue.exists("../../etc/passwd")
+    with pytest.raises(ValueError):
+        queue.get("../../etc/passwd")
+    with pytest.raises(ValueError):
+        queue.update_status("../../etc/passwd", "resolved")
