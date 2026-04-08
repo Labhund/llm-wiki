@@ -191,5 +191,5 @@ class IssueQueue:
             created=fm.get("created", ""),
             detected_by=fm.get("detected_by", "unknown"),
             metadata=fm.get("metadata") or {},
-            severity=fm.get("severity", "minor"),
+            severity=fm.get("severity") or "minor",
         )

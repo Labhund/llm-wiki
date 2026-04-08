@@ -314,3 +314,31 @@ def test_queue_legacy_file_without_severity_defaults_to_minor(tmp_path):
     loaded = queue.get("broken-link-foo-abc123")
     assert loaded is not None
     assert loaded.severity == "minor"
+
+
+def test_queue_legacy_file_with_null_severity_defaults_to_minor(tmp_path):
+    """A legacy issue file with `severity: null` reads as 'minor', not None."""
+    wiki_dir = tmp_path / "wiki"
+    issues_dir = wiki_dir / ".issues"
+    issues_dir.mkdir(parents=True)
+    legacy = issues_dir / "broken-link-bar-def456.md"
+    legacy.write_text(
+        "---\n"
+        "id: broken-link-bar-def456\n"
+        "type: broken-link\n"
+        "status: open\n"
+        "severity:\n"
+        "title: Wikilink target does not exist\n"
+        "page: bar\n"
+        "created: 2026-04-01T10:00:00+00:00\n"
+        "detected_by: auditor\n"
+        "metadata: {}\n"
+        "---\n\n"
+        "Body text.\n",
+        encoding="utf-8",
+    )
+
+    queue = IssueQueue(wiki_dir)
+    loaded = queue.get("broken-link-bar-def456")
+    assert loaded is not None
+    assert loaded.severity == "minor"
