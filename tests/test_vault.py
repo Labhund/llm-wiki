@@ -100,3 +100,56 @@ def test_status(sample_vault: Path):
     assert status["page_count"] == 4
     assert status["cluster_count"] >= 2
     assert "index_path" in status
+
+
+def test_vault_scan_applies_manifest_overrides(sample_vault, tmp_path):
+    """Tags, authority, and other librarian-managed fields survive Vault.scan()."""
+    from llm_wiki.librarian.overrides import ManifestOverrides, PageOverride
+    from llm_wiki.vault import Vault, _state_dir_for
+
+    state_dir = _state_dir_for(sample_vault)
+    state_dir.mkdir(parents=True, exist_ok=True)
+
+    overrides_path = state_dir / "manifest_overrides.json"
+    store = ManifestOverrides.load(overrides_path)
+    store.set("srna-embeddings", PageOverride(
+        tags=["bioinformatics", "embeddings", "validation"],
+        summary_override="Validates sRNA embeddings via PCA and k-means",
+        authority=0.74,
+        last_corroborated="2026-04-01T12:00:00+00:00",
+        read_count=12,
+        usefulness=0.82,
+        last_refreshed_read_count=10,
+    ))
+    store.save()
+
+    vault = Vault.scan(sample_vault)
+    entry = vault.manifest_entries()["srna-embeddings"]
+
+    assert entry.tags == ["bioinformatics", "embeddings", "validation"]
+    assert entry.summary == "Validates sRNA embeddings via PCA and k-means"
+    assert abs(entry.authority - 0.74) < 1e-6
+    assert entry.last_corroborated == "2026-04-01T12:00:00+00:00"
+    assert entry.read_count == 12
+    assert abs(entry.usefulness - 0.82) < 1e-6
+
+
+def test_vault_scan_prunes_overrides_for_deleted_pages(sample_vault, tmp_path):
+    """An override for a page that no longer exists in the vault is removed on scan."""
+    from llm_wiki.librarian.overrides import ManifestOverrides, PageOverride
+    from llm_wiki.vault import Vault, _state_dir_for
+
+    state_dir = _state_dir_for(sample_vault)
+    state_dir.mkdir(parents=True, exist_ok=True)
+    overrides_path = state_dir / "manifest_overrides.json"
+
+    store = ManifestOverrides.load(overrides_path)
+    store.set("srna-embeddings", PageOverride(authority=0.5))
+    store.set("deleted-page", PageOverride(authority=0.9))
+    store.save()
+
+    Vault.scan(sample_vault)
+
+    reloaded = ManifestOverrides.load(overrides_path)
+    assert reloaded.get("srna-embeddings") is not None
+    assert reloaded.get("deleted-page") is None

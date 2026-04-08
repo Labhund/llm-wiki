@@ -79,6 +79,15 @@ class Vault:
         backend = TantivyBackend(index_path)
         backend.index_entries(entries)
 
+        # Phase 5c: apply librarian-managed overrides on top of built entries.
+        # Overrides live in a sidecar JSON file at <state_dir>/manifest_overrides.json;
+        # page frontmatter is never mutated for this purpose. Missing file → empty store.
+        from llm_wiki.librarian.overrides import ManifestOverrides
+        overrides = ManifestOverrides.load(state_dir / "manifest_overrides.json")
+        _apply_overrides(entries, overrides)
+        overrides.prune({e.name for e in entries})
+        overrides.save()
+
         # Build manifest store
         store = ManifestStore(entries)
 
@@ -197,3 +206,28 @@ class Vault:
         if budget and count_tokens(body) > budget:
             return body[: budget * 4].rsplit("\n", 1)[0] + "\n... (truncated)"
         return body
+
+
+def _apply_overrides(
+    entries: list[ManifestEntry],
+    overrides: "ManifestOverrides",  # noqa: F821 — runtime import in caller
+) -> None:
+    """Apply librarian-managed metadata to programmatically-built entries.
+
+    Tags, authority, last_corroborated, read_count, and usefulness come
+    straight from the override. summary_override (if present) replaces the
+    auto-generated summary; otherwise the auto-generated summary stands.
+    Empty override tags do NOT blank out auto-built tags.
+    """
+    for entry in entries:
+        override = overrides.get(entry.name)
+        if override is None:
+            continue
+        if override.tags:
+            entry.tags = list(override.tags)
+        if override.summary_override:
+            entry.summary = override.summary_override
+        entry.authority = override.authority
+        entry.last_corroborated = override.last_corroborated
+        entry.read_count = override.read_count
+        entry.usefulness = override.usefulness
