@@ -56,3 +56,42 @@ def test_audit_empty_vault(tmp_path: Path):
     report = auditor.audit()
     assert report.total_issues == 0
     assert report.total_checks_run == 4
+
+
+def test_audit_preserves_wontfix_status(sample_vault: Path):
+    """Re-auditing must NOT re-open an issue the user marked wontfix.
+
+    The contract: once a human decides an auditor finding is wontfix
+    (e.g. an intentional orphan, a known-missing citation), subsequent
+    audit() runs see the same problem, re-derive the same deterministic
+    id, and must leave the on-disk file (including its status) alone.
+    """
+    queue = IssueQueue(sample_vault)
+    auditor = Auditor(Vault.scan(sample_vault), queue, sample_vault)
+
+    first = auditor.audit()
+    assert first.new_issue_ids, "sample_vault should yield at least one issue"
+
+    # Pick any filed issue and mark it wontfix.
+    target_id = first.new_issue_ids[0]
+    filed = queue.get(target_id)
+    assert filed is not None
+    assert filed.status == "open"
+    assert queue.update_status(target_id, "wontfix") is True
+
+    # Re-run audit — the same problem should be detected again, but the
+    # existing file must be preserved unchanged.
+    second = auditor.audit()
+
+    assert target_id not in second.new_issue_ids, (
+        f"wontfix issue {target_id} was re-filed as new"
+    )
+    assert target_id in second.existing_issue_ids, (
+        f"wontfix issue {target_id} was not recognized as existing"
+    )
+
+    reloaded = queue.get(target_id)
+    assert reloaded is not None
+    assert reloaded.status == "wontfix", (
+        f"expected status wontfix after re-audit, got {reloaded.status}"
+    )
