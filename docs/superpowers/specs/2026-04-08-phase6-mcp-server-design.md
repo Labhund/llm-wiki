@@ -377,30 +377,29 @@ Cap is configurable via `mcp.ingest_response_max_pages` (default 15). The agent 
 
 ### Talk entries gain `severity` and append-only closure
 
-Talk entries gain a `severity` field on their dataclass: `critical | moderate | minor | suggestion | new_connection`. Default `suggestion`. Background workers set it explicitly when posting (adversary's contradiction → `critical`, compliance's missing-citation → `moderate`, etc.). The talk page file format gains the field as part of each entry's frontmatter; existing entries without the field default to `suggestion` on read (one-line migration).
+Talk entries gain a `severity` field on their dataclass: `critical | moderate | minor | suggestion | new_connection`. Default `suggestion`. Background workers set it explicitly when posting (adversary's contradiction → `critical`, compliance's missing-citation → `moderate`, etc.). Existing entries on disk that lack the field default to `suggestion` on read — the parser branches on whether the new metadata is present.
+
+**On-disk format: markdown with HTML-comment metadata, not YAML.** The dataclass and the file format are intentionally different. The dataclass carries `index`, `severity`, `resolves` as first-class fields. The file format keeps the existing markdown shape — bold-text entry headers, plain markdown body — and tucks `severity` and `resolves` into an HTML comment on the header line. HTML comments are invisible in Obsidian's render mode but trivially parseable by the daemon. This preserves Principle 2 (plain markdown on a filesystem is the substrate) — talk pages stay readable in Obsidian as they always were, the user can still edit them by hand, and no migration of existing files is required.
 
 **Closure of talk entries is itself a new entry**, not a state mutation:
 
-```yaml
-# Existing entry (untouched)
-- index: 3
-  ts: 2026-04-07T10:30Z
-  author: adversary
-  severity: critical
-  body: |
-    Page claims 30% improvement, but source PDF table 3 shows 27%.
+```markdown
+---
+page: sRNA-tQuant
+---
 
-# New entry that closes #3
-- index: 7
-  ts: 2026-04-08T14:15Z
-  author: claude-opus-4-6
-  severity: minor
-  resolves: [3]
-  body: |
-    Fixed in commit 4a8b2e — updated page to match source table 3.
+**2026-04-07T10:30Z — @adversary** <!-- severity:critical -->
+Page claims 30% improvement, but source PDF table 3 shows 27%.
+
+**2026-04-08T14:15Z — @claude-opus-4-6** <!-- severity:minor, resolves:[1] -->
+Fixed in commit 4a8b2e — updated page to match source table 3.
 ```
 
-The new entry has an optional `resolves: [int]` field pointing at a prior entry on the same page. The original entry is **never modified** — append-only purity preserved. The librarian's digest computation walks the entries forward in pure Python, marks any entry as "resolved" if a later entry references it via `resolves`, and only passes unresolved entries to the summarizer LLM. This means:
+**Index semantics.** Entry indices are 1-based and positional: the first entry in the file is index 1, the second is 2, and so on. Indices are **not stored in the file** — they are computed on load from entry order. This is stable because talk pages are append-only: once an entry exists at position N, no later operation reorders or removes prior entries, so its index never changes. The `resolves: [N]` reference in a later entry's HTML-comment metadata refers to that positional index. In the example above, the second entry's `resolves:[1]` closes the first entry.
+
+Metadata format inside the comment is `key:value` pairs separated by commas: `severity:critical`, or `severity:minor, resolves:[1,3]`, or omitted entirely (parser defaults to `severity=suggestion`, `resolves=[]`). A `suggestion`-severity entry with no resolves writes the same line shape as today's format — zero visible churn for the common case.
+
+The new entry has an optional `resolves` list pointing at prior entry indices on the same page. The original entry is **never modified** — append-only purity preserved. The librarian's digest computation walks the entries forward in pure Python, marks any entry as "resolved" if a later entry references it via `resolves`, and only passes unresolved entries to the summarizer LLM. This means:
 
 1. **The summarizer's context is never polluted with closed entries** — closure is enforced in code, not by hoping the LLM ignores resolved entries.
 2. **`wiki_read`'s talk digest only counts unresolved entries** — closed discussions disappear from the attention surface but remain visible in `wiki_talk_read`'s full thread for history.
@@ -440,6 +439,8 @@ This is the heart of Phase 6. Everything that makes "writes flow into git histor
 ### Session model
 
 A **session** is the unit of write grouping for commits. Its key is **`(author, connection_id)` by default**, with `author` alone as a fallback when `sessions.namespace_by_connection: false` is set. The `author` always appears in the git commit trailer regardless, so swarm-wide attribution via `git log --grep "Agent: researcher-3"` works in either mode.
+
+**The `connection_id` is supplied by the calling client in every write/session-close request payload — the daemon does not generate it.** The daemon's Unix-socket protocol is one-message-per-connection (open socket, send request, receive response, close), so a per-Unix-socket UUID would create one daemon session per write call and defeat the purpose of session grouping. Instead, the MCP server (Phase 6c) generates one UUID at MCP stdio-session startup and threads it into every `client.request({...})` call via a shared `ToolContext`. The CLI ingest command generates a per-invocation UUID. Direct daemon clients (e.g., custom Python scripts) supply their own. Write/session-close handlers return `missing-connection-id` if the field is absent. The session lookup that backs `wiki_session_close` uses `(author, connection_id)` directly so it settles exactly the session the calling client owns — not "any session for this author."
 
 Why two modes:
 
@@ -485,9 +486,9 @@ Each line is one event:
 }
 ```
 
-The `path` field is the **wiki-relative path of the file the operation touched**. Every supervised write produces exactly one journal entry with exactly one path:
+The `path` field is the **path of the file the operation touched, relative to `vault_root`**. Every supervised write produces exactly one journal entry with exactly one path. The examples below assume the default `wiki_dir = "wiki/"` config; under a flat Obsidian-style vault with `wiki_dir = ""`, the `wiki/` prefix drops and paths become `<page>.md` / `<page>.talk.md` / `.issues/<id>.md`. The daemon derives the path from the file's actual location via `page_path.relative_to(vault_root)` rather than hardcoding the `wiki/` prefix, so any `wiki_dir` configuration works.
 
-| Tool | Path written | Example |
+| Tool | Path written (default config) | Example |
 |---|---|---|
 | `wiki_create` / `wiki_update` / `wiki_append` | `wiki/<page>.md` | `wiki/sRNA-tQuant.md` |
 | `wiki_talk_post` | `wiki/<page>.talk.md` | `wiki/sRNA-tQuant.talk.md` |
@@ -744,7 +745,7 @@ The following are explicit deferrals, recorded so they don't get pulled into Pha
 | `src/llm_wiki/daemon/v4a_patch.py` | New module: V4A parser + applier, ported from the codex/cline reference implementation. |
 | `src/llm_wiki/daemon/commit.py` | New module: serial commit lock, summarizer call, git staging/committing, fallback message. |
 | `src/llm_wiki/issues/queue.py` | Add `severity` field to `Issue` dataclass; auditor sets it on file. |
-| `src/llm_wiki/talk/page.py` | Add `severity` field to `TalkEntry`; add optional `resolves: [int]` field; pure-Python resolver to compute open set. |
+| `src/llm_wiki/talk/page.py` | Add `index` (positional, computed on load), `severity`, and `resolves: list[int]` fields to `TalkEntry`; extend header parser/writer to round-trip an `<!-- ... -->` metadata comment; add pure-Python resolver to compute the open set. |
 | `src/llm_wiki/librarian/agent.py` | Add talk-page summary refresh job. |
 | `src/llm_wiki/audit/checks.py` | Auditor sets severity when filing issues. |
 | `src/llm_wiki/cli/main.py` | New `llm-wiki mcp [vault]` command that starts the MCP server. |
@@ -753,3 +754,10 @@ The following are explicit deferrals, recorded so they don't get pulled into Pha
 | `pyproject.toml` | Add `mcp` (official Python SDK) as a dependency. |
 
 This is the complete scope for Phase 6. The phase ends when all tests in the layers above pass and a real Claude Code session can read, query, and write through the MCP server with commits landing in git history automatically.
+
+## Changelog
+
+- **2026-04-08** — Initial design approved.
+- **2026-04-08** — §"Talk entries gain `severity` and append-only closure" amended. Original draft showed talk entries as a YAML list on disk (`- index: 3 ...`). Replaced with markdown-with-HTML-comment format: bold-text entry headers stay as today, `severity` and `resolves` ride in a `<!-- key:value -->` comment on the header line, indices are positional (computed at load time, not stored). Motivation: a YAML on-disk format renders as raw text in Obsidian, breaking Principle 2 ("plain markdown on a filesystem is the substrate"). The HTML-comment approach is invisible in Obsidian render mode, requires no migration of existing files, keeps the dataclass cleanly typed (`index`, `severity`, `resolves` as first-class fields), and writes the same line shape as today for the common case (suggestion-severity entry, no resolves). Caught during plan review for Phase 6a.
+- **2026-04-08** — §"The journal" clarified. Original text described the `path` field as "the wiki-relative path of the file the operation touched" with examples like `wiki/sRNA-tQuant.md`, implicitly assuming the default `wiki_dir = "wiki/"`. Clarified to "the path of the file the operation touched, relative to `vault_root`," and added an explicit note that under a flat Obsidian-style vault (`wiki_dir = ""`), paths drop the `wiki/` prefix. The daemon must derive the journal path from `page_path.relative_to(vault_root)` rather than hardcoding the prefix, so the commit pipeline's `git add` step finds the file under any valid `wiki_dir` config. Caught during plan review for Phase 6b — the original wording would have produced a journal/file divergence that broke `git add` for users with non-default `wiki_dir`.
+- **2026-04-08** — §"Session model" amended to specify that `connection_id` is **supplied by the calling client in the request payload**, not derived from the Unix-socket connection. Original text was silent on where `connection_id` came from, which silently assumed the daemon could materialize it from per-connection state. But the daemon's Unix-socket protocol is one-message-per-connection: opening a fresh socket per request, processing one message, and closing. So a per-Unix-socket UUID would create one daemon session per write — the inactivity timer would never accumulate multiple writes, the cap warning would never trigger, and the cross-write grouping that justifies the session model would never happen. Under the amended model, the MCP server (Phase 6c) generates one UUID at stdio-session startup and threads it into every `client.request({...})` call via a `ToolContext`. CLI ingest generates a per-invocation UUID. The daemon's write/session-close handlers extract `connection_id` from the request payload and return `missing-connection-id` if absent. `session-close` uses `SessionRegistry.get_active(author, connection_id)` for an unambiguous per-MCP-client lookup, replacing the previous "find any session for this author" semantics that would have been ambiguous under multi-connection-per-author scenarios. Caught during plan review for Phase 6b — the previous design was architecturally incompatible with the per-message daemon protocol and the corresponding `session-close` test would have broken under any per-connection lookup attempt.
