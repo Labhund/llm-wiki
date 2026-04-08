@@ -57,6 +57,41 @@ class LibrarianAgent:
         self._overrides_path = self._state_dir / "manifest_overrides.json"
         self._log_path = self._state_dir / "traversal_logs" / "traversal_logs.jsonl"
 
+    async def run(self) -> LibrarianResult:
+        """Full librarian pass: refresh candidates above threshold, then recalc authority."""
+        result = LibrarianResult()
+        entries = self._vault.manifest_entries()
+        if not entries:
+            return result
+
+        threshold = self._config.budgets.manifest_refresh_after_traversals
+        usage = aggregate_logs(self._log_path)
+        overrides = ManifestOverrides.load(self._overrides_path)
+
+        # Identify refresh candidates: read_count - last_refreshed_read_count >= threshold
+        candidates: list[str] = []
+        for name, pu in usage.items():
+            if name not in entries:
+                continue
+            existing = overrides.get(name)
+            last_refreshed = existing.last_refreshed_read_count if existing else 0
+            if pu.read_count - last_refreshed >= threshold:
+                candidates.append(name)
+
+        # Refresh each candidate via LLM
+        for name in candidates:
+            try:
+                refreshed = await self.refresh_page(name)
+            except Exception:
+                logger.exception("Librarian: refresh_page failed for %s", name)
+                continue
+            if refreshed:
+                result.pages_refined.append(name)
+
+        # Recalculate authority for everything afterwards (uses the latest overrides)
+        result.authorities_updated = await self.recalc_authority()
+        return result
+
     async def recalc_authority(self) -> int:
         """Recompute authority for every entry and persist via overrides.
 

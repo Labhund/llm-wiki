@@ -177,3 +177,110 @@ async def test_recalc_authority_preserves_existing_tags_and_summary(sample_vault
     assert got.summary_override == "preserved summary"
     assert got.read_count == 12
     assert got.last_refreshed_read_count == 12
+
+
+@pytest.mark.asyncio
+async def test_run_refreshes_pages_above_threshold(sample_vault: Path):
+    """A page with accumulated reads ≥ threshold gets refreshed."""
+    state_dir = _state_dir_for(sample_vault)
+    state_dir.mkdir(parents=True, exist_ok=True)
+
+    # Threshold is 3 in our test config
+    config = WikiConfig()
+    config.budgets.manifest_refresh_after_traversals = 3
+
+    # 4 distinct queries reading srna-embeddings
+    _seed_log(state_dir, [
+        {
+            "query": f"q{i}",
+            "turns": [{"turn": 0, "pages_read": [
+                {"name": "srna-embeddings", "sections_read": [], "salient_points": f"point {i}", "relevance": 0.8}
+            ], "tokens_used": 0, "hypothesis": "", "remaining_questions": [], "next_candidates": []}],
+        }
+        for i in range(4)
+    ])
+
+    stub = _StubLLM('{"tags": ["validation"], "summary": "Refined."}')
+    vault = Vault.scan(sample_vault)
+    agent = LibrarianAgent(vault, sample_vault, stub, IssueQueue(sample_vault / "wiki"), config)
+
+    result = await agent.run()
+
+    assert isinstance(result, LibrarianResult)
+    assert "srna-embeddings" in result.pages_refined
+    assert result.authorities_updated == vault.page_count
+    # The other fixture pages have zero reads, so they should NOT be refreshed
+    assert "clustering-metrics" not in result.pages_refined
+
+
+@pytest.mark.asyncio
+async def test_run_skips_pages_below_threshold(sample_vault: Path):
+    """A page with reads < threshold is not refreshed."""
+    state_dir = _state_dir_for(sample_vault)
+    state_dir.mkdir(parents=True, exist_ok=True)
+
+    config = WikiConfig()
+    config.budgets.manifest_refresh_after_traversals = 10
+
+    _seed_log(state_dir, [
+        {
+            "query": "q",
+            "turns": [{"turn": 0, "pages_read": [
+                {"name": "srna-embeddings", "sections_read": [], "salient_points": "x", "relevance": 0.8}
+            ], "tokens_used": 0, "hypothesis": "", "remaining_questions": [], "next_candidates": []}],
+        }
+    ])
+
+    stub = _StubLLM('{"tags": ["x"], "summary": "y"}')
+    vault = Vault.scan(sample_vault)
+    agent = LibrarianAgent(vault, sample_vault, stub, IssueQueue(sample_vault / "wiki"), config)
+
+    result = await agent.run()
+    assert result.pages_refined == []
+    assert stub.calls == []  # no LLM calls
+    assert result.authorities_updated == vault.page_count   # authority still recalculated
+
+
+@pytest.mark.asyncio
+async def test_run_uses_delta_since_last_refresh(sample_vault: Path):
+    """A page already refreshed at read_count=10 is not re-refreshed at read_count=12 with threshold=5."""
+    state_dir = _state_dir_for(sample_vault)
+    state_dir.mkdir(parents=True, exist_ok=True)
+
+    overrides = ManifestOverrides.load(state_dir / "manifest_overrides.json")
+    overrides.set("srna-embeddings", PageOverride(
+        tags=["existing"],
+        last_refreshed_read_count=10,
+    ))
+    overrides.save()
+
+    config = WikiConfig()
+    config.budgets.manifest_refresh_after_traversals = 5
+
+    # Seed 12 distinct queries reading srna-embeddings (delta since last refresh = 2)
+    _seed_log(state_dir, [
+        {
+            "query": f"q{i}",
+            "turns": [{"turn": 0, "pages_read": [
+                {"name": "srna-embeddings", "sections_read": [], "salient_points": f"p{i}", "relevance": 0.8}
+            ], "tokens_used": 0, "hypothesis": "", "remaining_questions": [], "next_candidates": []}],
+        }
+        for i in range(12)
+    ])
+
+    stub = _StubLLM('{"tags": ["new"], "summary": "new summary"}')
+    vault = Vault.scan(sample_vault)
+    agent = LibrarianAgent(vault, sample_vault, stub, IssueQueue(sample_vault / "wiki"), config)
+
+    result = await agent.run()
+    assert "srna-embeddings" not in result.pages_refined
+    assert stub.calls == []
+
+
+@pytest.mark.asyncio
+async def test_run_empty_vault(tmp_path: Path):
+    vault = Vault.scan(tmp_path)
+    agent = LibrarianAgent(vault, tmp_path, _StubLLM(), IssueQueue(tmp_path / "wiki"), WikiConfig())
+    result = await agent.run()
+    assert result.pages_refined == []
+    assert result.authorities_updated == 0
