@@ -59,3 +59,43 @@ def test_find_orphans_issue_metadata(sample_vault: Path):
         assert issue.status == "open"
         assert issue.detected_by == "auditor"
         assert issue.id.startswith("orphan-")
+
+
+from llm_wiki.audit.checks import find_broken_wikilinks
+
+
+def test_find_broken_wikilinks_detects_missing_target(sample_vault: Path):
+    """no-structure.md links to [[some-other-page]] which does not exist."""
+    vault = Vault.scan(sample_vault)
+    result = find_broken_wikilinks(vault)
+
+    assert result.check == "broken-wikilinks"
+    targets = {issue.metadata.get("target") for issue in result.issues}
+    assert "some-other-page" in targets
+
+
+def test_find_broken_wikilinks_does_not_flag_existing_targets(sample_vault: Path):
+    """Wikilinks to pages that exist must not be flagged."""
+    vault = Vault.scan(sample_vault)
+    result = find_broken_wikilinks(vault)
+    targets = {issue.metadata.get("target") for issue in result.issues}
+    assert "srna-embeddings" not in targets
+    assert "clustering-metrics" not in targets
+
+
+def test_find_broken_wikilinks_empty_vault(tmp_path: Path):
+    vault = Vault.scan(tmp_path)
+    result = find_broken_wikilinks(vault)
+    assert result.issues == []
+
+
+def test_find_broken_wikilinks_issue_shape(sample_vault: Path):
+    vault = Vault.scan(sample_vault)
+    result = find_broken_wikilinks(vault)
+    assert result.issues, "expected at least one broken-wikilink issue in fixture"
+    issue = next(i for i in result.issues if i.metadata.get("target") == "some-other-page")
+    assert issue.type == "broken-link"
+    assert issue.status == "open"
+    assert issue.page == "no-structure"
+    assert issue.detected_by == "auditor"
+    assert "some-other-page" in issue.body

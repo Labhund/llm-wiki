@@ -46,3 +46,37 @@ def find_orphans(vault: Vault) -> CheckResult:
             )
         )
     return CheckResult(check="orphans", issues=issues)
+
+
+def find_broken_wikilinks(vault: Vault) -> CheckResult:
+    """For each page, every wikilink target must resolve to a known page.
+
+    The page parser already strips wikilinks pointing at non-page files
+    (PDFs, images — see llm_wiki/page.py:_NON_PAGE_EXTENSIONS), so this
+    check only sees candidate page references.
+    """
+    entries = vault.manifest_entries()
+    known_pages = set(entries)
+    issues: list[Issue] = []
+    for name, entry in entries.items():
+        for target in entry.links_to:
+            if target in known_pages:
+                continue
+            issues.append(
+                Issue(
+                    id=Issue.make_id("broken-link", name, target),
+                    type="broken-link",
+                    status="open",
+                    title=f"Wikilink target '{target}' does not exist",
+                    page=name,
+                    body=(
+                        f"The page [[{name}]] references [[{target}]], "
+                        f"but no such page exists in the vault. "
+                        f"Either create the page or remove the link."
+                    ),
+                    created=Issue.now_iso(),
+                    detected_by="auditor",
+                    metadata={"target": target},
+                )
+            )
+    return CheckResult(check="broken-wikilinks", issues=issues)
