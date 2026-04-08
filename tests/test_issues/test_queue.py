@@ -1,6 +1,33 @@
 from __future__ import annotations
 
-from llm_wiki.issues.queue import Issue
+from pathlib import Path
+
+import pytest
+import yaml
+
+from llm_wiki.issues.queue import Issue, IssueQueue
+
+
+def _make_issue(
+    type: str = "broken-link",
+    page: str | None = "srna-tquant",
+    key: str = "k-means-deep",
+    title: str = "Wikilink target does not exist",
+    body: str = "The page references [[k-means-deep]] but no such page exists.",
+    detected_by: str = "auditor",
+    metadata: dict | None = None,
+) -> Issue:
+    return Issue(
+        id=Issue.make_id(type, page, key),
+        type=type,
+        status="open",
+        title=title,
+        page=page,
+        body=body,
+        created=Issue.now_iso(),
+        detected_by=detected_by,
+        metadata=metadata or {},
+    )
 
 
 def test_make_id_is_deterministic():
@@ -32,3 +59,78 @@ def test_make_id_distinguishes_different_inputs():
     c = Issue.make_id("broken-link", "page-b", "target-x")
     d = Issue.make_id("orphan", "page-a", "target-x")
     assert len({a, b, c, d}) == 4
+
+
+def test_queue_add_creates_file(tmp_path: Path):
+    """add() writes the issue to <wiki_dir>/.issues/<id>.md."""
+    wiki_dir = tmp_path / "wiki"
+    queue = IssueQueue(wiki_dir)
+    issue = _make_issue()
+
+    path, was_new = queue.add(issue)
+
+    assert was_new is True
+    assert path == wiki_dir / ".issues" / f"{issue.id}.md"
+    assert path.exists()
+
+
+def test_queue_add_writes_frontmatter_and_body(tmp_path: Path):
+    """The on-disk file has parseable YAML frontmatter and the body."""
+    wiki_dir = tmp_path / "wiki"
+    queue = IssueQueue(wiki_dir)
+    issue = _make_issue(metadata={"target": "k-means-deep"})
+
+    path, _ = queue.add(issue)
+    text = path.read_text(encoding="utf-8")
+
+    assert text.startswith("---\n")
+    end = text.index("\n---", 4)
+    fm = yaml.safe_load(text[4:end])
+    assert fm["id"] == issue.id
+    assert fm["type"] == "broken-link"
+    assert fm["status"] == "open"
+    assert fm["page"] == "srna-tquant"
+    assert fm["detected_by"] == "auditor"
+    assert fm["metadata"] == {"target": "k-means-deep"}
+
+    body = text[end + 4:].strip()
+    assert body == issue.body.strip()
+
+
+def test_queue_add_is_idempotent(tmp_path: Path):
+    """Adding the same issue twice does not overwrite — second call returns was_new=False."""
+    wiki_dir = tmp_path / "wiki"
+    queue = IssueQueue(wiki_dir)
+    issue = _make_issue()
+
+    path1, was_new_1 = queue.add(issue)
+    original_text = path1.read_text(encoding="utf-8")
+
+    # Second add with the same id — even if body differs, on-disk file is preserved
+    issue_again = _make_issue(body="DIFFERENT BODY THAT SHOULD NOT BE WRITTEN")
+    assert issue_again.id == issue.id  # ids match
+    path2, was_new_2 = queue.add(issue_again)
+
+    assert was_new_2 is False
+    assert path2 == path1
+    assert path2.read_text(encoding="utf-8") == original_text
+
+
+def test_queue_exists(tmp_path: Path):
+    wiki_dir = tmp_path / "wiki"
+    queue = IssueQueue(wiki_dir)
+    issue = _make_issue()
+
+    assert queue.exists(issue.id) is False
+    queue.add(issue)
+    assert queue.exists(issue.id) is True
+
+
+def test_queue_creates_issues_dir_on_demand(tmp_path: Path):
+    """The .issues subdirectory does not need to exist before add()."""
+    wiki_dir = tmp_path / "wiki"
+    # wiki_dir itself doesn't exist
+    queue = IssueQueue(wiki_dir)
+    queue.add(_make_issue())
+
+    assert (wiki_dir / ".issues").is_dir()
