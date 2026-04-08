@@ -85,6 +85,17 @@ Content here...
 
 No markers? Falls back to `##`/`###` headings. No headings? Treated as one section.
 
+### Maintenance Agents
+
+Four background workers run in the daemon's event loop, keeping the wiki honest over time. Each one is an asyncio coroutine on a configurable interval, and all LLM calls flow through the shared queue at `priority="maintenance"` so user-facing queries always preempt them.
+
+- **Auditor** — structural integrity checks (orphans, broken wikilinks, missing markers, broken citations). Files persistent issues to `wiki/.issues/<id>.md` with deterministic IDs so re-runs are idempotent. Exposed on demand via `llm-wiki lint`.
+- **Compliance reviewer** — debounced response to file edits. Heuristic checks for missing citations, structural drift (auto-inserts invisible `%% section: %%` markers), and substantive new ideas. Never touches human-authored prose.
+- **Librarian** — consumes traversal logs to refine `tags`/`summary` via LLM and recompute authority scores from the link graph plus usage. State persists in a sidecar JSON override file so refinements survive vault rescans without ever mutating page frontmatter.
+- **Adversary** — samples claims weighted by age × inverse authority, fetches the cited raw source, and verifies via LLM. Validated claims update `last_corroborated`; failures file `claim-failed` issues; ambiguous verdicts post to talk pages for human review.
+
+Findings flow into a shared issue queue (`llm-wiki issues list`) and append-only talk pages (`llm-wiki talk read <page>`). The agents may file issues, append to talk pages, update sidecar metadata, and insert invisible markers — but never edit human-authored markdown body content. "Human prose is sacred."
+
 ## Architecture
 
 ```
