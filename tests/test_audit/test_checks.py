@@ -179,3 +179,38 @@ def test_find_broken_citations_empty_vault(tmp_path: Path):
     vault = Vault.scan(tmp_path)
     result = find_broken_citations(vault, tmp_path)
     assert result.issues == []
+
+
+def test_find_orphans_severity_is_minor(sample_vault: Path):
+    vault = Vault.scan(sample_vault)
+    result = find_orphans(vault)
+    for issue in result.issues:
+        assert issue.severity == "minor"
+
+
+def test_find_broken_wikilinks_severity_is_moderate(sample_vault: Path):
+    vault = Vault.scan(sample_vault)
+    result = find_broken_wikilinks(vault)
+    assert result.issues, "expected at least one broken-wikilink in fixture"
+    for issue in result.issues:
+        assert issue.severity == "moderate"
+
+
+def test_find_missing_markers_severity_is_minor(sample_vault: Path):
+    vault = Vault.scan(sample_vault)
+    result = find_missing_markers(vault)
+    for issue in result.issues:
+        assert issue.severity == "minor"
+
+
+def test_find_broken_citations_severity_is_critical(tmp_path: Path):
+    """Construct a vault with a broken raw citation; severity should be critical."""
+    (tmp_path / "p.md").write_text(
+        "---\ntitle: P\nsource: \"[[raw/missing.pdf]]\"\n---\n\n"
+        "## Body\n\nHas a citation [[raw/missing.pdf]].\n"
+    )
+    vault = Vault.scan(tmp_path)
+    result = find_broken_citations(vault, tmp_path)
+    assert result.issues, "expected a broken-citation issue"
+    for issue in result.issues:
+        assert issue.severity == "critical"

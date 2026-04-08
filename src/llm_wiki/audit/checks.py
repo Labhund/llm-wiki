@@ -35,6 +35,7 @@ def find_orphans(vault: Vault) -> CheckResult:
                 id=Issue.make_id("orphan", name, ""),
                 type="orphan",
                 status="open",
+                severity="minor",
                 title=f"Page '{name}' has no inbound links",
                 page=name,
                 body=(
@@ -68,6 +69,7 @@ def find_broken_wikilinks(vault: Vault) -> CheckResult:
                     id=Issue.make_id("broken-link", name, target),
                     type="broken-link",
                     status="open",
+                    severity="moderate",
                     title=f"Wikilink target '{target}' does not exist",
                     page=name,
                     body=(
@@ -112,6 +114,7 @@ def find_missing_markers(vault: Vault) -> CheckResult:
                 id=Issue.make_id("missing-markers", name, ""),
                 type="missing-markers",
                 status="open",
+                severity="minor",
                 title=f"Page '{name}' has headings but no %% section markers",
                 page=name,
                 body=(
@@ -178,6 +181,7 @@ def find_broken_citations(vault: Vault, vault_root: Path) -> CheckResult:
                     id=Issue.make_id("broken-citation", name, target),
                     type="broken-citation",
                     status="open",
+                    severity="critical",
                     title=f"Citation '{target}' does not exist on disk",
                     page=name,
                     body=(
