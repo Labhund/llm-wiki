@@ -66,6 +66,8 @@ class MaintenanceConfig:
     authority_recalc: str = "12h"
     compliance_debounce_secs: float = 30.0
     talk_pages_enabled: bool = True
+    talk_summary_min_new_entries: int = 5
+    talk_summary_min_interval_seconds: int = 3600
 
 
 @dataclass
