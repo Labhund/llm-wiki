@@ -2,6 +2,36 @@ from pathlib import Path
 from llm_wiki.vault import Vault
 
 
+def test_vault_manifest_entries_returns_dict_keyed_by_name(sample_vault):
+    """manifest_entries() exposes the parsed manifest entries by page name."""
+    from llm_wiki.vault import Vault
+    from llm_wiki.manifest import ManifestEntry
+
+    vault = Vault.scan(sample_vault)
+    entries = vault.manifest_entries()
+
+    assert isinstance(entries, dict)
+    assert "srna-embeddings" in entries
+    assert isinstance(entries["srna-embeddings"], ManifestEntry)
+    # links_from is computed by the store; srna-embeddings is referenced by
+    # both inter-rep-variant-analysis and clustering-metrics in the fixture.
+    assert "inter-rep-variant-analysis" in entries["srna-embeddings"].links_from
+    assert "clustering-metrics" in entries["srna-embeddings"].links_from
+
+
+def test_vault_manifest_entries_is_a_copy(sample_vault):
+    """Mutating the returned dict does not affect the underlying store."""
+    from llm_wiki.vault import Vault
+
+    vault = Vault.scan(sample_vault)
+    entries = vault.manifest_entries()
+    entries.clear()
+
+    # Re-fetch to confirm internal state intact
+    entries2 = vault.manifest_entries()
+    assert "srna-embeddings" in entries2
+
+
 def test_scan_vault(sample_vault: Path):
     vault = Vault.scan(sample_vault)
     assert vault.page_count == 4  # 3 in subdirs + 1 no-structure.md

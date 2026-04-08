@@ -90,6 +90,14 @@ class Vault:
     def read_page(self, name: str) -> Page | None:
         return self._pages.get(name)
 
+    def manifest_entries(self) -> dict[str, ManifestEntry]:
+        """Return a copy of the manifest entries dict, keyed by page name.
+
+        The store's links_from values are already populated. Returned as a
+        copy so callers (auditor, librarian) can iterate without locking.
+        """
+        return dict(self._store._entries)
+
     def read_viewport(
         self,
         name: str,
