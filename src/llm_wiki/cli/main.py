@@ -367,3 +367,34 @@ def issues_resolve(issue_id: str, vault_path: Path) -> None:
 def issues_wontfix(issue_id: str, vault_path: Path) -> None:
     """Mark an issue as wontfix."""
     _set_status(issue_id, vault_path, "wontfix")
+
+
+@cli.group()
+def maintenance() -> None:
+    """Inspect and manage maintenance workers."""
+    pass
+
+
+@maintenance.command("status")
+@click.option(
+    "--vault", "vault_path", type=click.Path(exists=True, path_type=Path),
+    default=".", help="Path to vault",
+)
+def maintenance_status(vault_path: Path) -> None:
+    """Show registered maintenance workers and their last-run times."""
+    client = _get_client(vault_path)
+    resp = client.request({"type": "scheduler-status"})
+    if resp["status"] != "ok":
+        raise click.ClickException(resp.get("message", "Status query failed"))
+
+    workers = resp["workers"]
+    if not workers:
+        click.echo("No maintenance workers registered.")
+        return
+
+    click.echo(f"{'name':<14} {'interval':<12} last_run")
+    click.echo("-" * 60)
+    for worker in workers:
+        interval = f"{worker['interval_seconds']:.0f}s"
+        last = worker["last_run"] or "never"
+        click.echo(f"{worker['name']:<14} {interval:<12} {last}")
