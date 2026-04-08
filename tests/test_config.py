@@ -1,4 +1,7 @@
 from pathlib import Path
+
+import yaml
+
 from llm_wiki.config import WikiConfig
 
 
@@ -47,18 +50,13 @@ def test_load_empty_file(tmp_path: Path):
 
 def test_maintenance_config_has_talk_summary_defaults():
     """Phase 6a adds talk-page summary refresh fields with safe defaults."""
-    from llm_wiki.config import WikiConfig
-
     cfg = WikiConfig()
     assert cfg.maintenance.talk_summary_min_new_entries == 5
     assert cfg.maintenance.talk_summary_min_interval_seconds == 3600
 
 
-def test_maintenance_config_loads_talk_summary_overrides(tmp_path):
+def test_maintenance_config_loads_talk_summary_overrides(tmp_path: Path):
     """A config file can override the talk-summary defaults."""
-    import yaml
-    from llm_wiki.config import WikiConfig
-
     cfg_file = tmp_path / "config.yaml"
     cfg_file.write_text(yaml.dump({
         "maintenance": {
