@@ -39,6 +39,7 @@ class Issue:
     created: str
     detected_by: str
     metadata: dict = field(default_factory=dict)
+    severity: str = "minor"
 
     @staticmethod
     def make_id(type: str, page: str | None, key: str) -> str:
@@ -106,6 +107,7 @@ class IssueQueue:
             "id": issue.id,
             "type": issue.type,
             "status": issue.status,
+            "severity": issue.severity,
             "title": issue.title,
             "page": issue.page,
             "created": issue.created,
@@ -189,4 +191,5 @@ class IssueQueue:
             created=fm.get("created", ""),
             detected_by=fm.get("detected_by", "unknown"),
             metadata=fm.get("metadata") or {},
+            severity=fm.get("severity", "minor"),
         )

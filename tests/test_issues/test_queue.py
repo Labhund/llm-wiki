@@ -254,3 +254,63 @@ def test_queue_rejects_invalid_id(tmp_path):
         queue.get("../../etc/passwd")
     with pytest.raises(ValueError):
         queue.update_status("../../etc/passwd", "resolved")
+
+
+def test_issue_default_severity_is_minor():
+    """Issues without an explicit severity default to 'minor'."""
+    issue = _make_issue()
+    assert issue.severity == "minor"
+
+
+def test_queue_round_trips_severity(tmp_path):
+    """add() then get() preserves a non-default severity."""
+    wiki_dir = tmp_path / "wiki"
+    queue = IssueQueue(wiki_dir)
+    issue = _make_issue()
+    issue.severity = "critical"
+
+    queue.add(issue)
+    loaded = queue.get(issue.id)
+    assert loaded is not None
+    assert loaded.severity == "critical"
+
+
+def test_queue_writes_severity_to_frontmatter(tmp_path):
+    """The on-disk YAML carries the severity field."""
+    wiki_dir = tmp_path / "wiki"
+    queue = IssueQueue(wiki_dir)
+    issue = _make_issue()
+    issue.severity = "moderate"
+
+    path, _ = queue.add(issue)
+    text = path.read_text(encoding="utf-8")
+    end = text.index("\n---", 4)
+    fm = yaml.safe_load(text[4:end])
+    assert fm["severity"] == "moderate"
+
+
+def test_queue_legacy_file_without_severity_defaults_to_minor(tmp_path):
+    """A 5a-era issue file with no severity field reads as 'minor'."""
+    wiki_dir = tmp_path / "wiki"
+    issues_dir = wiki_dir / ".issues"
+    issues_dir.mkdir(parents=True)
+    legacy = issues_dir / "broken-link-foo-abc123.md"
+    legacy.write_text(
+        "---\n"
+        "id: broken-link-foo-abc123\n"
+        "type: broken-link\n"
+        "status: open\n"
+        "title: Wikilink target does not exist\n"
+        "page: foo\n"
+        "created: 2026-04-01T10:00:00+00:00\n"
+        "detected_by: auditor\n"
+        "metadata: {}\n"
+        "---\n\n"
+        "Body text.\n",
+        encoding="utf-8",
+    )
+
+    queue = IssueQueue(wiki_dir)
+    loaded = queue.get("broken-link-foo-abc123")
+    assert loaded is not None
+    assert loaded.severity == "minor"
