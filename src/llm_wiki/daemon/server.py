@@ -5,8 +5,11 @@ import logging
 from pathlib import Path
 
 from llm_wiki.config import WikiConfig
+from llm_wiki.daemon.dispatcher import ChangeDispatcher
 from llm_wiki.daemon.llm_queue import LLMQueue
 from llm_wiki.daemon.protocol import read_message, write_message
+from llm_wiki.daemon.scheduler import IntervalScheduler, ScheduledWorker, parse_interval
+from llm_wiki.daemon.snapshot import PageSnapshotStore
 from llm_wiki.search.backend import SearchResult
 from llm_wiki.vault import Vault, _state_dir_for
 
@@ -28,18 +31,42 @@ class DaemonServer:
         self._vault: Vault | None = None
         self._server: asyncio.Server | None = None
         self._llm_queue = LLMQueue(self._config.llm_queue.max_concurrent)
+        self._scheduler: IntervalScheduler | None = None
+        self._snapshot_store: PageSnapshotStore | None = None
+        self._compliance_reviewer = None  # type: ignore[assignment]  # set in start()
+        self._dispatcher: ChangeDispatcher | None = None
 
     async def start(self) -> None:
-        """Scan vault and start listening on Unix socket."""
+        """Scan vault, construct maintenance substrate, start listening."""
         self._vault = Vault.scan(self._vault_root)
+
+        # Phase 5b substrate
+        from llm_wiki.audit.compliance import ComplianceReviewer
+        from llm_wiki.issues.queue import IssueQueue
+        state_dir = _state_dir_for(self._vault_root)
+        wiki_dir = self._vault_root / self._config.vault.wiki_dir.rstrip("/")
+        self._snapshot_store = PageSnapshotStore(state_dir)
+        self._compliance_reviewer = ComplianceReviewer(
+            self._vault_root, IssueQueue(wiki_dir), self._config
+        )
+        self._dispatcher = ChangeDispatcher(
+            debounce_secs=float(self._config.maintenance.compliance_debounce_secs),
+            on_settled=self._handle_settled_change,
+        )
+
+        self._scheduler = IntervalScheduler()
+        self._register_maintenance_workers()
+        await self._scheduler.start()
+
         if self._socket_path.exists():
             self._socket_path.unlink()
         self._server = await asyncio.start_unix_server(
             self._handle_client, path=str(self._socket_path)
         )
         logger.info(
-            "Daemon started: %d pages, socket %s",
+            "Daemon started: %d pages, socket %s, workers=%s",
             self._vault.page_count, self._socket_path,
+            self._scheduler.worker_names,
         )
 
     async def serve_forever(self) -> None:
@@ -49,7 +76,13 @@ class DaemonServer:
                 await self._server.serve_forever()
 
     async def stop(self) -> None:
-        """Shut down the server and clean up socket."""
+        """Shut down the maintenance substrate, then the server."""
+        if self._scheduler is not None:
+            await self._scheduler.stop()
+            self._scheduler = None
+        if self._dispatcher is not None:
+            await self._dispatcher.stop()
+            self._dispatcher = None
         if self._server:
             self._server.close()
             await self._server.wait_closed()
@@ -61,6 +94,80 @@ class DaemonServer:
         """Re-scan the vault (called by file watcher)."""
         self._vault = Vault.scan(self._vault_root)
         logger.info("Rescanned: %d pages", self._vault.page_count)
+
+    def _register_maintenance_workers(self) -> None:
+        """Register all maintenance workers with the scheduler.
+
+        Sub-phase 5b registers only the auditor. Sub-phases 5c (librarian)
+        and 5d (adversary) extend this method to register additional workers.
+        """
+        assert self._scheduler is not None
+
+        async def run_auditor() -> None:
+            from llm_wiki.audit.auditor import Auditor
+            from llm_wiki.issues.queue import IssueQueue
+            wiki_dir = self._vault_root / self._config.vault.wiki_dir.rstrip("/")
+            queue = IssueQueue(wiki_dir)
+            auditor = Auditor(self._vault, queue, self._vault_root)
+            report = auditor.audit()
+            logger.info(
+                "Auditor: %d new issues, %d existing",
+                len(report.new_issue_ids), len(report.existing_issue_ids),
+            )
+
+        self._scheduler.register(
+            ScheduledWorker(
+                name="auditor",
+                interval_seconds=parse_interval(self._config.maintenance.auditor_interval),
+                coro_factory=run_auditor,
+            )
+        )
+
+    async def handle_file_changes(
+        self, changed: list[Path], removed: list[Path]
+    ) -> None:
+        """File-watcher callback. Replaces __main__.on_file_change.
+
+        Rescans the vault, then queues each changed page for compliance review
+        via the debouncer. Removed pages purge their snapshot.
+        """
+        await self.rescan()
+        for path in changed:
+            try:
+                rel = path.relative_to(self._vault_root)
+            except ValueError:
+                continue
+            if any(p.startswith(".") for p in rel.parts):
+                continue  # skip hidden dirs (e.g. .issues)
+            if self._dispatcher is not None:
+                self._dispatcher.submit(path)
+        for path in removed:
+            if self._snapshot_store is not None:
+                self._snapshot_store.remove(path.stem)
+
+    async def _handle_settled_change(self, path: Path) -> None:
+        """Called by ChangeDispatcher after a path has settled past the debounce window."""
+        if self._compliance_reviewer is None or self._snapshot_store is None:
+            return
+        if not path.exists():
+            self._snapshot_store.remove(path.stem)
+            return
+        try:
+            new_content = path.read_text(encoding="utf-8")
+        except OSError:
+            logger.exception("Failed to read %s for compliance review", path)
+            return
+        old_content = self._snapshot_store.get(path.stem)
+        result = self._compliance_reviewer.review_change(path, old_content, new_content)
+        # Re-read in case the reviewer auto-fixed the file
+        try:
+            self._snapshot_store.set(path.stem, path.read_text(encoding="utf-8"))
+        except OSError:
+            logger.exception("Failed to update snapshot for %s", path)
+        logger.info(
+            "Compliance review %s: auto_approved=%s reasons=%s issues=%d",
+            path.stem, result.auto_approved, result.reasons, len(result.issues_filed),
+        )
 
     async def _handle_client(
         self, reader: asyncio.StreamReader, writer: asyncio.StreamWriter

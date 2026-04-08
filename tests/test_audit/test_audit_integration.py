@@ -20,11 +20,14 @@ async def test_full_lint_lifecycle(sample_vault: Path, tmp_path: Path):
     try:
         client = DaemonClient(sock_path)
 
-        # 1. First lint — populates the queue
+        # 1. First lint — populates the queue. The scheduled auditor worker
+        # may have already filed some issues at daemon start time, so total
+        # = new + existing, not new alone.
         first = client.request({"type": "lint"})
         assert first["status"] == "ok"
         assert first["total_issues"] >= 4
-        assert len(first["new_issue_ids"]) == first["total_issues"]
+        combined_first = set(first["new_issue_ids"]) | set(first["existing_issue_ids"])
+        assert len(combined_first) == first["total_issues"]
 
         # 2. List the issues
         listing = client.request({"type": "issues-list"})

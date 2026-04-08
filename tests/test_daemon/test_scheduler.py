@@ -168,3 +168,25 @@ async def test_scheduler_register_duplicate_name_raises():
     scheduler.register(ScheduledWorker("dup", 1.0, noop))
     with pytest.raises(ValueError):
         scheduler.register(ScheduledWorker("dup", 2.0, noop))
+
+
+@pytest.mark.asyncio
+async def test_daemon_server_registers_auditor_worker(sample_vault, tmp_path):
+    """Starting DaemonServer registers and runs the auditor worker."""
+    from pathlib import Path
+    from llm_wiki.config import MaintenanceConfig, WikiConfig
+    from llm_wiki.daemon.server import DaemonServer
+
+    sock = tmp_path / "test.sock"
+    config = WikiConfig(
+        maintenance=MaintenanceConfig(auditor_interval="1s"),
+    )
+    server = DaemonServer(sample_vault, sock, config=config)
+    await server.start()
+    try:
+        # Auditor should run immediately on start, before the first interval
+        await asyncio.sleep(0.2)
+        assert "auditor" in server._scheduler.worker_names
+        assert server._scheduler.last_run_iso("auditor") is not None
+    finally:
+        await server.stop()

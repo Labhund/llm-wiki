@@ -53,8 +53,14 @@ async def test_lint_route_idempotent(sample_vault: Path, tmp_path: Path):
         first = client.request({"type": "lint"})
         second = client.request({"type": "lint"})
 
+        # Second call must not create any new issues — everything the first
+        # call filed (and anything the background auditor may have filed
+        # before the first call completed) must already be on disk.
         assert second["new_issue_ids"] == []
-        assert sorted(second["existing_issue_ids"]) == sorted(first["new_issue_ids"])
+        combined_first = set(first["new_issue_ids"]) | set(first["existing_issue_ids"])
+        combined_second = set(second["existing_issue_ids"])
+        assert combined_first == combined_second
+        assert combined_first, "expected at least one issue from the audit"
     finally:
         server._server.close()
         serve_task.cancel()
