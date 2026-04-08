@@ -96,3 +96,50 @@ def test_creates_parent_dir_on_save(tmp_path: Path):
     store.set("a", PageOverride(authority=0.5))
     store.save()
     assert path.exists()
+
+
+def test_save_concurrent_writes_do_not_corrupt(tmp_path):
+    """Two concurrent saves must not produce a corrupt or empty file."""
+    import threading
+    overrides_path = tmp_path / "manifest_overrides.json"
+
+    # Two ManifestOverrides instances pointing at the same file,
+    # each writing different content.
+    store_a = ManifestOverrides(overrides_path)
+    store_a.set("page-a", PageOverride(tags=["tag-a"], authority=0.5))
+    store_b = ManifestOverrides(overrides_path)
+    store_b.set("page-b", PageOverride(tags=["tag-b"], authority=0.7))
+
+    errors = []
+
+    def save_a():
+        try:
+            for _ in range(20):
+                store_a.save()
+        except Exception as e:
+            errors.append(e)
+
+    def save_b():
+        try:
+            for _ in range(20):
+                store_b.save()
+        except Exception as e:
+            errors.append(e)
+
+    t1 = threading.Thread(target=save_a)
+    t2 = threading.Thread(target=save_b)
+    t1.start()
+    t2.start()
+    t1.join()
+    t2.join()
+
+    assert errors == [], f"save raised: {errors}"
+    # File must be valid JSON (not empty, not partially-written)
+    ManifestOverrides.load(overrides_path)
+    assert overrides_path.exists()
+    text = overrides_path.read_text(encoding="utf-8")
+    json.loads(text)  # raises if corrupt
+
+    # No leftover .tmp files
+    leftovers = list(tmp_path.glob("*.tmp"))
+    assert leftovers == [], f"leftover temp files: {leftovers}"

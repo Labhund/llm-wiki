@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import os
+import tempfile
 from dataclasses import asdict, dataclass, field
 from pathlib import Path
 
@@ -70,9 +71,27 @@ class ManifestOverrides:
     def save(self) -> None:
         self._path.parent.mkdir(parents=True, exist_ok=True)
         payload = {name: asdict(override) for name, override in self._entries.items()}
-        tmp = self._path.with_suffix(self._path.suffix + ".tmp")
-        tmp.write_text(json.dumps(payload, indent=2, sort_keys=True), encoding="utf-8")
-        os.replace(tmp, self._path)
+        # Use a unique-per-writer temp file so concurrent writers
+        # (librarian worker + authority_recalc worker) cannot interleave
+        # their writes on a shared .tmp path and corrupt it. os.replace
+        # is atomic on POSIX, giving us last-writer-wins semantics.
+        tmp_fd, tmp_name = tempfile.mkstemp(
+            prefix=self._path.name + ".",
+            suffix=".tmp",
+            dir=str(self._path.parent),
+        )
+        tmp_path = Path(tmp_name)
+        try:
+            with os.fdopen(tmp_fd, "w", encoding="utf-8") as fh:
+                fh.write(json.dumps(payload, indent=2, sort_keys=True))
+            os.replace(tmp_path, self._path)
+        except Exception:
+            # Clean up the temp file on any failure before re-raising
+            try:
+                tmp_path.unlink()
+            except FileNotFoundError:
+                pass
+            raise
 
     def __len__(self) -> int:
         return len(self._entries)
