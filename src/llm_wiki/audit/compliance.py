@@ -112,6 +112,7 @@ class ComplianceReviewer:
                 id=Issue.make_id("new-idea", result.page, preview),
                 type="new-idea",
                 status="open",
+                severity="moderate",
                 title=f"New paragraph added to '{result.page}'",
                 page=result.page,
                 body=(
@@ -301,6 +302,7 @@ class ComplianceReviewer:
                 id=Issue.make_id("compliance", result.page, f"missing-citation:{preview}"),
                 type="compliance",
                 status="open",
+                severity="moderate",
                 title=f"Uncited sentence on '{result.page}'",
                 page=result.page,
                 body=(
