@@ -133,3 +133,38 @@ def test_scheduler_worker_names():
     scheduler.register(ScheduledWorker("a", 1.0, lambda: None))   # type: ignore[arg-type]
     scheduler.register(ScheduledWorker("b", 1.0, lambda: None))   # type: ignore[arg-type]
     assert scheduler.worker_names == ["a", "b"]
+
+
+@pytest.mark.asyncio
+async def test_scheduler_isolates_worker_errors():
+    """A worker that raises does not crash sibling workers or its own loop."""
+    good_count = {"n": 0}
+    bad_count = {"n": 0}
+
+    async def good() -> None:
+        good_count["n"] += 1
+
+    async def bad() -> None:
+        bad_count["n"] += 1
+        raise RuntimeError("simulated worker failure")
+
+    scheduler = IntervalScheduler()
+    scheduler.register(ScheduledWorker("bad", 0.1, bad))
+    scheduler.register(ScheduledWorker("good", 0.1, good))
+    await scheduler.start()
+    await asyncio.sleep(0.35)
+    await scheduler.stop()
+
+    # Both workers should have continued running across the failure
+    assert good_count["n"] >= 3
+    assert bad_count["n"] >= 3, "bad worker should retry on next interval"
+
+
+@pytest.mark.asyncio
+async def test_scheduler_register_duplicate_name_raises():
+    scheduler = IntervalScheduler()
+    async def noop() -> None:
+        pass
+    scheduler.register(ScheduledWorker("dup", 1.0, noop))
+    with pytest.raises(ValueError):
+        scheduler.register(ScheduledWorker("dup", 2.0, noop))
