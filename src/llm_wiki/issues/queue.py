@@ -96,3 +96,55 @@ class IssueQueue:
             encoding="utf-8",
         )
         return path, True
+
+    def get(self, issue_id: str) -> Issue | None:
+        path = self.issues_dir / f"{issue_id}.md"
+        if not path.exists():
+            return None
+        return self._parse_file(path)
+
+    def list(
+        self,
+        status: str | None = None,
+        type: str | None = None,
+    ) -> list[Issue]:
+        """Return all issues, optionally filtered by status and/or type."""
+        if not self.issues_dir.exists():
+            return []
+        results: list[Issue] = []
+        for path in sorted(self.issues_dir.glob("*.md")):
+            issue = self._parse_file(path)
+            if issue is None:
+                continue
+            if status is not None and issue.status != status:
+                continue
+            if type is not None and issue.type != type:
+                continue
+            results.append(issue)
+        return results
+
+    def _parse_file(self, path: Path) -> Issue | None:
+        """Parse a single issue file. Returns None if the frontmatter is malformed."""
+        text = path.read_text(encoding="utf-8")
+        if not text.startswith("---\n"):
+            return None
+        try:
+            end = text.index("\n---", 4)
+        except ValueError:
+            return None
+        try:
+            fm = yaml.safe_load(text[4:end]) or {}
+        except yaml.YAMLError:
+            return None
+        body = text[end + 4:].strip()
+        return Issue(
+            id=fm.get("id", path.stem),
+            type=fm.get("type", "unknown"),
+            status=fm.get("status", "open"),
+            title=fm.get("title", ""),
+            page=fm.get("page"),
+            body=body,
+            created=fm.get("created", ""),
+            detected_by=fm.get("detected_by", "unknown"),
+            metadata=fm.get("metadata") or {},
+        )

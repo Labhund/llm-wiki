@@ -134,3 +134,80 @@ def test_queue_creates_issues_dir_on_demand(tmp_path: Path):
     queue.add(_make_issue())
 
     assert (wiki_dir / ".issues").is_dir()
+
+
+def test_queue_get_round_trip(tmp_path: Path):
+    """get() returns an Issue with all fields preserved."""
+    wiki_dir = tmp_path / "wiki"
+    queue = IssueQueue(wiki_dir)
+    issue = _make_issue(metadata={"target": "k-means-deep", "section": "method"})
+    queue.add(issue)
+
+    loaded = queue.get(issue.id)
+
+    assert loaded is not None
+    assert loaded.id == issue.id
+    assert loaded.type == issue.type
+    assert loaded.status == issue.status
+    assert loaded.title == issue.title
+    assert loaded.page == issue.page
+    assert loaded.body == issue.body.strip()
+    assert loaded.created == issue.created
+    assert loaded.detected_by == issue.detected_by
+    assert loaded.metadata == issue.metadata
+
+
+def test_queue_get_missing_returns_none(tmp_path: Path):
+    queue = IssueQueue(tmp_path / "wiki")
+    assert queue.get("does-not-exist") is None
+
+
+def test_queue_list_empty(tmp_path: Path):
+    """list() on a queue with no .issues dir returns []."""
+    queue = IssueQueue(tmp_path / "wiki")
+    assert queue.list() == []
+
+
+def test_queue_list_returns_all_issues(tmp_path: Path):
+    queue = IssueQueue(tmp_path / "wiki")
+    a = _make_issue(type="broken-link", page="page-a", key="x")
+    b = _make_issue(type="orphan", page="page-b", key="")
+    c = _make_issue(type="broken-link", page="page-c", key="y")
+    queue.add(a)
+    queue.add(b)
+    queue.add(c)
+
+    ids = {issue.id for issue in queue.list()}
+    assert ids == {a.id, b.id, c.id}
+
+
+def test_queue_list_filters_by_status(tmp_path: Path):
+    queue = IssueQueue(tmp_path / "wiki")
+    a = _make_issue(type="orphan", page="page-a", key="")
+    b = _make_issue(type="orphan", page="page-b", key="")
+    queue.add(a)
+    queue.add(b)
+
+    # Manually set b to resolved by rewriting via the helper we'll add in Task 5
+    # For now, fake it by rewriting the file's frontmatter
+    path_b = queue.issues_dir / f"{b.id}.md"
+    path_b.write_text(
+        path_b.read_text(encoding="utf-8").replace("status: open", "status: resolved"),
+        encoding="utf-8",
+    )
+
+    open_issues = queue.list(status="open")
+    resolved = queue.list(status="resolved")
+    assert {i.id for i in open_issues} == {a.id}
+    assert {i.id for i in resolved} == {b.id}
+
+
+def test_queue_list_filters_by_type(tmp_path: Path):
+    queue = IssueQueue(tmp_path / "wiki")
+    queue.add(_make_issue(type="broken-link", page="a", key="1"))
+    queue.add(_make_issue(type="orphan", page="b", key=""))
+    queue.add(_make_issue(type="broken-link", page="c", key="2"))
+
+    broken = queue.list(type="broken-link")
+    assert len(broken) == 2
+    assert all(i.type == "broken-link" for i in broken)
