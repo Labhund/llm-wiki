@@ -195,6 +195,31 @@ async def test_daemon_server_registers_auditor_worker(sample_vault, tmp_path):
 
 
 @pytest.mark.asyncio
+async def test_daemon_server_registers_librarian_workers(sample_vault, tmp_path):
+    """Starting DaemonServer registers librarian + authority_recalc workers."""
+    from llm_wiki.config import MaintenanceConfig, WikiConfig
+    from llm_wiki.daemon.server import DaemonServer
+
+    sock = tmp_path / "librarian.sock"
+    config = WikiConfig(
+        maintenance=MaintenanceConfig(
+            auditor_interval="1h",
+            librarian_interval="1h",
+            authority_recalc="1h",
+        ),
+    )
+    server = DaemonServer(sample_vault, sock, config=config)
+    await server.start()
+    try:
+        names = set(server._scheduler.worker_names)
+        assert "auditor" in names
+        assert "librarian" in names
+        assert "authority_recalc" in names
+    finally:
+        await server.stop()
+
+
+@pytest.mark.asyncio
 async def test_scheduler_status_route(sample_vault, tmp_path):
     """The scheduler-status route returns workers + last-run timestamps."""
     from llm_wiki.config import MaintenanceConfig, WikiConfig

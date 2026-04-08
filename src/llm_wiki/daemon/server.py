@@ -98,8 +98,9 @@ class DaemonServer:
     def _register_maintenance_workers(self) -> None:
         """Register all maintenance workers with the scheduler.
 
-        Sub-phase 5b registers only the auditor. Sub-phases 5c (librarian)
-        and 5d (adversary) extend this method to register additional workers.
+        Sub-phase 5b registers the auditor.
+        Sub-phase 5c adds librarian + authority_recalc.
+        Sub-phase 5d will add the adversary.
         """
         assert self._scheduler is not None
 
@@ -115,11 +116,60 @@ class DaemonServer:
                 len(report.new_issue_ids), len(report.existing_issue_ids),
             )
 
+        async def run_librarian() -> None:
+            from llm_wiki.issues.queue import IssueQueue
+            from llm_wiki.librarian.agent import LibrarianAgent
+            from llm_wiki.traverse.llm_client import LLMClient
+            wiki_dir = self._vault_root / self._config.vault.wiki_dir.rstrip("/")
+            queue = IssueQueue(wiki_dir)
+            llm = LLMClient(
+                self._llm_queue,
+                model=self._config.llm.default,
+                api_base=self._config.llm.api_base,
+                api_key=self._config.llm.api_key,
+            )
+            agent = LibrarianAgent(self._vault, self._vault_root, llm, queue, self._config)
+            result = await agent.run()
+            logger.info(
+                "Librarian: refined=%d authorities=%d issues=%d",
+                len(result.pages_refined), result.authorities_updated, len(result.issues_filed),
+            )
+
+        async def run_authority_recalc() -> None:
+            from llm_wiki.issues.queue import IssueQueue
+            from llm_wiki.librarian.agent import LibrarianAgent
+            from llm_wiki.traverse.llm_client import LLMClient
+            wiki_dir = self._vault_root / self._config.vault.wiki_dir.rstrip("/")
+            queue = IssueQueue(wiki_dir)
+            llm = LLMClient(
+                self._llm_queue,
+                model=self._config.llm.default,
+                api_base=self._config.llm.api_base,
+                api_key=self._config.llm.api_key,
+            )
+            agent = LibrarianAgent(self._vault, self._vault_root, llm, queue, self._config)
+            count = await agent.recalc_authority()
+            logger.info("Authority recalc: %d entries updated", count)
+
         self._scheduler.register(
             ScheduledWorker(
                 name="auditor",
                 interval_seconds=parse_interval(self._config.maintenance.auditor_interval),
                 coro_factory=run_auditor,
+            )
+        )
+        self._scheduler.register(
+            ScheduledWorker(
+                name="librarian",
+                interval_seconds=parse_interval(self._config.maintenance.librarian_interval),
+                coro_factory=run_librarian,
+            )
+        )
+        self._scheduler.register(
+            ScheduledWorker(
+                name="authority_recalc",
+                interval_seconds=parse_interval(self._config.maintenance.authority_recalc),
+                coro_factory=run_authority_recalc,
             )
         )
 
