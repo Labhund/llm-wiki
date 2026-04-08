@@ -84,6 +84,74 @@ async def test_recalc_authority_empty_vault(tmp_path: Path):
 
 
 @pytest.mark.asyncio
+async def test_refresh_page_updates_overrides_with_llm_output(sample_vault: Path):
+    """refresh_page calls the LLM and writes the parsed tags/summary."""
+    state_dir = _state_dir_for(sample_vault)
+    state_dir.mkdir(parents=True, exist_ok=True)
+    _seed_log(state_dir, [
+        {
+            "query": "How are sRNA embeddings validated?",
+            "turns": [{"turn": 0, "pages_read": [
+                {"name": "srna-embeddings", "sections_read": ["overview"], "salient_points": "PCA + k=10", "relevance": 0.9}
+            ], "tokens_used": 0, "hypothesis": "", "remaining_questions": [], "next_candidates": []}],
+        }
+    ])
+
+    stub = _StubLLM(
+        '{"tags": ["embeddings", "validation", "k-means"], "summary": "Validates sRNA embeddings via PCA + k-means."}'
+    )
+    vault = Vault.scan(sample_vault)
+    agent = LibrarianAgent(vault, sample_vault, stub, IssueQueue(sample_vault / "wiki"), WikiConfig())
+
+    refreshed = await agent.refresh_page("srna-embeddings")
+
+    assert refreshed is True
+    assert len(stub.calls) == 1
+
+    overrides = ManifestOverrides.load(state_dir / "manifest_overrides.json")
+    got = overrides.get("srna-embeddings")
+    assert got is not None
+    assert got.tags == ["embeddings", "validation", "k-means"]
+    assert got.summary_override == "Validates sRNA embeddings via PCA + k-means."
+    assert got.last_refreshed_read_count == 1   # one query in the seeded log
+
+
+@pytest.mark.asyncio
+async def test_refresh_page_unknown_page_returns_false(sample_vault: Path):
+    vault = Vault.scan(sample_vault)
+    agent = LibrarianAgent(vault, sample_vault, _StubLLM(), IssueQueue(sample_vault / "wiki"), WikiConfig())
+    assert await agent.refresh_page("nope") is False
+
+
+@pytest.mark.asyncio
+async def test_refresh_page_invalid_llm_response_does_not_corrupt_overrides(sample_vault: Path):
+    """If the LLM returns junk, the override is left unchanged."""
+    state_dir = _state_dir_for(sample_vault)
+    state_dir.mkdir(parents=True, exist_ok=True)
+
+    overrides = ManifestOverrides.load(state_dir / "manifest_overrides.json")
+    overrides.set("srna-embeddings", PageOverride(
+        tags=["original"],
+        summary_override="original summary",
+        authority=0.5,
+    ))
+    overrides.save()
+
+    stub = _StubLLM("complete garbage, not JSON")
+    vault = Vault.scan(sample_vault)
+    agent = LibrarianAgent(vault, sample_vault, stub, IssueQueue(sample_vault / "wiki"), WikiConfig())
+
+    refreshed = await agent.refresh_page("srna-embeddings")
+    assert refreshed is False
+
+    reloaded = ManifestOverrides.load(state_dir / "manifest_overrides.json")
+    got = reloaded.get("srna-embeddings")
+    assert got is not None
+    assert got.tags == ["original"]
+    assert got.summary_override == "original summary"
+
+
+@pytest.mark.asyncio
 async def test_recalc_authority_preserves_existing_tags_and_summary(sample_vault: Path):
     """recalc_authority must not clobber tags/summary set by prior refinement."""
     state_dir = _state_dir_for(sample_vault)

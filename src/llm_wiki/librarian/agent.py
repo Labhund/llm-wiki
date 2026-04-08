@@ -85,3 +85,49 @@ class LibrarianAgent:
         overrides.save()
 
         return len(scores)
+
+    async def refresh_page(self, page_name: str) -> bool:
+        """Refine tags + summary for a single page via LLM.
+
+        Returns True if the override was updated, False if the page is
+        unknown or the LLM response could not be parsed.
+        """
+        from llm_wiki.librarian.prompts import (
+            compose_refinement_messages,
+            parse_refinement,
+        )
+
+        page = self._vault.read_page(page_name)
+        if page is None:
+            return False
+
+        usage = aggregate_logs(self._log_path).get(page_name) or PageUsage(name=page_name)
+
+        messages = compose_refinement_messages(
+            page_name=page_name,
+            page_title=page.title,
+            page_content=page.raw_content,
+            usage=usage,
+        )
+
+        response = await self._llm.complete(
+            messages, temperature=0.4, priority="maintenance"
+        )
+        tags, summary = parse_refinement(response.content)
+
+        if not tags and summary is None:
+            logger.info("Librarian: empty refinement for %s, skipping write", page_name)
+            return False
+
+        overrides = ManifestOverrides.load(self._overrides_path)
+        existing = overrides.get(page_name) or PageOverride()
+        if tags:
+            existing.tags = tags
+        if summary is not None:
+            existing.summary_override = summary
+        existing.read_count = usage.read_count
+        existing.usefulness = min(1.0, usage.avg_relevance)
+        existing.last_refreshed_read_count = usage.read_count
+        overrides.set(page_name, existing)
+        overrides.save()
+        return True
