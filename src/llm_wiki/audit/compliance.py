@@ -9,6 +9,7 @@ from llm_wiki.issues.queue import Issue, IssueQueue
 
 # Threshold for the minor-edit shortcut. Spec section 5 Compliance Review uses 50 chars.
 _MINOR_EDIT_CHARS = 50
+_NEW_IDEA_PARAGRAPH_CHARS = 200
 
 _WIKILINK_RE = re.compile(r"\[\[([^\]|]+)(?:\|[^\]]+)?\]\]")
 _HEADING_RE = re.compile(r"^(?:##|###)\s+(\S.*)$", re.MULTILINE)
@@ -82,9 +83,87 @@ class ComplianceReviewer:
         # Auto-fix structural drift first; downstream checks see the fixed content.
         new_content = self._check_structural_drift(result, page_path, new_content)
         self._check_missing_citation(result, old_content, new_content)
-        # Task 8 adds new-idea detection here.
+        self._check_new_idea(result, old_content, new_content)
 
         return result
+
+    def _check_new_idea(
+        self,
+        result: ComplianceResult,
+        old_content: str | None,
+        new_content: str,
+    ) -> None:
+        """A paragraph >= 200 chars added by the edit is flagged as new-idea.
+
+        Skipped for first-time-seen pages (old_content is None) — those are
+        creations, not edits, and the entire file is "new" trivially.
+        """
+        if old_content is None:
+            return
+
+        old_paragraphs = self._extract_paragraphs(self._strip_frontmatter(old_content))
+        new_paragraphs = self._extract_paragraphs(self._strip_frontmatter(new_content))
+        added = [p for p in new_paragraphs if p not in old_paragraphs]
+        large_new = [p for p in added if len(p) >= _NEW_IDEA_PARAGRAPH_CHARS]
+        if not large_new:
+            return
+
+        result.reasons.append("new-idea")
+        for paragraph in large_new:
+            preview = paragraph.strip()[:80]
+            issue = Issue(
+                id=Issue.make_id("new-idea", result.page, preview),
+                type="new-idea",
+                status="open",
+                title=f"New paragraph added to '{result.page}'",
+                page=result.page,
+                body=(
+                    f"A substantive new paragraph was added to [[{result.page}]]:\n\n"
+                    f"> {preview}{'...' if len(paragraph) > 80 else ''}\n\n"
+                    f"Librarian: review whether this should be integrated, sourced, "
+                    f"or moved to the talk page."
+                ),
+                created=Issue.now_iso(),
+                detected_by="compliance",
+                metadata={"preview": preview, "length": len(paragraph)},
+            )
+            _, was_new = self._queue.add(issue)
+            if was_new:
+                result.issues_filed.append(issue.id)
+
+    @staticmethod
+    def _extract_paragraphs(body: str) -> list[str]:
+        """Split body into paragraphs (separated by blank lines).
+
+        Skips lines that are headings, %% markers, or fenced code blocks.
+        """
+        paragraphs: list[str] = []
+        current: list[str] = []
+        in_code = False
+        for line in body.splitlines():
+            if _CODE_FENCE_RE.match(line.strip()):
+                in_code = not in_code
+                if current:
+                    paragraphs.append(" ".join(current).strip())
+                    current = []
+                continue
+            if in_code:
+                continue
+            stripped = line.strip()
+            if not stripped:
+                if current:
+                    paragraphs.append(" ".join(current).strip())
+                    current = []
+                continue
+            if stripped.startswith("#") or _MARKER_LINE_RE.match(stripped):
+                if current:
+                    paragraphs.append(" ".join(current).strip())
+                    current = []
+                continue
+            current.append(stripped)
+        if current:
+            paragraphs.append(" ".join(current).strip())
+        return [p for p in paragraphs if p]
 
     def _check_structural_drift(
         self,

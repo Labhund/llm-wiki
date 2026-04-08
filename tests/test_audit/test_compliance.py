@@ -195,3 +195,54 @@ def test_structural_drift_first_time_seen_page(tmp_path: Path):
     updated = page.read_text(encoding="utf-8")
     assert "%% section: overview %%" in updated
     assert "%% section: method %%" in updated
+
+
+def test_new_idea_files_issue_for_large_addition(tmp_path: Path):
+    """A new paragraph >= 200 chars is flagged as new-idea."""
+    _, queue, reviewer, page = _setup(tmp_path)
+    old = (
+        "---\ntitle: Test\n---\n\n"
+        "%% section: overview %%\n## Overview\n\nOriginal text [[raw/a.pdf]].\n"
+    )
+    big = (
+        "This is a substantial new paragraph that introduces a fresh idea about "
+        "the topic. It has enough content to clear the 200-character threshold "
+        "and trip the new-idea heuristic so the librarian can take a look later "
+        "and decide what to do with it [[raw/a.pdf]]."
+    )
+    new = old + "\n" + big + "\n"
+    page.write_text(new)
+
+    result = reviewer.review_change(page, old, new)
+
+    assert "new-idea" in result.reasons
+    new_idea_issues = [
+        i for i in result.issues_filed
+        if (issue := queue.get(i)) is not None and issue.type == "new-idea"
+    ]
+    assert len(new_idea_issues) >= 1
+
+
+def test_small_addition_does_not_trigger_new_idea(tmp_path: Path):
+    """A short addition (< 200 chars) does not trigger new-idea."""
+    _, _, reviewer, page = _setup(tmp_path)
+    old = "---\ntitle: Test\n---\n\n%% section: overview %%\n## Overview\n\nText [[raw/a.pdf]].\n"
+    new = old + "\nA brief addition with citation [[raw/a.pdf]].\n"
+    page.write_text(new)
+
+    result = reviewer.review_change(page, old, new)
+    assert "new-idea" not in result.reasons
+
+
+def test_new_idea_skipped_for_first_time_seen_page(tmp_path: Path):
+    """A brand-new file is not flagged as new-idea (the whole file is 'new' by definition)."""
+    _, _, reviewer, page = _setup(tmp_path)
+    big = "x" * 300
+    new = (
+        "---\ntitle: Test\n---\n\n"
+        f"%% section: overview %%\n## Overview\n\n{big} [[raw/a.pdf]].\n"
+    )
+    page.write_text(new)
+
+    result = reviewer.review_change(page, None, new)
+    assert "new-idea" not in result.reasons
