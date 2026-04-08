@@ -275,3 +275,95 @@ def ingest(source_path: Path, vault_path: Path) -> None:
         click.echo(f"  Updated: {', '.join(updated)}")
     if not created and not updated:
         click.echo("  No pages created — no concepts identified in source.")
+
+
+@cli.group()
+def issues() -> None:
+    """Query and manage the issue queue."""
+    pass
+
+
+@issues.command("list")
+@click.option(
+    "--vault", "vault_path", type=click.Path(exists=True, path_type=Path),
+    default=".", help="Path to vault",
+)
+@click.option("--status", default=None, help="Filter by status (open|resolved|wontfix)")
+@click.option("--type", "type_filter", default=None, help="Filter by issue type")
+def issues_list(vault_path: Path, status: str | None, type_filter: str | None) -> None:
+    """List issues in the queue."""
+    client = _get_client(vault_path)
+    req: dict = {"type": "issues-list"}
+    if status:
+        req["status_filter"] = status
+    if type_filter:
+        req["type_filter"] = type_filter
+    resp = client.request(req)
+    if resp["status"] != "ok":
+        raise click.ClickException(resp.get("message", "Issues list failed"))
+
+    items = resp["issues"]
+    if not items:
+        click.echo("No issues found.")
+        return
+
+    click.echo(f"Found {len(items)} issue(s):\n")
+    for item in items:
+        click.echo(f"  {item['id']} — {item['title']}")
+        click.echo(f"    type: {item['type']} | status: {item['status']} | page: {item['page']}")
+
+
+@issues.command("show")
+@click.argument("issue_id")
+@click.option(
+    "--vault", "vault_path", type=click.Path(exists=True, path_type=Path),
+    default=".", help="Path to vault",
+)
+def issues_show(issue_id: str, vault_path: Path) -> None:
+    """Show full details of a single issue."""
+    client = _get_client(vault_path)
+    resp = client.request({"type": "issues-get", "id": issue_id})
+    if resp["status"] != "ok":
+        raise click.ClickException(resp.get("message", "Issue not found"))
+
+    issue = resp["issue"]
+    click.echo(f"id:          {issue['id']}")
+    click.echo(f"type:        {issue['type']}")
+    click.echo(f"status:      {issue['status']}")
+    click.echo(f"page:        {issue['page']}")
+    click.echo(f"detected_by: {issue['detected_by']}")
+    click.echo(f"created:     {issue['created']}")
+    click.echo()
+    click.echo(issue['title'])
+    click.echo()
+    click.echo(issue['body'])
+
+
+def _set_status(issue_id: str, vault_path: Path, status: str) -> None:
+    client = _get_client(vault_path)
+    resp = client.request({"type": "issues-update", "id": issue_id, "status": status})
+    if resp["status"] != "ok":
+        raise click.ClickException(resp.get("message", "Update failed"))
+    click.echo(f"{issue_id} -> {status}")
+
+
+@issues.command("resolve")
+@click.argument("issue_id")
+@click.option(
+    "--vault", "vault_path", type=click.Path(exists=True, path_type=Path),
+    default=".", help="Path to vault",
+)
+def issues_resolve(issue_id: str, vault_path: Path) -> None:
+    """Mark an issue as resolved."""
+    _set_status(issue_id, vault_path, "resolved")
+
+
+@issues.command("wontfix")
+@click.argument("issue_id")
+@click.option(
+    "--vault", "vault_path", type=click.Path(exists=True, path_type=Path),
+    default=".", help="Path to vault",
+)
+def issues_wontfix(issue_id: str, vault_path: Path) -> None:
+    """Mark an issue as wontfix."""
+    _set_status(issue_id, vault_path, "wontfix")
