@@ -200,6 +200,7 @@ class AdversaryAgent:
 
         talk = TalkPage.for_page(page_path)
         entry = TalkEntry(
+            index=0,
             timestamp=now.isoformat(),
             author="@adversary",
             body=(

@@ -419,6 +419,7 @@ class DaemonServer:
 
         talk = TalkPage.for_page(page_path)
         entry = TalkEntry(
+            index=0,
             timestamp=_dt.datetime.now(_dt.timezone.utc).isoformat(),
             author=request["author"],
             body=request["body"],
