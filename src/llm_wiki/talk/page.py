@@ -11,7 +11,7 @@ import yaml
 # with optional HTML-comment metadata: <!-- severity:critical, resolves:[1,2] -->
 _ENTRY_HEADER_RE = re.compile(
     r"^\*\*(?P<ts>\S+)\s*[—-]\s*(?P<author>@\S+)\*\*"
-    r"(?:\s*<!--\s*(?P<meta>[^>]*?)\s*-->)?\s*$",
+    r"(?:\s*<!--(?P<meta>.*?)-->)?\s*$",
     re.MULTILINE,
 )
 

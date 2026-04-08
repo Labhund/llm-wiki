@@ -201,3 +201,58 @@ def test_round_trip_resolves_list(tmp_path):
     ))
     entries = talk.load()
     assert entries[3].resolves == [1, 3]
+
+
+def test_load_handles_gt_in_meta_value(tmp_path):
+    """A `>` character in a meta field value must not silently drop the entry.
+
+    Regression for a bug where the [^>]*? meta capture would fail to find
+    its --> terminator if a field value contained `>`, dropping the entire
+    header line from finditer() and silently losing the entry.
+    """
+    path = tmp_path / "p.talk.md"
+    path.write_text(
+        "---\npage: p\n---\n\n"
+        "**2026-04-08T10:00:00+00:00 — @a** <!-- severity:foo>bar -->\n"
+        "First entry body.\n\n"
+        "**2026-04-08T11:00:00+00:00 — @b** <!-- severity:critical -->\n"
+        "Second entry body.\n",
+        encoding="utf-8",
+    )
+    entries = TalkPage(path).load()
+    assert len(entries) == 2, f"expected 2 entries, got {len(entries)} — regex dropped one"
+    # The first entry's severity is the literal "foo>bar" — the parser doesn't validate
+    # the vocabulary, only the type (Severity Literal is for static type-check, not runtime).
+    # The important assertion is that the entry exists at all.
+    assert entries[0].body == "First entry body."
+    assert entries[1].severity == "critical"
+    assert entries[1].body == "Second entry body."
+
+
+def test_append_ignores_caller_supplied_index(tmp_path):
+    """A non-zero index passed by the caller is not written to disk.
+
+    The contract is documented in TalkEntry's docstring and append()'s
+    docstring: indices are positional and reassigned by load(). This test
+    locks the invariant in code so a future refactor that accidentally
+    serialized entry.index would be caught.
+    """
+    talk = TalkPage(tmp_path / "p.talk.md")
+    talk.append(TalkEntry(
+        index=99,
+        timestamp="2026-04-08T10:00:00+00:00",
+        author="@a",
+        body="first",
+    ))
+    talk.append(TalkEntry(
+        index=42,
+        timestamp="2026-04-08T10:01:00+00:00",
+        author="@b",
+        body="second",
+    ))
+    text = talk.path.read_text(encoding="utf-8")
+    assert "99" not in text, "writer must not serialize caller-supplied index"
+    assert "42" not in text, "writer must not serialize caller-supplied index"
+    # And load() reassigns indices positionally regardless of what was passed
+    entries = talk.load()
+    assert [e.index for e in entries] == [1, 2]
