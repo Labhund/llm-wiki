@@ -69,6 +69,17 @@ class IntervalScheduler:
     def last_run_iso(self, name: str) -> str | None:
         return self._last_run.get(name)
 
+    def workers_info(self) -> list[tuple[str, float, str | None]]:
+        """Return (name, interval_seconds, last_run_iso) tuples for every registered worker.
+
+        Public accessor for callers (e.g. daemon status routes) that need to
+        enumerate workers without poking the private ``_workers`` list.
+        """
+        return [
+            (w.name, w.interval_seconds, self.last_run_iso(w.name))
+            for w in self._workers
+        ]
+
     async def start(self) -> None:
         self._stopping = False
         for worker in self._workers:

@@ -131,8 +131,10 @@ async def test_scheduler_records_last_run_iso():
 def test_scheduler_worker_names():
     scheduler = IntervalScheduler()
     scheduler.register(ScheduledWorker("a", 1.0, lambda: None))   # type: ignore[arg-type]
-    scheduler.register(ScheduledWorker("b", 1.0, lambda: None))   # type: ignore[arg-type]
+    scheduler.register(ScheduledWorker("b", 2.0, lambda: None))   # type: ignore[arg-type]
     assert scheduler.worker_names == ["a", "b"]
+    # workers_info() is the public accessor used by daemon status routes.
+    assert scheduler.workers_info() == [("a", 1.0, None), ("b", 2.0, None)]
 
 
 @pytest.mark.asyncio

@@ -249,13 +249,14 @@ class DaemonServer:
     def _handle_scheduler_status(self) -> dict:
         if self._scheduler is None:
             return {"status": "ok", "workers": []}
-        workers = []
-        for worker in self._scheduler._workers:  # noqa: SLF001 — internal access is fine, same module family
-            workers.append({
-                "name": worker.name,
-                "interval_seconds": worker.interval_seconds,
-                "last_run": self._scheduler.last_run_iso(worker.name),
-            })
+        workers = [
+            {
+                "name": name,
+                "interval_seconds": interval_seconds,
+                "last_run": last_run,
+            }
+            for name, interval_seconds, last_run in self._scheduler.workers_info()
+        ]
         return {"status": "ok", "workers": workers}
 
     def _handle_lint(self) -> dict:
