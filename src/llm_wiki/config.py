@@ -64,7 +64,7 @@ class MaintenanceConfig:
     adversary_claims_per_run: int = 5
     auditor_interval: str = "24h"
     authority_recalc: str = "12h"
-    compliance_debounce_secs: int = 30
+    compliance_debounce_secs: float = 30.0
     talk_pages_enabled: bool = True
 
 
