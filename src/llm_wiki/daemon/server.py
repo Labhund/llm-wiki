@@ -99,6 +99,12 @@ class DaemonServer:
                 return await self._handle_ingest(request)
             case "lint":
                 return self._handle_lint()
+            case "issues-list":
+                return self._handle_issues_list(request)
+            case "issues-get":
+                return self._handle_issues_get(request)
+            case "issues-update":
+                return self._handle_issues_update(request)
             case _:
                 return {"status": "error", "message": f"Unknown request type: {req_type}"}
 
@@ -133,13 +139,48 @@ class DaemonServer:
 
     def _handle_lint(self) -> dict:
         from llm_wiki.audit.auditor import Auditor
-        from llm_wiki.issues.queue import IssueQueue
 
-        wiki_dir = self._vault_root / self._config.vault.wiki_dir.rstrip("/")
-        queue = IssueQueue(wiki_dir)
+        queue = self._issue_queue()
         auditor = Auditor(self._vault, queue, self._vault_root)
         report = auditor.audit()
         return {"status": "ok", **report.to_dict()}
+
+    def _issue_queue(self) -> "IssueQueue":
+        from llm_wiki.issues.queue import IssueQueue
+        wiki_dir = self._vault_root / self._config.vault.wiki_dir.rstrip("/")
+        return IssueQueue(wiki_dir)
+
+    def _handle_issues_list(self, request: dict) -> dict:
+        queue = self._issue_queue()
+        issues = queue.list(
+            status=request.get("status_filter"),
+            type=request.get("type_filter"),
+        )
+        return {
+            "status": "ok",
+            "issues": [_serialize_issue(i) for i in issues],
+        }
+
+    def _handle_issues_get(self, request: dict) -> dict:
+        if "id" not in request:
+            return {"status": "error", "message": "Missing required field: id"}
+        queue = self._issue_queue()
+        issue = queue.get(request["id"])
+        if issue is None:
+            return {"status": "error", "message": f"Issue not found: {request['id']}"}
+        return {"status": "ok", "issue": _serialize_issue(issue, include_body=True)}
+
+    def _handle_issues_update(self, request: dict) -> dict:
+        if "id" not in request or "status" not in request:
+            return {"status": "error", "message": "Missing required fields: id, status"}
+        queue = self._issue_queue()
+        try:
+            ok = queue.update_status(request["id"], request["status"])
+        except ValueError as exc:
+            return {"status": "error", "message": str(exc)}
+        if not ok:
+            return {"status": "error", "message": f"Issue not found: {request['id']}"}
+        return {"status": "ok"}
 
     async def _handle_query(self, request: dict) -> dict:
         if "question" not in request:
@@ -211,3 +252,19 @@ def _serialize_result(r: SearchResult) -> dict:
         "score": r.score,
         "manifest": r.entry.to_manifest_text(),
     }
+
+
+def _serialize_issue(issue: "Issue", include_body: bool = False) -> dict:
+    data = {
+        "id": issue.id,
+        "type": issue.type,
+        "status": issue.status,
+        "title": issue.title,
+        "page": issue.page,
+        "created": issue.created,
+        "detected_by": issue.detected_by,
+        "metadata": issue.metadata,
+    }
+    if include_body:
+        data["body"] = issue.body
+    return data
