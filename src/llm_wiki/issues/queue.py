@@ -5,8 +5,11 @@ import hashlib
 import re
 from dataclasses import dataclass, field
 from pathlib import Path
+from typing import Literal
 
 import yaml
+
+Severity = Literal["critical", "moderate", "minor", "suggestion", "new_connection"]
 
 # Issue ids are filesystem-sensitive: they're concatenated with `.md` and joined
 # to the `.issues/` directory without further sanitization. Lock the shape to
@@ -39,7 +42,7 @@ class Issue:
     created: str
     detected_by: str
     metadata: dict = field(default_factory=dict)
-    severity: str = "minor"
+    severity: Severity = "minor"
 
     @staticmethod
     def make_id(type: str, page: str | None, key: str) -> str:
