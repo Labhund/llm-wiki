@@ -21,6 +21,17 @@ _CODE_FENCE_RE = re.compile(r"^```")
 # A line that is a %% marker (not body content).
 _MARKER_LINE_RE = re.compile(r"^%%\s*section:")
 
+_HEADING_LINE_RE = re.compile(r"^(?P<level>##|###)\s+(?P<text>.+?)\s*$", re.MULTILINE)
+_MARKER_BEFORE_HEADING_RE = re.compile(
+    r"%%\s*section:\s*[^%]*?%%\s*\n(##|###)\s+(?P<text>.+?)\s*$",
+    re.MULTILINE,
+)
+
+
+def _slugify(text: str) -> str:
+    """Heading text -> slug. 'Sub Heading' -> 'sub-heading'."""
+    return re.sub(r"[^a-z0-9]+", "-", text.lower()).strip("-")
+
 
 @dataclass
 class ComplianceResult:
@@ -68,10 +79,59 @@ class ComplianceReviewer:
             result.reasons.append("minor-edit")
             return result
 
+        # Auto-fix structural drift first; downstream checks see the fixed content.
+        new_content = self._check_structural_drift(result, page_path, new_content)
         self._check_missing_citation(result, old_content, new_content)
-        # Tasks 7 + 8 add structural-drift auto-fix and new-idea detection here.
+        # Task 8 adds new-idea detection here.
 
         return result
+
+    def _check_structural_drift(
+        self,
+        result: ComplianceResult,
+        page_path: Path,
+        new_content: str,
+    ) -> str:
+        """Insert %% section markers above any heading that lacks one.
+
+        Returns the (possibly mutated) page content. Updates result.reasons
+        and result.auto_fixed in place. Writes the updated content back to
+        the file if any markers were inserted.
+        """
+        headings_with_markers = {
+            m.group("text").strip().lower()
+            for m in _MARKER_BEFORE_HEADING_RE.finditer(new_content)
+        }
+        all_headings = list(_HEADING_LINE_RE.finditer(new_content))
+        orphans: list[tuple[int, str, str]] = []  # (start, heading_line, slug)
+        for match in all_headings:
+            heading_text = match.group("text").strip()
+            if heading_text.lower() in headings_with_markers:
+                continue
+            slug = _slugify(heading_text)
+            if not slug:
+                continue
+            orphans.append((match.start(), match.group(0), slug))
+
+        if not orphans:
+            return new_content
+
+        # Insert markers in reverse order so earlier offsets remain valid
+        updated = new_content
+        inserted_slugs: list[str] = []
+        for start, _heading_line, slug in reversed(orphans):
+            marker_line = f"%% section: {slug} %%\n"
+            updated = updated[:start] + marker_line + updated[start:]
+            inserted_slugs.append(slug)
+
+        # Write back to disk
+        page_path.write_text(updated, encoding="utf-8")
+
+        result.reasons.append("structural-drift")
+        for slug in reversed(inserted_slugs):  # restore original order for stability
+            result.auto_fixed.append(f"inserted-marker:{slug}")
+
+        return updated
 
     def _check_missing_citation(
         self,

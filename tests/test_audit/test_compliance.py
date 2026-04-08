@@ -117,3 +117,81 @@ def test_missing_citation_first_time_seen_page(tmp_path: Path):
 
     result = reviewer.review_change(page, None, new)
     assert "missing-citation" in result.reasons
+
+
+def test_structural_drift_auto_inserts_marker(tmp_path: Path):
+    """A new ## heading without a preceding marker is auto-fixed in place."""
+    _, _, reviewer, page = _setup(tmp_path)
+    old = (
+        "---\ntitle: Test\n---\n\n"
+        "%% section: overview %%\n## Overview\n\nText [[raw/a.pdf]].\n"
+    )
+    new = old + "\n## New Section\n\nMore text [[raw/b.pdf]].\n"
+    page.write_text(new)
+
+    result = reviewer.review_change(page, old, new)
+
+    assert "structural-drift" in result.reasons
+    assert "inserted-marker:new-section" in result.auto_fixed
+
+    updated = page.read_text(encoding="utf-8")
+    assert "%% section: new-section %%" in updated
+    # Original heading still present
+    assert "## New Section" in updated
+    # Marker appears immediately before the heading
+    marker_pos = updated.index("%% section: new-section %%")
+    heading_pos = updated.index("## New Section")
+    assert marker_pos < heading_pos
+    # Nothing between marker and heading except whitespace
+    between = updated[marker_pos + len("%% section: new-section %%"):heading_pos]
+    assert between.strip() == ""
+
+
+def test_structural_drift_skipped_when_marker_present(tmp_path: Path):
+    """A new heading WITH its marker is not flagged."""
+    _, _, reviewer, page = _setup(tmp_path)
+    old = (
+        "---\ntitle: Test\n---\n\n"
+        "%% section: overview %%\n## Overview\n\nText [[raw/a.pdf]].\n"
+    )
+    new = (
+        old
+        + "\n%% section: method %%\n## Method\n\nDetails [[raw/a.pdf]].\n"
+    )
+    page.write_text(new)
+
+    result = reviewer.review_change(page, old, new)
+    assert "structural-drift" not in result.reasons
+    assert result.auto_fixed == []
+
+
+def test_structural_drift_handles_h3(tmp_path: Path):
+    _, _, reviewer, page = _setup(tmp_path)
+    old = "---\ntitle: Test\n---\n\n%% section: overview %%\n## Overview\n\nText [[raw/a.pdf]].\n"
+    new = old + "\n### Sub Heading\n\nDetail [[raw/a.pdf]].\n"
+    page.write_text(new)
+
+    result = reviewer.review_change(page, old, new)
+    assert "structural-drift" in result.reasons
+    assert "inserted-marker:sub-heading" in result.auto_fixed
+    assert "%% section: sub-heading %%" in page.read_text(encoding="utf-8")
+
+
+def test_structural_drift_first_time_seen_page(tmp_path: Path):
+    """A brand-new file with headings but no markers is auto-fixed."""
+    _, _, reviewer, page = _setup(tmp_path)
+    new = (
+        "---\ntitle: Test\n---\n\n"
+        "## Overview\n\nText [[raw/a.pdf]].\n"
+        "## Method\n\nMore [[raw/a.pdf]].\n"
+    )
+    page.write_text(new)
+
+    result = reviewer.review_change(page, None, new)
+    assert "structural-drift" in result.reasons
+    assert "inserted-marker:overview" in result.auto_fixed
+    assert "inserted-marker:method" in result.auto_fixed
+
+    updated = page.read_text(encoding="utf-8")
+    assert "%% section: overview %%" in updated
+    assert "%% section: method %%" in updated
