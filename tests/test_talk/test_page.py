@@ -256,3 +256,79 @@ def test_append_ignores_caller_supplied_index(tmp_path):
     # And load() reassigns indices positionally regardless of what was passed
     entries = talk.load()
     assert [e.index for e in entries] == [1, 2]
+
+
+def test_compute_open_set_no_resolves_returns_all():
+    """With no resolves, every entry is open."""
+    from llm_wiki.talk.page import compute_open_set
+    entries = [
+        TalkEntry(1, "t1", "@a", "first"),
+        TalkEntry(2, "t2", "@b", "second"),
+        TalkEntry(3, "t3", "@c", "third"),
+    ]
+    open_set = compute_open_set(entries)
+    assert [e.index for e in open_set] == [1, 2, 3]
+
+
+def test_compute_open_set_single_closure():
+    """An entry with resolves=[1] removes entry 1 from the open set."""
+    from llm_wiki.talk.page import compute_open_set
+    entries = [
+        TalkEntry(1, "t1", "@a", "first"),
+        TalkEntry(2, "t2", "@b", "closes 1", resolves=[1]),
+    ]
+    open_set = compute_open_set(entries)
+    assert [e.index for e in open_set] == [2]
+
+
+def test_compute_open_set_multi_closure():
+    """resolves=[1,3] closes entries 1 and 3 in one shot."""
+    from llm_wiki.talk.page import compute_open_set
+    entries = [
+        TalkEntry(1, "t1", "@a", "first"),
+        TalkEntry(2, "t2", "@b", "second"),
+        TalkEntry(3, "t3", "@c", "third"),
+        TalkEntry(4, "t4", "@d", "closer", resolves=[1, 3]),
+    ]
+    open_set = compute_open_set(entries)
+    assert [e.index for e in open_set] == [2, 4]
+
+
+def test_compute_open_set_resolver_itself_remains_open():
+    """The resolving entry is itself open until something else closes it."""
+    from llm_wiki.talk.page import compute_open_set
+    entries = [
+        TalkEntry(1, "t1", "@a", "first"),
+        TalkEntry(2, "t2", "@b", "closes 1", resolves=[1]),
+    ]
+    open_set = compute_open_set(entries)
+    assert 2 in [e.index for e in open_set]
+
+
+def test_compute_open_set_chained_closures():
+    """Entry 3 closes entry 2, entry 4 closes entry 3 — only 1 and 4 are open."""
+    from llm_wiki.talk.page import compute_open_set
+    entries = [
+        TalkEntry(1, "t1", "@a", "first"),
+        TalkEntry(2, "t2", "@b", "second"),
+        TalkEntry(3, "t3", "@c", "closes 2", resolves=[2]),
+        TalkEntry(4, "t4", "@d", "closes 3", resolves=[3]),
+    ]
+    open_set = compute_open_set(entries)
+    assert [e.index for e in open_set] == [1, 4]
+
+
+def test_compute_open_set_resolves_pointing_at_unknown_index_is_ignored():
+    """A resolves reference to a non-existent index is harmless."""
+    from llm_wiki.talk.page import compute_open_set
+    entries = [
+        TalkEntry(1, "t1", "@a", "first"),
+        TalkEntry(2, "t2", "@b", "closes 99", resolves=[99]),
+    ]
+    open_set = compute_open_set(entries)
+    assert [e.index for e in open_set] == [1, 2]
+
+
+def test_compute_open_set_empty():
+    from llm_wiki.talk.page import compute_open_set
+    assert compute_open_set([]) == []
