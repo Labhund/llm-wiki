@@ -216,3 +216,28 @@ async def test_adversary_unparseable_response_skips_claim(tmp_path: Path, _clean
     assert result.claims_checked == 1
     assert result.validated == []
     assert result.failed == []
+
+
+@pytest.mark.asyncio
+async def test_adversary_talk_post_carries_critical_severity(tmp_path: Path, _clean_state):
+    """When the adversary posts an ambiguous verdict to a talk page, the entry's
+    severity is 'critical' — surfaced inline in wiki_read so the agent sees it."""
+    vault_root, page_path = _build_vault_with_one_claim(tmp_path)
+    _clean_state.append(_state_dir_for(vault_root))
+    config = WikiConfig(maintenance=MaintenanceConfig(adversary_claims_per_run=5))
+
+    stub = _StubLLM(
+        '{"verdict": "ambiguous", "confidence": 0.5, "explanation": "Source unclear."}'
+    )
+    vault = Vault.scan(vault_root)
+    queue = IssueQueue(vault_root / "wiki")
+    agent = AdversaryAgent(vault, vault_root, stub, queue, config)
+
+    result = await agent.run()
+    assert len(result.talk_posts) == 1
+
+    # The adversary should have posted to the talk page with severity=critical.
+    talk = TalkPage.for_page(page_path)
+    entries = talk.load()
+    assert len(entries) >= 1
+    assert any(e.severity == "critical" for e in entries)

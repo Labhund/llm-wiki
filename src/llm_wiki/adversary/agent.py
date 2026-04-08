@@ -208,6 +208,7 @@ class AdversaryAgent:
                 f"> {claim.text}\n\n"
                 f"{explanation}"
             ),
+            severity="critical",
         )
         talk.append(entry)
         ensure_talk_marker(page_path)
