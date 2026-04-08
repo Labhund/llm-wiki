@@ -17,11 +17,16 @@ class _StubLLM:
 
     def __init__(self, response_text: str = '{"tags": [], "summary": null}') -> None:
         self.response = response_text
-        self.calls: list[list[dict]] = []
+        # Each entry is {"messages": [...], "priority": str | None, "temperature": float}
+        self.calls: list[dict] = []
 
     async def complete(self, messages, temperature: float = 0.7, priority: str = "query"):
         from llm_wiki.traverse.llm_client import LLMResponse
-        self.calls.append(messages)
+        self.calls.append({
+            "messages": messages,
+            "priority": priority,
+            "temperature": temperature,
+        })
         return LLMResponse(content=self.response, tokens_used=100)
 
 
@@ -151,6 +156,9 @@ async def test_refresh_page_updates_overrides_with_llm_output(sample_vault: Path
 
     assert refreshed is True
     assert len(stub.calls) == 1
+    # Librarian LLM calls MUST be tagged as maintenance priority so they
+    # can be throttled/backgrounded separately from user-facing queries.
+    assert stub.calls[0]["priority"] == "maintenance"
 
     overrides = ManifestOverrides.load(state_dir / "manifest_overrides.json")
     got = overrides.get("srna-embeddings")
