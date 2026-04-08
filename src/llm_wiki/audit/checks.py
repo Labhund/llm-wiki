@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import re
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -80,3 +81,47 @@ def find_broken_wikilinks(vault: Vault) -> CheckResult:
                 )
             )
     return CheckResult(check="broken-wikilinks", issues=issues)
+
+
+# Detects ## or ### headings at line start (not inside code blocks — naive but adequate
+# for v1; the librarian's retrofit pass uses the same heuristic).
+_HEADING_LINE_RE = re.compile(r"^(##|###)\s+\S", re.MULTILINE)
+_MARKER_LINE_RE = re.compile(r"^%%\s*section:", re.MULTILINE)
+
+
+def find_missing_markers(vault: Vault) -> CheckResult:
+    """Pages with ## headings but no %% section markers.
+
+    Reads page.raw_content directly so we see what was on disk, not what
+    the parser fell back to. The page is flagged exactly when:
+      - it contains at least one ##/### heading at line start, AND
+      - it contains zero `%% section: ... %%` markers.
+    """
+    issues: list[Issue] = []
+    for name, entry in vault.manifest_entries().items():
+        page = vault.read_page(name)
+        if page is None:
+            continue
+        raw = page.raw_content
+        if _MARKER_LINE_RE.search(raw):
+            continue
+        if not _HEADING_LINE_RE.search(raw):
+            continue
+        issues.append(
+            Issue(
+                id=Issue.make_id("missing-markers", name, ""),
+                type="missing-markers",
+                status="open",
+                title=f"Page '{name}' has headings but no %% section markers",
+                page=name,
+                body=(
+                    f"The page [[{name}]] uses ## headings without `%% section: ... %%` "
+                    f"markers. Markers are required so the daemon can slice the page by "
+                    f"section. The librarian will retrofit them on its next run."
+                ),
+                created=Issue.now_iso(),
+                detected_by="auditor",
+                metadata={},
+            )
+        )
+    return CheckResult(check="missing-markers", issues=issues)

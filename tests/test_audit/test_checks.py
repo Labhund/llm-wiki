@@ -99,3 +99,39 @@ def test_find_broken_wikilinks_issue_shape(sample_vault: Path):
     assert issue.page == "no-structure"
     assert issue.detected_by == "auditor"
     assert "some-other-page" in issue.body
+
+
+from llm_wiki.audit.checks import find_missing_markers
+
+
+def test_find_missing_markers_flags_pages_with_headings_no_markers(sample_vault: Path):
+    """clustering-metrics uses ## headings but has no %% markers."""
+    vault = Vault.scan(sample_vault)
+    result = find_missing_markers(vault)
+
+    assert result.check == "missing-markers"
+    affected = {issue.page for issue in result.issues}
+    assert "clustering-metrics" in affected
+
+
+def test_find_missing_markers_does_not_flag_pages_with_markers(sample_vault: Path):
+    """srna-embeddings has %% markers — must not be flagged."""
+    vault = Vault.scan(sample_vault)
+    result = find_missing_markers(vault)
+    affected = {issue.page for issue in result.issues}
+    assert "srna-embeddings" not in affected
+    assert "inter-rep-variant-analysis" not in affected
+
+
+def test_find_missing_markers_does_not_flag_pages_without_headings(sample_vault: Path):
+    """no-structure.md has no headings at all — also not flagged."""
+    vault = Vault.scan(sample_vault)
+    result = find_missing_markers(vault)
+    affected = {issue.page for issue in result.issues}
+    assert "no-structure" not in affected
+
+
+def test_find_missing_markers_empty_vault(tmp_path: Path):
+    vault = Vault.scan(tmp_path)
+    result = find_missing_markers(vault)
+    assert result.issues == []
