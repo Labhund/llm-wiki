@@ -63,10 +63,18 @@ class ManifestOverrides:
     def delete(self, page_name: str) -> None:
         self._entries.pop(page_name, None)
 
-    def prune(self, valid_names: set[str]) -> None:
+    def prune(self, valid_names: set[str]) -> int:
+        """Remove entries whose page no longer exists.
+
+        Returns the number of entries removed so callers can skip an
+        unnecessary save() when nothing changed.
+        """
+        removed = 0
         for name in list(self._entries):
             if name not in valid_names:
                 del self._entries[name]
+                removed += 1
+        return removed
 
     def save(self) -> None:
         self._path.parent.mkdir(parents=True, exist_ok=True)

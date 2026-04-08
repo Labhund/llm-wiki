@@ -85,8 +85,10 @@ class Vault:
         from llm_wiki.librarian.overrides import ManifestOverrides
         overrides = ManifestOverrides.load(state_dir / "manifest_overrides.json")
         _apply_overrides(entries, overrides)
-        overrides.prune({e.name for e in entries})
-        overrides.save()
+        # Only write the sidecar back when prune actually changed state;
+        # with frequent rescans (file watcher) this avoids a write storm.
+        if overrides.prune({e.name for e in entries}) > 0:
+            overrides.save()
 
         # Build manifest store
         store = ManifestStore(entries)

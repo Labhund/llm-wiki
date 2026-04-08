@@ -153,3 +153,34 @@ def test_vault_scan_prunes_overrides_for_deleted_pages(sample_vault, tmp_path):
     reloaded = ManifestOverrides.load(overrides_path)
     assert reloaded.get("srna-embeddings") is not None
     assert reloaded.get("deleted-page") is None
+
+
+def test_vault_scan_does_not_rewrite_overrides_when_nothing_pruned(sample_vault):
+    """Vault.scan() must not touch the overrides file if prune had nothing to do.
+
+    Frequent rescans (file watcher) would otherwise cause a write-per-scan
+    storm even when the override state is already consistent with the vault.
+    """
+    from llm_wiki.librarian.overrides import ManifestOverrides, PageOverride
+    from llm_wiki.vault import Vault, _state_dir_for
+
+    state_dir = _state_dir_for(sample_vault)
+    state_dir.mkdir(parents=True, exist_ok=True)
+    overrides_path = state_dir / "manifest_overrides.json"
+
+    # Seed with an override for an existing page (nothing to prune)
+    store = ManifestOverrides.load(overrides_path)
+    store.set("srna-embeddings", PageOverride(authority=0.5))
+    store.save()
+
+    # First scan establishes a baseline mtime
+    Vault.scan(sample_vault)
+    mtime_before = overrides_path.stat().st_mtime_ns
+
+    # Second scan: nothing to prune → file must not be rewritten
+    Vault.scan(sample_vault)
+    mtime_after = overrides_path.stat().st_mtime_ns
+
+    assert mtime_after == mtime_before, (
+        "Vault.scan rewrote manifest_overrides.json even though nothing was pruned"
+    )
