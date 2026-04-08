@@ -211,3 +211,35 @@ def test_queue_list_filters_by_type(tmp_path: Path):
     broken = queue.list(type="broken-link")
     assert len(broken) == 2
     assert all(i.type == "broken-link" for i in broken)
+
+
+def test_update_status_changes_status_only(tmp_path: Path):
+    """update_status preserves all other fields."""
+    queue = IssueQueue(tmp_path / "wiki")
+    issue = _make_issue(metadata={"target": "k-means-deep"})
+    queue.add(issue)
+
+    ok = queue.update_status(issue.id, "resolved")
+    assert ok is True
+
+    loaded = queue.get(issue.id)
+    assert loaded is not None
+    assert loaded.status == "resolved"
+    assert loaded.title == issue.title
+    assert loaded.body == issue.body.strip()
+    assert loaded.metadata == {"target": "k-means-deep"}
+    assert loaded.created == issue.created
+
+
+def test_update_status_missing_returns_false(tmp_path: Path):
+    queue = IssueQueue(tmp_path / "wiki")
+    assert queue.update_status("does-not-exist", "resolved") is False
+
+
+def test_update_status_validates_value(tmp_path: Path):
+    queue = IssueQueue(tmp_path / "wiki")
+    issue = _make_issue()
+    queue.add(issue)
+
+    with pytest.raises(ValueError):
+        queue.update_status(issue.id, "invalid-status")

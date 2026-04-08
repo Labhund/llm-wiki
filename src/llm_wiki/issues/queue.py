@@ -123,6 +123,24 @@ class IssueQueue:
             results.append(issue)
         return results
 
+    _VALID_STATUSES = {"open", "resolved", "wontfix"}
+
+    def update_status(self, issue_id: str, new_status: str) -> bool:
+        """Mutate the status field, preserving all other fields and the body."""
+        if new_status not in self._VALID_STATUSES:
+            raise ValueError(
+                f"Invalid status {new_status!r}; must be one of {sorted(self._VALID_STATUSES)}"
+            )
+        issue = self.get(issue_id)
+        if issue is None:
+            return False
+        issue.status = new_status
+        # Re-write by deleting + re-adding (preserves the file path since id is unchanged)
+        path = self.issues_dir / f"{issue_id}.md"
+        path.unlink()
+        self.add(issue)
+        return True
+
     def _parse_file(self, path: Path) -> Issue | None:
         """Parse a single issue file. Returns None if the frontmatter is malformed."""
         text = path.read_text(encoding="utf-8")
