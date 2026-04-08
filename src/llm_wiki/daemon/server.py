@@ -151,6 +151,26 @@ class DaemonServer:
             count = await agent.recalc_authority()
             logger.info("Authority recalc: %d entries updated", count)
 
+        async def run_adversary() -> None:
+            from llm_wiki.adversary.agent import AdversaryAgent
+            from llm_wiki.issues.queue import IssueQueue
+            from llm_wiki.traverse.llm_client import LLMClient
+            wiki_dir = self._vault_root / self._config.vault.wiki_dir.rstrip("/")
+            queue = IssueQueue(wiki_dir)
+            llm = LLMClient(
+                self._llm_queue,
+                model=self._config.llm.default,
+                api_base=self._config.llm.api_base,
+                api_key=self._config.llm.api_key,
+            )
+            agent = AdversaryAgent(self._vault, self._vault_root, llm, queue, self._config)
+            result = await agent.run()
+            logger.info(
+                "Adversary: checked=%d validated=%d failed=%d talk=%d issues=%d",
+                result.claims_checked, len(result.validated), len(result.failed),
+                len(result.talk_posts), len(result.issues_filed),
+            )
+
         self._scheduler.register(
             ScheduledWorker(
                 name="auditor",
@@ -170,6 +190,13 @@ class DaemonServer:
                 name="authority_recalc",
                 interval_seconds=parse_interval(self._config.maintenance.authority_recalc),
                 coro_factory=run_authority_recalc,
+            )
+        )
+        self._scheduler.register(
+            ScheduledWorker(
+                name="adversary",
+                interval_seconds=parse_interval(self._config.maintenance.adversary_interval),
+                coro_factory=run_adversary,
             )
         )
 

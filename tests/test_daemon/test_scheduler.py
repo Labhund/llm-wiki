@@ -220,6 +220,25 @@ async def test_daemon_server_registers_librarian_workers(sample_vault, tmp_path)
 
 
 @pytest.mark.asyncio
+async def test_daemon_server_registers_adversary_worker(sample_vault, tmp_path):
+    """Starting DaemonServer registers the adversary worker."""
+    from llm_wiki.config import MaintenanceConfig, WikiConfig
+    from llm_wiki.daemon.server import DaemonServer
+
+    sock = tmp_path / "adversary.sock"
+    config = WikiConfig(maintenance=MaintenanceConfig(adversary_interval="1h"))
+    server = DaemonServer(sample_vault, sock, config=config)
+    await server.start()
+    try:
+        names = set(server._scheduler.worker_names)
+        assert "adversary" in names
+        # All four workers from 5b + 5c + 5d should be registered
+        assert {"auditor", "librarian", "authority_recalc", "adversary"} <= names
+    finally:
+        await server.stop()
+
+
+@pytest.mark.asyncio
 async def test_scheduler_status_route(sample_vault, tmp_path):
     """The scheduler-status route returns workers + last-run timestamps."""
     from llm_wiki.config import MaintenanceConfig, WikiConfig
