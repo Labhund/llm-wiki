@@ -1,8 +1,10 @@
 from __future__ import annotations
 
+import asyncio
+
 import pytest
 
-from llm_wiki.daemon.scheduler import parse_interval
+from llm_wiki.daemon.scheduler import IntervalScheduler, ScheduledWorker, parse_interval
 
 
 @pytest.mark.parametrize(
@@ -41,3 +43,93 @@ def test_parse_interval_invalid_raises(spec: str):
 
 def test_parse_interval_strips_whitespace():
     assert parse_interval("  6h  ") == 21600.0
+
+
+@pytest.mark.asyncio
+async def test_scheduler_runs_worker_on_interval():
+    """Worker runs once at start, then on each interval."""
+    counter = {"n": 0}
+
+    async def increment() -> None:
+        counter["n"] += 1
+
+    scheduler = IntervalScheduler()
+    scheduler.register(
+        ScheduledWorker(name="incrementer", interval_seconds=0.1, coro_factory=increment)
+    )
+
+    await scheduler.start()
+    await asyncio.sleep(0.35)
+    await scheduler.stop()
+
+    # 1 immediate run + ~3 interval runs (with slack for scheduling jitter)
+    assert counter["n"] >= 3, f"expected >=3 runs, got {counter['n']}"
+
+
+@pytest.mark.asyncio
+async def test_scheduler_stop_halts_dispatch():
+    """No more worker invocations after stop()."""
+    counter = {"n": 0}
+
+    async def increment() -> None:
+        counter["n"] += 1
+
+    scheduler = IntervalScheduler()
+    scheduler.register(
+        ScheduledWorker(name="incrementer", interval_seconds=0.05, coro_factory=increment)
+    )
+    await scheduler.start()
+    await asyncio.sleep(0.12)
+    await scheduler.stop()
+
+    snapshot = counter["n"]
+    await asyncio.sleep(0.2)
+    assert counter["n"] == snapshot, "worker fired after stop()"
+
+
+@pytest.mark.asyncio
+async def test_scheduler_register_multiple_workers():
+    """Multiple workers run independently."""
+    a_count = {"n": 0}
+    b_count = {"n": 0}
+
+    async def a() -> None:
+        a_count["n"] += 1
+
+    async def b() -> None:
+        b_count["n"] += 1
+
+    scheduler = IntervalScheduler()
+    scheduler.register(ScheduledWorker("a", 0.1, a))
+    scheduler.register(ScheduledWorker("b", 0.1, b))
+    await scheduler.start()
+    await asyncio.sleep(0.25)
+    await scheduler.stop()
+
+    assert a_count["n"] >= 2
+    assert b_count["n"] >= 2
+
+
+@pytest.mark.asyncio
+async def test_scheduler_records_last_run_iso():
+    """last_run_iso(name) returns an ISO 8601 timestamp after the worker has run."""
+    async def noop() -> None:
+        pass
+
+    scheduler = IntervalScheduler()
+    scheduler.register(ScheduledWorker("noop", 1.0, noop))
+    await scheduler.start()
+    await asyncio.sleep(0.05)
+    await scheduler.stop()
+
+    last = scheduler.last_run_iso("noop")
+    assert last is not None
+    assert "T" in last  # ISO 8601 has a T separator
+    assert "+00:00" in last or last.endswith("Z")
+
+
+def test_scheduler_worker_names():
+    scheduler = IntervalScheduler()
+    scheduler.register(ScheduledWorker("a", 1.0, lambda: None))   # type: ignore[arg-type]
+    scheduler.register(ScheduledWorker("b", 1.0, lambda: None))   # type: ignore[arg-type]
+    assert scheduler.worker_names == ["a", "b"]
