@@ -212,6 +212,8 @@ class DaemonServer:
                 return self._handle_issues_get(request)
             case "issues-update":
                 return self._handle_issues_update(request)
+            case "scheduler-status":
+                return self._handle_scheduler_status()
             case _:
                 return {"status": "error", "message": f"Unknown request type: {req_type}"}
 
@@ -243,6 +245,18 @@ class DaemonServer:
     def _handle_status(self) -> dict:
         info = self._vault.status()
         return {"status": "ok", **info}
+
+    def _handle_scheduler_status(self) -> dict:
+        if self._scheduler is None:
+            return {"status": "ok", "workers": []}
+        workers = []
+        for worker in self._scheduler._workers:  # noqa: SLF001 — internal access is fine, same module family
+            workers.append({
+                "name": worker.name,
+                "interval_seconds": worker.interval_seconds,
+                "last_run": self._scheduler.last_run_iso(worker.name),
+            })
+        return {"status": "ok", "workers": workers}
 
     def _handle_lint(self) -> dict:
         from llm_wiki.audit.auditor import Auditor

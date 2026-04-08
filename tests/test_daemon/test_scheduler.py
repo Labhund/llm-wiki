@@ -190,3 +190,43 @@ async def test_daemon_server_registers_auditor_worker(sample_vault, tmp_path):
         assert server._scheduler.last_run_iso("auditor") is not None
     finally:
         await server.stop()
+
+
+@pytest.mark.asyncio
+async def test_scheduler_status_route(sample_vault, tmp_path):
+    """The scheduler-status route returns workers + last-run timestamps."""
+    from llm_wiki.config import MaintenanceConfig, WikiConfig
+    from llm_wiki.daemon.client import DaemonClient
+    from llm_wiki.daemon.server import DaemonServer
+
+    sock_path = tmp_path / "sched-status.sock"
+    config = WikiConfig(maintenance=MaintenanceConfig(auditor_interval="1s"))
+    server = DaemonServer(sample_vault, sock_path, config=config)
+    await server.start()
+    serve_task = asyncio.create_task(server.serve_forever())
+
+    try:
+        # Wait for the auditor to run at least once
+        await asyncio.sleep(0.2)
+
+        client = DaemonClient(sock_path)
+        resp = client.request({"type": "scheduler-status"})
+
+        assert resp["status"] == "ok"
+        workers = resp["workers"]
+        assert isinstance(workers, list)
+        names = {w["name"] for w in workers}
+        assert "auditor" in names
+
+        auditor = next(w for w in workers if w["name"] == "auditor")
+        assert "interval_seconds" in auditor
+        assert auditor["interval_seconds"] == 1.0
+        assert auditor["last_run"] is not None
+    finally:
+        server._server.close()
+        serve_task.cancel()
+        try:
+            await serve_task
+        except asyncio.CancelledError:
+            pass
+        await server.stop()
