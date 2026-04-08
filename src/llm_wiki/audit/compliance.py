@@ -17,16 +17,13 @@ _HEADING_RE = re.compile(r"^(?:##|###)\s+(\S.*)$", re.MULTILINE)
 # Sentence splitter — naive but adequate for v1. Splits on sentence-final
 # punctuation followed by whitespace or end-of-string, or on blank lines.
 _SENTENCE_SPLIT_RE = re.compile(r"(?<=[.!?])\s+|\n+")
-# A line that opens or closes a fenced code block.
-_CODE_FENCE_RE = re.compile(r"^```")
+# A line that opens or closes a fenced code block (``` or ~~~).
+_CODE_FENCE_RE = re.compile(r"^(?:```|~~~)")
 # A line that is a %% marker (not body content).
 _MARKER_LINE_RE = re.compile(r"^%%\s*section:")
 
-_HEADING_LINE_RE = re.compile(r"^(?P<level>##|###)\s+(?P<text>.+?)\s*$", re.MULTILINE)
-_MARKER_BEFORE_HEADING_RE = re.compile(
-    r"%%\s*section:\s*[^%]*?%%\s*\n(##|###)\s+(?P<text>.+?)\s*$",
-    re.MULTILINE,
-)
+_HEADING_LINE_RE = re.compile(r"^(?P<level>##|###)\s+(?P<text>.+?)\s*$")
+_MARKER_LINE_WITH_CAPTURE_RE = re.compile(r"^%%\s*section:\s*[^%]*?%%\s*$")
 
 
 def _slugify(text: str) -> str:
@@ -176,31 +173,91 @@ class ComplianceReviewer:
         Returns the (possibly mutated) page content. Updates result.reasons
         and result.auto_fixed in place. Writes the updated content back to
         the file if any markers were inserted.
+
+        Headings inside fenced code blocks (``` or ~~~) are skipped entirely:
+        such lines are literal code content, not document structure, and
+        mutating them would violate "human prose is sacred."
         """
-        headings_with_markers = {
-            m.group("text").strip().lower()
-            for m in _MARKER_BEFORE_HEADING_RE.finditer(new_content)
-        }
-        all_headings = list(_HEADING_LINE_RE.finditer(new_content))
-        orphans: list[tuple[int, str, str]] = []  # (start, heading_line, slug)
-        for match in all_headings:
-            heading_text = match.group("text").strip()
+        # Walk line-by-line tracking fence state so code-block contents are
+        # never mistaken for real headings. Record (line_start_offset, heading_text)
+        # pairs for headings outside fences, and also record which headings are
+        # already preceded (on the immediately prior non-blank line) by a marker.
+        orphan_headings: list[tuple[int, str]] = []  # (line_start, heading_text)
+        offset = 0
+        in_code = False
+        prev_nonblank_was_marker = False
+        prev_nonblank_marker_slug: str | None = None
+        headings_with_markers: set[str] = set()
+
+        for line in new_content.splitlines(keepends=True):
+            stripped = line.strip()
+            line_start = offset
+            offset += len(line)
+
+            if _CODE_FENCE_RE.match(stripped):
+                in_code = not in_code
+                prev_nonblank_was_marker = False
+                prev_nonblank_marker_slug = None
+                continue
+
+            if in_code:
+                # Inside a fenced code block: never treat as heading or marker.
+                # Blank lines inside a fence don't reset marker state because
+                # we're not tracking structure here anyway.
+                continue
+
+            if not stripped:
+                # Blank lines do NOT reset marker adjacency: a marker followed
+                # by a blank line followed by a heading still counts.
+                continue
+
+            if _MARKER_LINE_WITH_CAPTURE_RE.match(stripped):
+                prev_nonblank_was_marker = True
+                # Extract the slug text between "section:" and "%%"
+                inner = stripped[len("%%"):].rstrip("%").strip()
+                if inner.startswith("section:"):
+                    prev_nonblank_marker_slug = inner[len("section:"):].strip().lower()
+                else:
+                    prev_nonblank_marker_slug = None
+                continue
+
+            heading_match = _HEADING_LINE_RE.match(stripped)
+            if heading_match is not None:
+                heading_text = heading_match.group("text").strip()
+                slug = _slugify(heading_text)
+                if prev_nonblank_was_marker:
+                    # This heading already has a preceding marker.
+                    headings_with_markers.add(heading_text.lower())
+                elif slug:
+                    orphan_headings.append((line_start, heading_text))
+                prev_nonblank_was_marker = False
+                prev_nonblank_marker_slug = None
+                continue
+
+            # Any other content line breaks marker adjacency.
+            prev_nonblank_was_marker = False
+            prev_nonblank_marker_slug = None
+
+        # Filter orphans whose text already has a marker elsewhere (rare but
+        # matches the old lower-cased set semantics) and compute slugs.
+        orphans: list[tuple[int, str]] = []  # (line_start, slug)
+        for line_start, heading_text in orphan_headings:
             if heading_text.lower() in headings_with_markers:
                 continue
             slug = _slugify(heading_text)
             if not slug:
                 continue
-            orphans.append((match.start(), match.group(0), slug))
+            orphans.append((line_start, slug))
 
         if not orphans:
             return new_content
 
-        # Insert markers in reverse order so earlier offsets remain valid
+        # Insert markers in reverse order so earlier offsets remain valid.
         updated = new_content
         inserted_slugs: list[str] = []
-        for start, _heading_line, slug in reversed(orphans):
+        for line_start, slug in reversed(orphans):
             marker_line = f"%% section: {slug} %%\n"
-            updated = updated[:start] + marker_line + updated[start:]
+            updated = updated[:line_start] + marker_line + updated[line_start:]
             inserted_slugs.append(slug)
 
         # Write back to disk

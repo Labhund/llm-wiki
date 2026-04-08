@@ -234,6 +234,78 @@ def test_small_addition_does_not_trigger_new_idea(tmp_path: Path):
     assert "new-idea" not in result.reasons
 
 
+def test_structural_drift_ignores_code_fence_headings(tmp_path: Path):
+    """A ``## Heading`` that appears inside a fenced code block is NOT a real
+    heading. The reviewer must not inject a %% section marker mid-block, and
+    the code-fence bytes must survive untouched.
+    """
+    _, _, reviewer, page = _setup(tmp_path)
+    code_fence_body = (
+        "```python\n"
+        "## This is a code comment that looks like a heading\n"
+        "def foo():\n"
+        "    pass\n"
+        "```"
+    )
+    new = (
+        "---\ntitle: Topic\n---\n\n"
+        "%% section: intro %%\n"
+        "## Intro\n"
+        "\n"
+        "Some text [[raw/a.pdf]].\n"
+        "\n"
+        f"{code_fence_body}\n"
+        "\n"
+        "More text after the fence [[raw/a.pdf]].\n"
+    )
+    page.write_text(new, encoding="utf-8")
+
+    result = reviewer.review_change(page, old_content=None, new_content=new)
+
+    # No marker should have been inserted for the code-comment "heading".
+    assert "inserted-marker:this-is-a-code-comment-that-looks-like-a-heading" not in result.auto_fixed
+    # And more generally: no auto_fixed entry should match the code-comment slug.
+    assert not any("code-comment" in fix for fix in result.auto_fixed)
+
+    updated = page.read_text(encoding="utf-8")
+    # The injected marker line must not appear anywhere.
+    assert "%% section: this-is-a-code-comment" not in updated
+    # The original code-fence bytes must be present verbatim.
+    assert code_fence_body in updated
+
+
+def test_structural_drift_ignores_tilde_fence_headings(tmp_path: Path):
+    """Same rule as triple-backtick fences, but for ~~~-style fences."""
+    _, _, reviewer, page = _setup(tmp_path)
+    code_fence_body = (
+        "~~~markdown\n"
+        "## Fake Heading Inside Tilde Fence\n"
+        "not a real section\n"
+        "~~~"
+    )
+    new = (
+        "---\ntitle: Topic\n---\n\n"
+        "%% section: intro %%\n"
+        "## Intro\n"
+        "\n"
+        "Some text [[raw/a.pdf]].\n"
+        "\n"
+        f"{code_fence_body}\n"
+        "\n"
+        "More text after the fence [[raw/a.pdf]].\n"
+    )
+    page.write_text(new, encoding="utf-8")
+
+    result = reviewer.review_change(page, old_content=None, new_content=new)
+
+    assert not any("fake-heading-inside-tilde-fence" in fix for fix in result.auto_fixed)
+
+    updated = page.read_text(encoding="utf-8")
+    assert "%% section: fake-heading-inside-tilde-fence" not in updated
+    # The original code-fence bytes must be present verbatim.
+    assert code_fence_body in updated
+
+
 def test_new_idea_skipped_for_first_time_seen_page(tmp_path: Path):
     """A brand-new file is not flagged as new-idea (the whole file is 'new' by definition)."""
     _, _, reviewer, page = _setup(tmp_path)
