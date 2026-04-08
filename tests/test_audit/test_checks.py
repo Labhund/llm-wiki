@@ -184,6 +184,7 @@ def test_find_broken_citations_empty_vault(tmp_path: Path):
 def test_find_orphans_severity_is_minor(sample_vault: Path):
     vault = Vault.scan(sample_vault)
     result = find_orphans(vault)
+    assert result.issues, "expected at least one orphan in fixture (no-structure)"
     for issue in result.issues:
         assert issue.severity == "minor"
 
@@ -199,6 +200,7 @@ def test_find_broken_wikilinks_severity_is_moderate(sample_vault: Path):
 def test_find_missing_markers_severity_is_minor(sample_vault: Path):
     vault = Vault.scan(sample_vault)
     result = find_missing_markers(vault)
+    assert result.issues, "expected at least one missing-markers issue in fixture (clustering-metrics)"
     for issue in result.issues:
         assert issue.severity == "minor"
 
