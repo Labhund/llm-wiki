@@ -125,3 +125,69 @@ def find_missing_markers(vault: Vault) -> CheckResult:
             )
         )
     return CheckResult(check="missing-markers", issues=issues)
+
+
+# Matches [[raw/<anything>]] inside page bodies. Allows | aliases.
+_RAW_CITATION_RE = re.compile(r"\[\[(raw/[^\]|]+)(?:\|[^\]]+)?\]\]")
+# Frontmatter source values are stored as the literal string "[[raw/...]]".
+_FRONTMATTER_LINK_RE = re.compile(r"\[\[([^\]|]+)(?:\|[^\]]+)?\]\]")
+
+
+def find_broken_citations(vault: Vault, vault_root: Path) -> CheckResult:
+    """References to raw/ source files that don't exist on disk.
+
+    Scans two places:
+      1. page.raw_content for inline `[[raw/<path>]]` references
+      2. page.frontmatter['source'] (and 'sources' as a list) for raw refs
+
+    Each missing target produces one Issue keyed by (page, target).
+    """
+    issues: list[Issue] = []
+    for name, entry in vault.manifest_entries().items():
+        page = vault.read_page(name)
+        if page is None:
+            continue
+        targets: set[str] = set()
+
+        for match in _RAW_CITATION_RE.finditer(page.raw_content):
+            targets.add(match.group(1))
+
+        source_field = page.frontmatter.get("source")
+        if isinstance(source_field, str):
+            for match in _FRONTMATTER_LINK_RE.finditer(source_field):
+                inner = match.group(1)
+                if inner.startswith("raw/"):
+                    targets.add(inner)
+
+        sources_field = page.frontmatter.get("sources")
+        if isinstance(sources_field, list):
+            for entry_str in sources_field:
+                if not isinstance(entry_str, str):
+                    continue
+                for match in _FRONTMATTER_LINK_RE.finditer(entry_str):
+                    inner = match.group(1)
+                    if inner.startswith("raw/"):
+                        targets.add(inner)
+
+        for target in sorted(targets):
+            absolute = vault_root / target
+            if absolute.exists():
+                continue
+            issues.append(
+                Issue(
+                    id=Issue.make_id("broken-citation", name, target),
+                    type="broken-citation",
+                    status="open",
+                    title=f"Citation '{target}' does not exist on disk",
+                    page=name,
+                    body=(
+                        f"The page [[{name}]] cites `{target}`, but no such file "
+                        f"exists at `{absolute}`. Either restore the source file "
+                        f"or remove the citation."
+                    ),
+                    created=Issue.now_iso(),
+                    detected_by="auditor",
+                    metadata={"target": target},
+                )
+            )
+    return CheckResult(check="broken-citations", issues=issues)

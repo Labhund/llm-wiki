@@ -135,3 +135,47 @@ def test_find_missing_markers_empty_vault(tmp_path: Path):
     vault = Vault.scan(tmp_path)
     result = find_missing_markers(vault)
     assert result.issues == []
+
+
+from llm_wiki.audit.checks import find_broken_citations
+
+
+def test_find_broken_citations_detects_missing_source(sample_vault: Path):
+    """srna-embeddings has frontmatter source [[raw/smith-2026-srna.pdf]] which doesn't exist."""
+    vault = Vault.scan(sample_vault)
+    result = find_broken_citations(vault, sample_vault)
+
+    assert result.check == "broken-citations"
+    targets = {issue.metadata.get("target") for issue in result.issues}
+    assert "raw/smith-2026-srna.pdf" in targets
+
+
+def test_find_broken_citations_passes_when_source_exists(sample_vault: Path):
+    """Create the missing raw file → re-running the check finds no issue for it."""
+    raw_dir = sample_vault / "raw"
+    raw_dir.mkdir()
+    (raw_dir / "smith-2026-srna.pdf").write_bytes(b"%PDF-1.4 fake")
+
+    vault = Vault.scan(sample_vault)
+    result = find_broken_citations(vault, sample_vault)
+    targets = {issue.metadata.get("target") for issue in result.issues}
+    assert "raw/smith-2026-srna.pdf" not in targets
+
+
+def test_find_broken_citations_detects_inline_raw_reference(tmp_path: Path):
+    """A [[raw/missing.pdf]] reference in page body is also flagged."""
+    page = tmp_path / "doc.md"
+    page.write_text(
+        "---\ntitle: Doc\n---\n\nSee [[raw/missing.pdf]] for details.\n"
+    )
+
+    vault = Vault.scan(tmp_path)
+    result = find_broken_citations(vault, tmp_path)
+    targets = {issue.metadata.get("target") for issue in result.issues}
+    assert "raw/missing.pdf" in targets
+
+
+def test_find_broken_citations_empty_vault(tmp_path: Path):
+    vault = Vault.scan(tmp_path)
+    result = find_broken_citations(vault, tmp_path)
+    assert result.issues == []
