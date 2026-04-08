@@ -398,3 +398,78 @@ def maintenance_status(vault_path: Path) -> None:
         interval = f"{worker['interval_seconds']:.0f}s"
         last = worker["last_run"] or "never"
         click.echo(f"{worker['name']:<14} {interval:<12} {last}")
+
+
+@cli.group()
+def talk() -> None:
+    """Read, post, and list talk-page entries."""
+    pass
+
+
+@talk.command("read")
+@click.argument("page")
+@click.option(
+    "--vault", "vault_path", type=click.Path(exists=True, path_type=Path),
+    default=".", help="Path to vault",
+)
+def talk_read(page: str, vault_path: Path) -> None:
+    """Show all talk entries for a page."""
+    client = _get_client(vault_path)
+    resp = client.request({"type": "talk-read", "page": page})
+    if resp["status"] != "ok":
+        raise click.ClickException(resp.get("message", "Talk read failed"))
+
+    entries = resp["entries"]
+    if not entries:
+        click.echo(f"No entries on {page}.talk.")
+        return
+
+    click.echo(f"{len(entries)} entries on {page}.talk:\n")
+    for entry in entries:
+        click.echo(f"**{entry['timestamp']} — {entry['author']}**")
+        click.echo(entry["body"])
+        click.echo()
+
+
+@talk.command("post")
+@click.argument("page")
+@click.option("--message", "-m", required=True, help="Message body")
+@click.option("--author", default="@human", help="Author tag (defaults to @human)")
+@click.option(
+    "--vault", "vault_path", type=click.Path(exists=True, path_type=Path),
+    default=".", help="Path to vault",
+)
+def talk_post(page: str, message: str, author: str, vault_path: Path) -> None:
+    """Append a talk-page entry."""
+    client = _get_client(vault_path)
+    resp = client.request({
+        "type": "talk-append",
+        "page": page,
+        "author": author,
+        "body": message,
+    })
+    if resp["status"] != "ok":
+        raise click.ClickException(resp.get("message", "Talk post failed"))
+    click.echo(f"Posted to {page}.talk as {author}.")
+
+
+@talk.command("list")
+@click.option(
+    "--vault", "vault_path", type=click.Path(exists=True, path_type=Path),
+    default=".", help="Path to vault",
+)
+def talk_list(vault_path: Path) -> None:
+    """List all pages that have a talk sidecar."""
+    client = _get_client(vault_path)
+    resp = client.request({"type": "talk-list"})
+    if resp["status"] != "ok":
+        raise click.ClickException(resp.get("message", "Talk list failed"))
+
+    pages = resp["pages"]
+    if not pages:
+        click.echo("No talk pages.")
+        return
+
+    click.echo(f"{len(pages)} talk page(s):")
+    for page in pages:
+        click.echo(f"  {page}")
