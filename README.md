@@ -96,6 +96,20 @@ Four background workers run in the daemon's event loop, keeping the wiki honest 
 
 Findings flow into a shared issue queue (`llm-wiki issues list`) and append-only talk pages (`llm-wiki talk read <page>`). The agents may file issues, append to talk pages, update sidecar metadata, and insert invisible markers — but never edit human-authored markdown body content. "Human prose is sacred."
 
+## Philosophy
+
+The principles plans are derived from. See [PHILOSOPHY.md](PHILOSOPHY.md) for the full document.
+
+- **The wiki is a compounding artifact, not RAG.** Knowledge is compiled once and kept current. Cross-references accumulate. Synthesis improves over time.
+- **Plain markdown on a filesystem is the substrate.** Any tool can edit it — Obsidian, vim, an MCP-connected agent. Anything that requires the daemon to be the *only* path to the wiki is a step away from the substrate.
+- **Background vs supervised, not human vs machine.** Cron-driven workers stay locked out of body content. Anything a user starts intentionally — interactive agents, autonomous research workers — is supervised and trusted to write. The boundary is supervision, not species.
+- **Main pages are sourced; talk pages are everything pre-source.** Every claim in the wiki traces back to a primary source. Half-formed ideas, proposals, and contradictions live on talk pages. Brainstorming is a sibling, not a child.
+- **The framework absorbs boredom on behalf of both sides.** Humans and models both get lazy about hygiene. The daemon makes schema enforcement, indexing, journaling, and committing invisible so the agent's context stays focused on intent.
+- **The active agent is the writer; the daemon is the kernel.** The daemon doesn't decide what to write — it provides capabilities and runs continuous between-session work (indexing, refinement, verification, audits) that the agent can't replicate.
+- **Visibility creates load-bearing.** Talk pages and issues only become useful when the active agent can't ignore them. `wiki_read` folds them in by default.
+- **Git is the audit trail. Not a shadow log.** Every supervised mutation is a commit, attributed to its author via the trailer. No provenance frontmatter, no per-page attribution, no second source of truth.
+- **Soft tools beat hard rules when the agent is supervised.** Mechanical enforcement is reserved for unsupervised paths and contract violations. Tool descriptions and well-shaped errors do the rest.
+
 ## Architecture
 
 ```
@@ -176,7 +190,9 @@ raw/                   # Immutable source documents
 
 ## Documentation
 
+- **[PHILOSOPHY.md](PHILOSOPHY.md)** — The principles plans are derived from. Mostly immutable; amend with cause.
 - **[Design Spec](docs/superpowers/specs/2026-04-07-llm-wiki-tool-design.md)** — Full system design: daemon, traversal, agents, MCP interface, token budgets
+- **[Phase 6 Spec](docs/superpowers/specs/2026-04-08-phase6-mcp-server-design.md)** — MCP server design: write surface, sessions, journal/commit pipeline
 - **[Phase 1 Plan](docs/superpowers/plans/2026-04-07-phase1-core-library-cli.md)** — Implementation plan for core library + CLI
 - **[Phase 2 Plan](docs/superpowers/plans/2026-04-07-phase2-daemon.md)** — Implementation plan for daemon
 - **[Phase 4 Plan](docs/superpowers/plans/2026-04-07-phase4-ingest-pipeline.md)** — Implementation plan for ingest pipeline
