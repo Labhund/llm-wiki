@@ -43,6 +43,9 @@ llm-wiki issues resolve <issue-id> --vault /path/to/your/vault
 # Daemon management
 llm-wiki serve /path/to/your/vault   # start daemon in foreground
 llm-wiki stop --vault /path/to/your/vault
+
+# Inspect maintenance workers
+llm-wiki maintenance status --vault /path/to/your/vault
 ```
 
 State lives in `~/.llm-wiki/vaults/` — your vault directory stays clean. The daemon keeps the index in memory, watches for file changes (Obsidian edits), and re-indexes automatically.
@@ -114,6 +117,9 @@ src/llm_wiki/          # Core Python package
     watcher.py         # File watcher (mtime polling)
     llm_queue.py       # Concurrency-limited LLM request queue
     writer.py          # Per-page async write locks
+    scheduler.py       # IntervalScheduler + ScheduledWorker
+    dispatcher.py      # ChangeDispatcher (per-path debouncer)
+    snapshot.py        # PageSnapshotStore
     __main__.py        # Daemon entry point
   ingest/
     extractor.py       # Text extraction (PDF, DOCX, markdown, images via liteparse)
@@ -125,6 +131,7 @@ src/llm_wiki/          # Core Python package
   audit/
     checks.py          # Structural checks (orphans, broken links, markers, citations)
     auditor.py         # Auditor + AuditReport
+    compliance.py      # ComplianceReviewer (heuristic edit review)
   cli/
     main.py            # Click CLI (routes through daemon)
 docs/
@@ -145,6 +152,7 @@ raw/                   # Immutable source documents
 - **[Phase 4 Plan](docs/superpowers/plans/2026-04-07-phase4-ingest-pipeline.md)** — Implementation plan for ingest pipeline
 - **[Phase 5 Roadmap](docs/superpowers/plans/2026-04-08-phase5-maintenance-agents-roadmap.md)** — Master plan for maintenance agents (sub-phases 5a-5d)
 - **[Phase 5a Plan](docs/superpowers/plans/2026-04-08-phase5a-issue-queue-auditor-lint.md)** — Implementation plan for issue queue + auditor + lint
+- **[Phase 5b Plan](docs/superpowers/plans/2026-04-08-phase5b-scheduler-compliance.md)** — Implementation plan for scheduler + compliance review
 - [LLM Wiki - Knowledge Base Pattern](docs/LLM%20Wiki%20-%20Knowledge%20Base%20Pattern.md) — Original pattern description
 - [Multi-Turn Traversal Pattern](docs/Multi-Turn%20Traversal%20Pattern.md) — How agents navigate wiki
 - [Implementation Ideas](docs/implementation-ideas/README.md) — 9 optimization designs
@@ -158,7 +166,7 @@ raw/                   # Immutable source documents
 - [x] **Phase 3: Traversal Engine** — Multi-turn traversal with working memory, budget management, litellm
 - [x] **Phase 4: Ingest Pipeline** — liteparse, LLM concept extraction, idempotent page creation/updates
 - [x] **Phase 5a: Issue Queue + Auditor + Lint** — Structural integrity checks, persistent issue queue, `llm-wiki lint`
-- [ ] **Phase 5b: Background Workers + Compliance Review** — Async scheduler, debounced compliance pipeline
+- [x] **Phase 5b: Background Workers + Compliance Review** — Async scheduler, debounced compliance pipeline
 - [ ] **Phase 5c: Librarian** — Usage-driven manifest refinement, authority scoring
 - [ ] **Phase 5d: Adversary + Talk Pages** — Claim verification, async discussion sidecars
 - [ ] **Phase 6: MCP Server** — High-level + low-level tools for agent integration
