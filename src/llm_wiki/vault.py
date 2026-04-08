@@ -58,6 +58,7 @@ class Vault:
         md_files = [
             f for f in md_files
             if not any(p.startswith(".") for p in f.relative_to(root).parts)
+            and not f.name.endswith(".talk.md")
         ]
 
         # Parse pages

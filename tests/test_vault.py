@@ -184,3 +184,24 @@ def test_vault_scan_does_not_rewrite_overrides_when_nothing_pruned(sample_vault)
     assert mtime_after == mtime_before, (
         "Vault.scan rewrote manifest_overrides.json even though nothing was pruned"
     )
+
+
+def test_vault_scan_excludes_talk_pages(sample_vault):
+    """*.talk.md files are not indexed as wiki pages."""
+    from llm_wiki.vault import Vault
+
+    # Create a talk page sidecar in the fixture vault
+    talk = sample_vault / "bioinformatics" / "srna-embeddings.talk.md"
+    talk.write_text(
+        "---\npage: srna-embeddings\n---\n\n"
+        "**2026-04-08T10:00:00+00:00 — @adversary**\nVerified.\n"
+    )
+
+    vault = Vault.scan(sample_vault)
+    entries = vault.manifest_entries()
+
+    # The wiki page is still indexed
+    assert "srna-embeddings" in entries
+    # The talk page is NOT
+    assert "srna-embeddings.talk" not in entries
+    assert not any(name.endswith(".talk") for name in entries)
