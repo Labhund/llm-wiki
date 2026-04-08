@@ -84,6 +84,50 @@ async def test_recalc_authority_empty_vault(tmp_path: Path):
 
 
 @pytest.mark.asyncio
+async def test_recalc_authority_with_passed_usage_matches_self_loaded(sample_vault: Path):
+    """Passing a pre-aggregated usage dict yields the same overrides as loading logs internally."""
+    from llm_wiki.librarian.log_reader import aggregate_logs
+
+    state_dir = _state_dir_for(sample_vault)
+    state_dir.mkdir(parents=True, exist_ok=True)
+    _seed_log(state_dir, [
+        {
+            "query": "How does k-means work?",
+            "turns": [{"turn": 0, "pages_read": [
+                {"name": "srna-embeddings", "sections_read": [], "salient_points": "k=10", "relevance": 0.9}
+            ], "tokens_used": 0, "hypothesis": "", "remaining_questions": [], "next_candidates": []}],
+        },
+        {
+            "query": "What is clustering?",
+            "turns": [{"turn": 0, "pages_read": [
+                {"name": "clustering-metrics", "sections_read": [], "salient_points": "silhouette", "relevance": 0.7}
+            ], "tokens_used": 0, "hypothesis": "", "remaining_questions": [], "next_candidates": []}],
+        },
+    ])
+
+    overrides_path = state_dir / "manifest_overrides.json"
+
+    # Run 1: recalc_authority() loads logs internally (default path)
+    vault = Vault.scan(sample_vault)
+    agent = LibrarianAgent(vault, sample_vault, _StubLLM(), IssueQueue(sample_vault / "wiki"), WikiConfig())
+    await agent.recalc_authority()
+    baseline = ManifestOverrides.load(overrides_path)
+    baseline_scores = {name: baseline.get(name).authority for name in vault.manifest_entries()}
+
+    # Wipe the overrides file so the second run writes from scratch
+    overrides_path.unlink()
+
+    # Run 2: recalc_authority(usage=...) with the same logs, loaded once externally
+    log_path = state_dir / "traversal_logs" / "traversal_logs.jsonl"
+    usage = aggregate_logs(log_path)
+    await agent.recalc_authority(usage=usage)
+    passed = ManifestOverrides.load(overrides_path)
+    passed_scores = {name: passed.get(name).authority for name in vault.manifest_entries()}
+
+    assert passed_scores == baseline_scores
+
+
+@pytest.mark.asyncio
 async def test_refresh_page_updates_overrides_with_llm_output(sample_vault: Path):
     """refresh_page calls the LLM and writes the parsed tags/summary."""
     state_dir = _state_dir_for(sample_vault)

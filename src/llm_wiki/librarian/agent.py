@@ -88,12 +88,21 @@ class LibrarianAgent:
             if refreshed:
                 result.pages_refined.append(name)
 
-        # Recalculate authority for everything afterwards (uses the latest overrides)
-        result.authorities_updated = await self.recalc_authority()
+        # Recalculate authority for everything afterwards (uses the latest overrides).
+        # Reuse the already-aggregated usage so we don't scan the log file twice.
+        result.authorities_updated = await self.recalc_authority(usage=usage)
         return result
 
-    async def recalc_authority(self) -> int:
+    async def recalc_authority(
+        self, usage: dict[str, PageUsage] | None = None
+    ) -> int:
         """Recompute authority for every entry and persist via overrides.
+
+        Args:
+            usage: Optional pre-aggregated log usage. When ``None`` (the
+                default used by the ``authority_recalc`` scheduled worker),
+                this method loads logs itself. ``LibrarianAgent.run`` passes
+                its own aggregation to avoid re-scanning the log file.
 
         Returns:
             The number of authority values written.
@@ -102,7 +111,8 @@ class LibrarianAgent:
         if not entries:
             return 0
 
-        usage = aggregate_logs(self._log_path)
+        if usage is None:
+            usage = aggregate_logs(self._log_path)
         scores = compute_authority(entries, usage)
 
         overrides = ManifestOverrides.load(self._overrides_path)
