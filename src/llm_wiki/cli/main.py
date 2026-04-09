@@ -476,3 +476,44 @@ def talk_list(vault_path: Path) -> None:
     click.echo(f"{len(pages)} talk page(s):")
     for page in pages:
         click.echo(f"  {page}")
+
+
+@cli.command(name="mcp")
+@click.argument(
+    "vault_path",
+    type=click.Path(exists=True, path_type=Path),
+    required=False,
+)
+def mcp_command(vault_path: Path | None) -> None:
+    """Run the MCP server over stdio for this vault.
+
+    Vault resolution order:
+      1. LLM_WIKI_VAULT environment variable
+      2. The VAULT_PATH positional argument
+      3. Error out
+
+    Auto-starts the daemon if it isn't already running.
+    """
+    import asyncio
+    import os
+
+    env_vault = os.environ.get("LLM_WIKI_VAULT", "").strip()
+    resolved: Path | None = None
+    if env_vault:
+        resolved = Path(env_vault)
+    elif vault_path is not None:
+        resolved = vault_path
+
+    if resolved is None:
+        raise click.ClickException(
+            "No vault specified. Set LLM_WIKI_VAULT or pass a vault path: "
+            "llm-wiki mcp /path/to/vault"
+        )
+    if not resolved.exists():
+        raise click.ClickException(f"Vault path does not exist: {resolved}")
+
+    client = _get_client(resolved, auto_start=True)
+
+    from llm_wiki.mcp.server import MCPServer
+    server = MCPServer(vault_path=resolved, client=client)
+    asyncio.run(server.run_stdio())
