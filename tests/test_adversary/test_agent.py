@@ -241,3 +241,26 @@ async def test_adversary_talk_post_carries_critical_severity(tmp_path: Path, _cl
     entries = talk.load()
     assert len(entries) >= 1
     assert any(e.severity == "critical" for e in entries)
+
+
+@pytest.mark.asyncio
+async def test_adversary_failed_verdict_files_critical_issue(tmp_path: Path, _clean_state):
+    """A contradicted/unsupported verdict files an issue with severity='critical'."""
+    vault_root, _ = _build_vault_with_one_claim(tmp_path)
+    _clean_state.append(_state_dir_for(vault_root))
+    config = WikiConfig(maintenance=MaintenanceConfig(adversary_claims_per_run=5))
+
+    stub = _StubLLM(
+        '{"verdict": "contradicted", "confidence": 0.9, "explanation": "wrong"}'
+    )
+    vault = Vault.scan(vault_root)
+    queue = IssueQueue(vault_root / "wiki")
+    agent = AdversaryAgent(vault, vault_root, stub, queue, config)
+
+    result = await agent.run()
+
+    failed_issues = [i for i in queue.list(status="open") if i.type == "claim-failed"]
+    assert failed_issues, "expected at least one claim-failed issue"
+    for issue in failed_issues:
+        assert issue.severity == "critical", \
+            f"expected critical, got {issue.severity}"
