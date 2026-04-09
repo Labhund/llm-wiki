@@ -108,10 +108,12 @@ class TestLLMConfigLegacyCompat:
         backend = cfg.resolve()
         assert backend.model == "openai/local-instruct"
 
-    def test_no_backends_no_legacy_raises(self):
+    def test_no_backends_no_legacy_gets_default(self):
+        """Bare WikiConfig() gets a default 'local' backend so resolve() works."""
         cfg = LLMConfig()
-        with pytest.raises(ValueError):
-            cfg.resolve()
+        backend = cfg.resolve()
+        assert backend.model == "openai/local-instruct"
+        assert cfg.default_backend == "local"
 
 
 class TestWikiConfigLoadMigration:
@@ -154,9 +156,9 @@ class TestWikiConfigLoadMigration:
         assert cfg.llm.resolve("adversary").model == "openai/qwen35"
         assert cfg.llm.resolve().model == "openai/gemma"
 
-    def test_missing_file_still_works(self):
-        """No config file = default LLMConfig (no backends, resolve raises)."""
+    def test_missing_file_gets_default_backend(self):
+        """No config file = default LLMConfig with 'local' backend."""
         from llm_wiki.config import WikiConfig
         cfg = WikiConfig.load(Path("/nonexistent/config.yaml"))
-        with pytest.raises(ValueError):
-            cfg.llm.resolve()
+        backend = cfg.llm.resolve()
+        assert backend.model == "openai/local-instruct"

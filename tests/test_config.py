@@ -8,11 +8,11 @@ from llm_wiki.config import WikiConfig
 
 def test_default_config():
     config = WikiConfig()
-    # New LLMConfig has no backends by default, so resolve() raises
-    with pytest.raises(ValueError):
-        config.llm.resolve()
+    # Bare WikiConfig() gets a default 'local' backend
+    backend = config.llm.resolve()
+    assert backend.model == "openai/local-instruct"
     assert config.llm.embeddings == "openai/text-embedding-3-small"
-    assert config.llm.default_backend == "fast"
+    assert config.llm.default_backend == "local"
     assert config.search.backend == "tantivy"
     assert config.budgets.default_query == 16000
     assert config.budgets.hard_ceiling_pct == 0.8
@@ -40,16 +40,16 @@ def test_load_from_yaml(tmp_path: Path):
 
 def test_load_missing_file():
     config = WikiConfig.load(Path("/nonexistent/config.yaml"))
-    with pytest.raises(ValueError):
-        config.llm.resolve()
+    backend = config.llm.resolve()
+    assert backend.model == "openai/local-instruct"
 
 
 def test_load_empty_file(tmp_path: Path):
     config_file = tmp_path / "config.yaml"
     config_file.write_text("")
     config = WikiConfig.load(config_file)
-    with pytest.raises(ValueError):
-        config.llm.resolve()
+    backend = config.llm.resolve()
+    assert backend.model == "openai/local-instruct"
 
 
 def test_maintenance_config_has_talk_summary_defaults():

@@ -81,11 +81,12 @@ class DaemonServer:
         self._write_coordinator = WriteCoordinator()
         self._session_registry = SessionRegistry(self._config.sessions)
 
+        backend = self._config.llm.resolve("commit")
         commit_llm = LLMClient(
             self._llm_queue,
-            model=self._config.llm.default,
-            api_base=self._config.llm.api_base,
-            api_key=self._config.llm.api_key,
+            model=backend.model,
+            api_base=backend.api_base,
+            api_key=backend.api_key,
         )
         self._commit_service = CommitService(
             vault_root=self._vault_root,
@@ -252,11 +253,12 @@ class DaemonServer:
             from llm_wiki.traverse.llm_client import LLMClient
             wiki_dir = self._vault_root / self._config.vault.wiki_dir.rstrip("/")
             queue = IssueQueue(wiki_dir)
+            backend = self._config.llm.resolve("librarian")
             llm = LLMClient(
                 self._llm_queue,
-                model=self._config.llm.default,
-                api_base=self._config.llm.api_base,
-                api_key=self._config.llm.api_key,
+                model=backend.model,
+                api_base=backend.api_base,
+                api_key=backend.api_key,
             )
             agent = LibrarianAgent(self._vault, self._vault_root, llm, queue, self._config)
             result = await agent.run()
@@ -271,11 +273,12 @@ class DaemonServer:
             from llm_wiki.traverse.llm_client import LLMClient
             wiki_dir = self._vault_root / self._config.vault.wiki_dir.rstrip("/")
             queue = IssueQueue(wiki_dir)
+            backend = self._config.llm.resolve("librarian")
             llm = LLMClient(
                 self._llm_queue,
-                model=self._config.llm.default,
-                api_base=self._config.llm.api_base,
-                api_key=self._config.llm.api_key,
+                model=backend.model,
+                api_base=backend.api_base,
+                api_key=backend.api_key,
             )
             agent = LibrarianAgent(self._vault, self._vault_root, llm, queue, self._config)
             count = await agent.recalc_authority()
@@ -287,11 +290,12 @@ class DaemonServer:
             from llm_wiki.traverse.llm_client import LLMClient
             wiki_dir = self._vault_root / self._config.vault.wiki_dir.rstrip("/")
             queue = IssueQueue(wiki_dir)
+            backend = self._config.llm.resolve("adversary")
             llm = LLMClient(
                 self._llm_queue,
-                model=self._config.llm.default,
-                api_base=self._config.llm.api_base,
-                api_key=self._config.llm.api_key,
+                model=backend.model,
+                api_base=backend.api_base,
+                api_key=backend.api_key,
             )
             agent = AdversaryAgent(self._vault, self._vault_root, llm, queue, self._config)
             result = await agent.run()
@@ -307,11 +311,12 @@ class DaemonServer:
             from llm_wiki.traverse.llm_client import LLMClient
             wiki_dir = self._vault_root / self._config.vault.wiki_dir.rstrip("/")
             queue = IssueQueue(wiki_dir)
+            backend = self._config.llm.resolve("talk_summary")
             llm = LLMClient(
                 self._llm_queue,
-                model=self._config.llm.default,
-                api_base=self._config.llm.api_base,
-                api_key=self._config.llm.api_key,
+                model=backend.model,
+                api_base=backend.api_base,
+                api_key=backend.api_key,
             )
             agent = LibrarianAgent(self._vault, self._vault_root, llm, queue, self._config)
             count = await agent.refresh_talk_summaries()
@@ -860,11 +865,12 @@ class DaemonServer:
         from llm_wiki.traverse.engine import TraversalEngine
         from llm_wiki.traverse.llm_client import LLMClient
 
+        backend = self._config.llm.resolve("query")
         llm = LLMClient(
             self._llm_queue,
-            model=self._config.llm.default,
-            api_base=self._config.llm.api_base,
-            api_key=self._config.llm.api_key,
+            model=backend.model,
+            api_base=backend.api_base,
+            api_key=backend.api_key,
         )
         log_dir = _state_dir_for(self._vault_root) / "traversal_logs"
         engine = TraversalEngine(
@@ -901,11 +907,12 @@ class DaemonServer:
         connection_id = request["connection_id"]
         source_path = Path(request["source_path"])
         dry_run = request.get("dry_run", False)
+        backend = self._config.llm.resolve("ingest")
         llm = LLMClient(
             self._llm_queue,
-            model=self._config.llm.default,
-            api_base=self._config.llm.api_base,
-            api_key=self._config.llm.api_key,
+            model=backend.model,
+            api_base=backend.api_base,
+            api_key=backend.api_key,
         )
         agent = IngestAgent(llm, self._config)
         try:

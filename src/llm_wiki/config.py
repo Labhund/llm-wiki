@@ -34,7 +34,7 @@ class LLMBackend:
 class LLMConfig:
     # New-style: named backend profiles
     backends: dict[str, LLMBackend] = field(default_factory=dict)
-    default_backend: str = "fast"  # backend name, not model string
+    default_backend: str = "local"  # backend name, not model string
 
     # Legacy fields — kept for backward compat, used only when backends is empty
     _default_model: Optional[str] = field(default=None, repr=False)
@@ -54,7 +54,10 @@ class LLMConfig:
 
     def __post_init__(self):
         """Build LLMBackend objects from raw dicts (YAML loads everything as dicts).
-        If backends is empty and legacy fields are present, synthesize a single backend."""
+        If backends is empty and legacy fields are present, synthesize a single backend.
+        If backends is still empty after that, provide a default 'local' backend so
+        resolve() never raises on a bare WikiConfig() — tests and unconfigured vaults
+        get a no-op backend matching the old openai/local-instruct default."""
         if self.backends:
             self.backends = {
                 name: LLMBackend.from_dict(v) if isinstance(v, dict) else v
@@ -69,6 +72,9 @@ class LLMConfig:
                 )
             }
             self.default_backend = "default"
+        else:
+            # Bare WikiConfig() — give it a default backend so resolve() works
+            self.backends["local"] = LLMBackend(model="openai/local-instruct")
 
     def resolve(self, role: Optional[str] = None) -> LLMBackend:
         """Resolve a role to its backend config.
