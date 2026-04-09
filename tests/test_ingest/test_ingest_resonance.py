@@ -58,7 +58,8 @@ async def test_resonance_agent_called_when_enabled(tmp_path: Path):
     config = WikiConfig()
     config.maintenance.resonance_matching = True
 
-    with patch("llm_wiki.resonance.agent.ResonanceAgent") as MockResonanceAgent:
+    with patch("llm_wiki.resonance.agent.ResonanceAgent") as MockResonanceAgent, \
+         patch("llm_wiki.vault.Vault.scan", return_value=MagicMock()) as mock_scan:
         mock_instance = MagicMock()
         mock_instance.run_for_pages = AsyncMock(return_value=MagicMock(resonance_posts=[]))
         MockResonanceAgent.return_value = mock_instance
@@ -69,6 +70,7 @@ async def test_resonance_agent_called_when_enabled(tmp_path: Path):
     assert result.pages_created == ["pca"]
     MockResonanceAgent.assert_called_once()
     mock_instance.run_for_pages.assert_awaited_once_with(["pca"])
+    mock_scan.assert_called_once_with(tmp_path, config)
 
 
 @pytest.mark.asyncio

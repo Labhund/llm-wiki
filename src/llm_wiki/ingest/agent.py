@@ -185,8 +185,10 @@ class IngestAgent:
                     result.pages_created.append(concept.name)
 
         # Resonance matching post-step (gated by config)
+        # pages_created only — resonance seeds new pages, not updates to existing ones
         if self._config.maintenance.resonance_matching and result.pages_created:
             try:
+                # Lazy import: keeps resonance module optional; a broken import never aborts ingest
                 from llm_wiki.resonance.agent import ResonanceAgent
                 from llm_wiki.vault import Vault
                 vault = Vault.scan(vault_root, self._config)
