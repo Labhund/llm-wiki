@@ -503,7 +503,7 @@ class DaemonServer:
         Talk counts come from walking every *.talk.md and computing the
         open set per page. Resolved entries are excluded.
         """
-        from llm_wiki.talk.page import TalkPage, compute_open_set
+        from llm_wiki.talk.page import compute_open_set, iter_talk_pages
 
         wiki_dir = self._vault_root / self._config.vault.wiki_dir.rstrip("/")
 
@@ -526,26 +526,20 @@ class DaemonServer:
             page_entry["issues"][sev] += 1
 
         # Talk pages — same shape, swap vocabularies
-        if wiki_dir.exists():
-            for talk_path in sorted(wiki_dir.rglob("*.talk.md")):
-                rel = talk_path.relative_to(wiki_dir)
-                if any(p.startswith(".") for p in rel.parts):
-                    continue
-                stem = talk_path.stem
-                page_name = stem[: -len(".talk")] if stem.endswith(".talk") else stem
-                entries = TalkPage(talk_path).load()
-                open_entries = compute_open_set(entries)
-                for e in open_entries:
-                    sev = _clamp_severity(e.severity, _TALK_SEVERITIES, "suggestion")
-                    totals_talk[sev] += 1
-                    page_entry = by_page.setdefault(
-                        page_name,
-                        {
-                            "issues": _empty_severity_counts(_ISSUE_SEVERITIES),
-                            "talk": _empty_severity_counts(_TALK_SEVERITIES),
-                        },
-                    )
-                    page_entry["talk"][sev] += 1
+        for page_name, talk in iter_talk_pages(wiki_dir):
+            entries = talk.load()
+            open_entries = compute_open_set(entries)
+            for e in open_entries:
+                sev = _clamp_severity(e.severity, _TALK_SEVERITIES, "suggestion")
+                totals_talk[sev] += 1
+                page_entry = by_page.setdefault(
+                    page_name,
+                    {
+                        "issues": _empty_severity_counts(_ISSUE_SEVERITIES),
+                        "talk": _empty_severity_counts(_TALK_SEVERITIES),
+                    },
+                )
+                page_entry["talk"][sev] += 1
 
         return {
             "pages_needing_attention": sorted(by_page.keys()),
@@ -642,17 +636,9 @@ class DaemonServer:
         return {"status": "ok"}
 
     def _handle_talk_list(self) -> dict:
+        from llm_wiki.talk.page import iter_talk_pages
         wiki_dir = self._vault_root / self._config.vault.wiki_dir.rstrip("/")
-        pages: list[str] = []
-        if wiki_dir.exists():
-            for talk_file in sorted(wiki_dir.rglob("*.talk.md")):
-                # Skip files inside hidden directories
-                rel = talk_file.relative_to(wiki_dir)
-                if any(p.startswith(".") for p in rel.parts):
-                    continue
-                stem = talk_file.stem  # foo.talk
-                if stem.endswith(".talk"):
-                    pages.append(stem[: -len(".talk")])
+        pages = [name for name, _ in iter_talk_pages(wiki_dir)]
         return {"status": "ok", "pages": pages}
 
     async def _handle_query(self, request: dict) -> dict:

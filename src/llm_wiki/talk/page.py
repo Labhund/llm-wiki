@@ -3,6 +3,7 @@ from __future__ import annotations
 import re
 from dataclasses import dataclass, field
 from pathlib import Path
+from typing import Iterator
 
 import yaml
 
@@ -219,3 +220,26 @@ class TalkPage:
         except ValueError:
             return text
         return text[end + 4:].lstrip()
+
+
+def iter_talk_pages(wiki_dir: Path) -> Iterator[tuple[str, "TalkPage"]]:
+    """Yield (page_name, TalkPage) for every talk file in `wiki_dir`.
+
+    Walks `wiki_dir` recursively, sorted for determinism. Skips files
+    inside hidden directories (e.g. `.issues/`). Returns immediately if
+    `wiki_dir` does not exist.
+
+    Page name is derived from the talk file's stem with the trailing
+    `.talk` removed (so `bioinformatics/srna.talk.md` yields `srna`).
+    P6A-M3 carryover — extracted because three call sites duplicated
+    this exact walk.
+    """
+    if not wiki_dir.exists():
+        return
+    for talk_path in sorted(wiki_dir.rglob("*.talk.md")):
+        rel = talk_path.relative_to(wiki_dir)
+        if any(p.startswith(".") for p in rel.parts):
+            continue
+        stem = talk_path.stem  # foo.talk
+        page_name = stem[: -len(".talk")] if stem.endswith(".talk") else stem
+        yield page_name, TalkPage(talk_path)

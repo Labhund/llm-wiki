@@ -155,7 +155,7 @@ class LibrarianAgent:
             TalkSummaryStore,
             summarize_open_entries,
         )
-        from llm_wiki.talk.page import TalkPage, compute_open_set
+        from llm_wiki.talk.page import compute_open_set, iter_talk_pages
 
         wiki_dir = self._vault_root / self._config.vault.wiki_dir.rstrip("/")
         if not wiki_dir.exists():
@@ -168,20 +168,11 @@ class LibrarianAgent:
         refreshed = 0
         live_page_names: set[str] = set()
 
-        for talk_path in sorted(wiki_dir.rglob("*.talk.md")):
-            # Skip files inside hidden directories (e.g. .issues)
-            rel = talk_path.relative_to(wiki_dir)
-            if any(p.startswith(".") for p in rel.parts):
-                continue
-
-            # Page slug derives from the talk file's stem.
+        for page_name, talk in iter_talk_pages(wiki_dir):
             # Track every live talk file (even ones that won't be summarized
             # this round) so the prune step at the bottom doesn't drop them.
-            stem = talk_path.stem
-            page_name = stem[: -len(".talk")] if stem.endswith(".talk") else stem
             live_page_names.add(page_name)
 
-            talk = TalkPage(talk_path)
             entries = talk.load()
             if not entries:
                 continue

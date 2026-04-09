@@ -370,3 +370,52 @@ def test_compute_open_set_self_closure_is_ignored():
     ]
     open_set = compute_open_set(entries)
     assert [e.index for e in open_set] == [1, 2, 3]
+
+
+def test_iter_talk_pages_walks_recursive_and_skips_hidden(tmp_path):
+    """P6A-M3: iter_talk_pages walks recursively, sorted, skipping hidden dirs."""
+    from llm_wiki.talk.page import TalkPage, iter_talk_pages
+
+    wiki = tmp_path / "wiki"
+    wiki.mkdir()
+
+    # Top-level talk file
+    (wiki / "alpha.md").write_text("---\ntitle: A\n---\n")
+    (wiki / "alpha.talk.md").write_text("---\npage: alpha\n---\n")
+
+    # Nested talk file under a cluster directory
+    (wiki / "bio").mkdir()
+    (wiki / "bio" / "beta.md").write_text("---\ntitle: B\n---\n")
+    (wiki / "bio" / "beta.talk.md").write_text("---\npage: beta\n---\n")
+
+    # Hidden dir — should be skipped
+    (wiki / ".issues").mkdir()
+    (wiki / ".issues" / "ghost.talk.md").write_text("---\npage: ghost\n---\n")
+
+    seen = list(iter_talk_pages(wiki))
+    names = [name for name, _ in seen]
+    # alpha.talk.md sorts before bio/beta.talk.md because 'a' < 'b' on the
+    # full path.
+    assert names == ["alpha", "beta"]
+    assert "ghost" not in names
+
+    # Each yields a TalkPage we can load
+    for _, tp in seen:
+        assert isinstance(tp, TalkPage)
+
+
+def test_iter_talk_pages_missing_dir_yields_nothing(tmp_path):
+    from llm_wiki.talk.page import iter_talk_pages
+    assert list(iter_talk_pages(tmp_path / "does_not_exist")) == []
+
+
+def test_iter_talk_pages_strips_talk_suffix_from_stem(tmp_path):
+    """A file foo.talk.md should yield page_name='foo', not 'foo.talk'."""
+    from llm_wiki.talk.page import iter_talk_pages
+
+    wiki = tmp_path / "wiki"
+    wiki.mkdir()
+    (wiki / "myslug.talk.md").write_text("---\npage: myslug\n---\n")
+
+    seen = list(iter_talk_pages(wiki))
+    assert [name for name, _ in seen] == ["myslug"]
