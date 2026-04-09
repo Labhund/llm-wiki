@@ -261,6 +261,145 @@ class PageWriteService:
             details={"diff_summary": diff_summary},
         )
 
+    async def append(
+        self,
+        *,
+        page: str,
+        section_heading: str,
+        body: str,
+        citations: list[str],
+        author: str,
+        connection_id: str,
+        after_heading: str | None = None,
+        intent: str | None = None,
+    ) -> WriteResult:
+        """Append a new section to an existing page."""
+        if not author:
+            return WriteResult(status="error", code="missing-author")
+        if (
+            self._config.write.require_citations_on_append
+            and not citations
+        ):
+            return WriteResult(
+                status="error",
+                code="missing-citations",
+                details={
+                    "message": (
+                        "wiki_append requires at least one citation. Post to "
+                        "the talk page instead if you cannot cite a source."
+                    ),
+                },
+            )
+
+        page_path = self._wiki_dir / f"{page}.md"
+        if not page_path.exists():
+            return WriteResult(
+                status="error",
+                code="page-not-found",
+                details={"page": page},
+            )
+        journal_path_rel = str(page_path.relative_to(self._vault_root))
+
+        async with self._coordinator.lock_for(page):
+            current = page_path.read_text(encoding="utf-8")
+            lines = current.splitlines(keepends=True)
+
+            section_slug = _slugify(section_heading)
+            new_block = (
+                f"\n%% section: {section_slug} %%\n"
+                f"## {section_heading}\n\n"
+                f"{body.strip()}\n"
+            )
+            warnings: list[dict] = []
+
+            if after_heading is None:
+                # Append at end of file
+                new_lines = lines + [new_block]
+            else:
+                # Find heading line(s) — exact match only
+                heading_indices = self._find_heading_lines(lines, after_heading)
+                if not heading_indices:
+                    available = self._list_headings(lines)
+                    return WriteResult(
+                        status="error",
+                        code="heading-not-found",
+                        details={
+                            "after_heading": after_heading,
+                            "available_headings": available,
+                        },
+                    )
+                if len(heading_indices) > 1:
+                    warnings.append({
+                        "code": "heading-multiple-matches",
+                        "count": len(heading_indices),
+                        "used_line": heading_indices[0] + 1,
+                        "message": (
+                            f"after_heading={after_heading!r} matched "
+                            f"{len(heading_indices)} headings; using the first."
+                        ),
+                    })
+                # Insert immediately after the matched section closes
+                insert_at = self._end_of_section(lines, heading_indices[0])
+                new_lines = lines[:insert_at] + [new_block] + lines[insert_at:]
+
+            new_content = "".join(new_lines)
+            page_path.write_text(new_content, encoding="utf-8")
+            content_hash = _content_hash(new_content)
+
+            session = self._registry.get_or_open(
+                author, connection_id, state_dir=self._state_dir,
+            )
+            entry = JournalEntry(
+                ts=_now_iso(),
+                tool="wiki_append",
+                path=journal_path_rel,
+                author=author,
+                intent=intent,
+                summary=f"+section {section_slug}",
+                content_hash_after=content_hash,
+            )
+            append_journal_entry(session, entry)
+
+        return WriteResult(
+            status="ok",
+            page_path=journal_path_rel,
+            journal_id=str(session.write_count),
+            session_id=session.id,
+            content_hash=content_hash,
+            warnings=warnings,
+        )
+
+    @staticmethod
+    def _find_heading_lines(lines: list[str], heading_text: str) -> list[int]:
+        """Return line indices where `## <heading_text>` appears (exact match)."""
+        target = f"## {heading_text}"
+        return [
+            i for i, line in enumerate(lines)
+            if line.rstrip("\n").rstrip("\r").strip() == target
+        ]
+
+    @staticmethod
+    def _list_headings(lines: list[str]) -> list[str]:
+        out: list[str] = []
+        for line in lines:
+            stripped = line.rstrip("\n").rstrip("\r").strip()
+            if stripped.startswith("## ") and not stripped.startswith("### "):
+                out.append(stripped[3:])
+        return out
+
+    @staticmethod
+    def _end_of_section(lines: list[str], heading_idx: int) -> int:
+        """Return the line index where the section starting at `heading_idx` ends.
+
+        The section ends at the next `##` or `#` heading at the same or shallower
+        level, or at end of file.
+        """
+        for i in range(heading_idx + 1, len(lines)):
+            stripped = lines[i].lstrip()
+            if stripped.startswith("## ") or stripped.startswith("# "):
+                return i
+        return len(lines)
+
     def _build_page_content(
         self,
         title: str,

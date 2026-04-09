@@ -288,3 +288,131 @@ async def test_update_missing_page_returns_error(tmp_path):
     )
     assert result.status == "error"
     assert result.code == "page-not-found"
+
+
+@pytest.mark.asyncio
+async def test_append_at_end_of_file_no_after_heading(tmp_path):
+    service, _ = _make_service(tmp_path)
+    await service.create(
+        title="Foo",
+        body="## Existing\n\nbody.\n",
+        citations=["raw/a.pdf"],
+        author="alice", connection_id="conn-1",
+    )
+    service._vault = Vault.scan(tmp_path)
+
+    result = await service.append(
+        page="foo",
+        section_heading="New Section",
+        body="The new content [[raw/b.pdf]].",
+        citations=["raw/b.pdf"],
+        author="alice", connection_id="conn-1",
+    )
+    assert result.status == "ok"
+    content = (tmp_path / "wiki" / "foo.md").read_text()
+    assert "## New Section" in content
+    assert "%% section: new-section %%" in content
+    assert content.find("## Existing") < content.find("## New Section")
+
+
+@pytest.mark.asyncio
+async def test_append_after_specific_heading(tmp_path):
+    service, _ = _make_service(tmp_path)
+    await service.create(
+        title="Foo",
+        body=(
+            "## Methods\n\nA method.\n\n"
+            "## Results\n\nResults.\n"
+        ),
+        citations=["raw/a.pdf"],
+        author="alice", connection_id="conn-1",
+    )
+    service._vault = Vault.scan(tmp_path)
+
+    result = await service.append(
+        page="foo",
+        section_heading="Discussion",
+        body="Some discussion [[raw/b.pdf]].",
+        citations=["raw/b.pdf"],
+        after_heading="Methods",
+        author="alice", connection_id="conn-1",
+    )
+    assert result.status == "ok"
+    content = (tmp_path / "wiki" / "foo.md").read_text()
+    methods_idx = content.find("## Methods")
+    discussion_idx = content.find("## Discussion")
+    results_idx = content.find("## Results")
+    # Discussion lands between Methods and Results
+    assert methods_idx < discussion_idx < results_idx
+
+
+@pytest.mark.asyncio
+async def test_append_heading_not_found_returns_error(tmp_path):
+    service, _ = _make_service(tmp_path)
+    await service.create(
+        title="Foo",
+        body="## Methods\n\nA method.\n",
+        citations=["raw/a.pdf"],
+        author="alice", connection_id="conn-1",
+    )
+    service._vault = Vault.scan(tmp_path)
+
+    result = await service.append(
+        page="foo",
+        section_heading="X",
+        body="x [[raw/b.pdf]]",
+        citations=["raw/b.pdf"],
+        after_heading="Nonexistent",
+        author="alice", connection_id="conn-1",
+    )
+    assert result.status == "error"
+    assert result.code == "heading-not-found"
+    assert "Methods" in result.details["available_headings"]
+
+
+@pytest.mark.asyncio
+async def test_append_heading_multiple_matches_warns(tmp_path):
+    service, _ = _make_service(tmp_path)
+    await service.create(
+        title="Foo",
+        body=(
+            "## Methods\n\nFirst.\n\n"
+            "## Results\n\nResults.\n\n"
+            "## Methods\n\nSecond.\n"
+        ),
+        citations=["raw/a.pdf"],
+        author="alice", connection_id="conn-1",
+    )
+    service._vault = Vault.scan(tmp_path)
+
+    result = await service.append(
+        page="foo",
+        section_heading="X",
+        body="x [[raw/b.pdf]]",
+        citations=["raw/b.pdf"],
+        after_heading="Methods",
+        author="alice", connection_id="conn-1",
+    )
+    assert result.status == "ok"
+    assert any(w["code"] == "heading-multiple-matches" for w in result.warnings)
+
+
+@pytest.mark.asyncio
+async def test_append_refuses_empty_citations(tmp_path):
+    service, _ = _make_service(tmp_path)
+    await service.create(
+        title="Foo", body="## X\n\nx.\n",
+        citations=["raw/a.pdf"],
+        author="alice", connection_id="conn-1",
+    )
+    service._vault = Vault.scan(tmp_path)
+
+    result = await service.append(
+        page="foo",
+        section_heading="Y",
+        body="y",
+        citations=[],
+        author="alice", connection_id="conn-1",
+    )
+    assert result.status == "error"
+    assert result.code == "missing-citations"
