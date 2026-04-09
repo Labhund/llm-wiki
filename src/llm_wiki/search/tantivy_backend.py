@@ -74,6 +74,11 @@ class TantivyBackend:
         self._index.reload()
         return self._index.searcher().num_docs
 
+    # Default cap on bytes read per page during snippet extraction.
+    # P6A-M2: prevents O(file_size) reads on multi-MB pages. 64 KB is
+    # comfortably more than any human-curated wiki page and still cheap.
+    SNIPPET_READ_MAX_BYTES = 64 * 1024
+
     def search_with_snippets(
         self,
         query: str,
@@ -86,7 +91,9 @@ class TantivyBackend:
         for each result reads the page file from `vault_root` and finds the
         first few lines that contain any term. The `before` field is the
         nearest preceding `^##` or `^###` heading; `after` is the next
-        non-blank line. Snippet count per result is capped at 3.
+        non-blank line. Snippet count per result is capped at 3, and per
+        the `max_bytes` cap on each page read (default 64 KB) we don't pay
+        O(file_size) per query for adversarially large pages.
         """
         from llm_wiki.search.backend import SnippetMatch, SnippetSearchResult
 
@@ -117,9 +124,19 @@ class TantivyBackend:
         terms: list[str],
         vault_root: Path,
         max_matches: int,
+        max_bytes: int | None = None,
     ) -> list:
-        """Read the page file and find lines containing any of the query terms."""
+        """Read the page file and find lines containing any of the query terms.
+
+        `max_bytes` caps the number of bytes read from each page (default
+        ``SNIPPET_READ_MAX_BYTES``, 64 KB). Lines beyond the cap are not
+        searched. Setting `max_bytes=0` is treated as "use the default";
+        pass an explicit positive integer to override.
+        """
         from llm_wiki.search.backend import SnippetMatch
+
+        if max_bytes is None or max_bytes <= 0:
+            max_bytes = self.SNIPPET_READ_MAX_BYTES
 
         # Find the page file by name (may be nested under cluster directories)
         page_file = None
@@ -135,7 +152,8 @@ class TantivyBackend:
             return []
 
         try:
-            text = page_file.read_text(encoding="utf-8")
+            with page_file.open(encoding="utf-8", errors="replace") as f:
+                text = f.read(max_bytes)
         except OSError:
             return []
         lines = text.splitlines()
