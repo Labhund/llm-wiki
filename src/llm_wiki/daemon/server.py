@@ -543,7 +543,10 @@ class DaemonServer:
         from llm_wiki.ingest.source_meta import read_frontmatter, write_frontmatter
 
         old_status = read_frontmatter(path).get("reading_status", "unknown")
-        write_frontmatter(path, {"reading_status": status})
+        try:
+            write_frontmatter(path, {"reading_status": status})
+        except ValueError as e:
+            return {"status": "error", "message": str(e)}
 
         # Direct git commit — outside the session/journal pipeline
         rel_path = str(path.relative_to(self._vault_root))
