@@ -83,6 +83,18 @@ def cli() -> None:
 
 
 @cli.command()
+@click.argument(
+    "vault_path",
+    type=click.Path(path_type=Path),
+    default=_default_vault_path,
+)
+def configure(vault_path: Path) -> None:
+    """Interactive wizard — configure LLM backends and API keys."""
+    from llm_wiki.cli.configure import run_wizard
+    run_wizard(vault_path)
+
+
+@cli.command()
 @click.argument("vault_path", type=click.Path(exists=True, path_type=Path))
 def init(vault_path: Path) -> None:
     """Scan and index a vault directory (no daemon needed)."""
