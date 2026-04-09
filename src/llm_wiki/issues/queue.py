@@ -5,11 +5,10 @@ import hashlib
 import re
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Literal
 
 import yaml
 
-Severity = Literal["critical", "moderate", "minor", "suggestion", "new_connection"]
+from llm_wiki.severity import Severity
 
 # Issue ids are filesystem-sensitive: they're concatenated with `.md` and joined
 # to the `.issues/` directory without further sanitization. Lock the shape to

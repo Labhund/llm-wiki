@@ -6,6 +6,8 @@ from pathlib import Path
 
 import yaml
 
+from llm_wiki.severity import Severity
+
 
 # Matches an entry header line: **<iso-timestamp> — @<author>**
 # with optional HTML-comment metadata: <!-- severity:critical, resolves:[1,2] -->
@@ -109,7 +111,7 @@ class TalkEntry:
     timestamp: str
     author: str
     body: str
-    severity: str = "suggestion"
+    severity: Severity = "suggestion"
     resolves: list[int] = field(default_factory=list)
 
 
