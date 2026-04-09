@@ -23,7 +23,7 @@ These apply to every operation.
 
 **Talk pages absorb everything uncitable.** No source → `wiki_talk_post`, not `wiki_create`. Main pages require citations. This is a first-class path, not a workaround.
 
-**Sessions are work units.** All writes in a coherent task share one session. Sessions open implicitly on the first write call — no explicit open needed. Close explicitly with `wiki_session_close` — don't rely on inactivity timeout. Watch for `session-cap-approaching` (emitted at write 18; hard cap at 30).
+**Sessions are work units.** All writes in a coherent task share one session. Sessions open implicitly on the first write call — no explicit open needed. Close explicitly with `wiki_session_close` — don't rely on inactivity timeout. Watch for `session-cap-approaching` (emitted at write 18; hard cap at 30) — wrap up the current work unit or plan to continue in a new session.
 
 **Inline maintenance signals are load-bearing.** `wiki_read` folds in issue/talk digests. Critical and moderate signals are findings. Writing over a page with open critical issues makes the wiki worse.
 
