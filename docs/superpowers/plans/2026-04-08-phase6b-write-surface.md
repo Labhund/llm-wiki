@@ -9,6 +9,8 @@
 > - The `talk_summary` worker registration (6a Task 10) — Phase 6b's AST hard-rule test must explicitly *exclude* this worker from the unsupervised-write check (it doesn't write body content).
 >
 > Note: Phase 6a's `phase6a_daemon_server` fixture uses `WikiConfig(vault=VaultConfig(wiki_dir=""))` to align with the `sample_vault` layout (which puts pages directly under `tmp_path`). Phase 6b does NOT inherit this pattern — it creates pages from scratch in `tmp_path/wiki/` and uses the production-default `WikiConfig()`. This is what makes the journal-path code path correct: every supervised write derives `journal_path_rel` from `page_path.relative_to(vault_root)`, which works for any `wiki_dir` (default `wiki/`, flat `""`, or custom).
+>
+> **Phase 6a carryover:** the rollup review of Phase 6a flagged four Important and four Minor items that were intentionally deferred so 6a could ship. They are documented in detail in the **"Phase 6a carryover"** section immediately below the cross-cutting reminders. Address them as an inline cleanup pass during Task 1 — the type/layering items in particular should land before the new write routes add more call sites.
 
 **Goal:** Add the daemon's write surface — three new routes (`page-create`, `page-update`, `page-append`) plus a session-management route (`session-close`) — backed by a session/journal/commit pipeline that captures every supervised mutation as a git commit attributed to the calling agent. Add a V4A patch parser/applier so `page-update` can take diff-style patches. Add an AST hard-rule test that mechanically prevents background workers from reaching the new write routes. Make `wiki_ingest` session-aware so its internal page writes flow through the same routes (and the same commit pipeline) as any other supervised write.
 
@@ -79,6 +81,95 @@ tests/
 - Sessions key on `(author, connection_id)` by default. **The `connection_id` is supplied explicitly by the calling client in every write/session-close request payload — the daemon does not generate it.** For MCP clients (Phase 6c), the MCP server generates one UUID at stdio-session startup and passes it in every `client.request({...})` call, so all tool calls from one MCP session group into one daemon session. For CLI ingest, the CLI generates one UUID per invocation. The daemon's per-Unix-socket UUID is **not** used for session keying — the daemon's protocol is one-message-per-Unix-socket-connection, so a per-connection UUID would create one session per write, defeating the purpose of session grouping. Write/session-close handlers return `missing-connection-id` if the field is absent. With `sessions.namespace_by_connection: false` (advanced), sessions key on `author` alone and the supplied `connection_id` is ignored for keying purposes.
 - All summarizer calls use `priority="maintenance"`. The commit ALWAYS happens — if the LLM is unreachable or fails, the deterministic fallback message is used.
 - Journal writes are `os.fsync`'d. Journal append happens BEFORE the daemon's response to the agent — the daemon never returns `{"status": "ok"}` for a write whose journal entry wasn't durably on disk.
+
+---
+
+## Phase 6a carryover
+
+These items are not part of the original 20 Phase 6b tasks. They are deferred findings from the rollup review of `feature/phase6a-visibility-severity` (post-merge to `master` at commit `f7715be`, tag `phase-6a-complete`). They were intentionally not blocked on for the 6a merge, but they should be addressed during Phase 6b — the **Important** items before Task 14 (the route handlers) lands more severity call sites, and the **Minor** items at the implementer's discretion.
+
+The originating reviewer agent's full report lives in the conversation history of the 2026-04-09 Phase 6a session; this section is the load-bearing summary. Each item is independently revertable and has a small, well-bounded fix. Add tests for each fix; do not let any of these land as drive-by changes inside an unrelated commit.
+
+### Important — should land alongside Task 1 or Task 2 of Phase 6b
+
+**P6A-I3: `TalkSummaryStore` never prunes entries for deleted pages.**
+
+- **Location:** `src/llm_wiki/librarian/talk_summary.py` (the store) and `src/llm_wiki/librarian/agent.py` (`refresh_talk_summaries`, lines ~134-226).
+- **Symptom:** `TalkSummaryStore` has a `delete()` method, but nobody calls it. `LibrarianAgent.refresh_talk_summaries` walks live `*.talk.md` files and only writes; it never enumerates the store and drops entries for pages that no longer exist. Compare to `ManifestOverrides.prune(set(entries))` at `librarian/agent.py:129`.
+- **Severity:** unbounded growth path. Not catastrophic (the store is small JSON, rebuildable from the wiki) but drifts from the pruning discipline applied elsewhere.
+- **Fix:** at the end of `refresh_talk_summaries`, enumerate `store._entries` keys, drop any that don't correspond to an existing `*.talk.md` file, save if modified. Add a test that creates two talk files, runs the refresh, deletes one talk file, runs the refresh again, and asserts the deleted page's entry is gone from the store.
+
+**P6A-I4: Daemon reaches into `Vault._backend.search_with_snippets` (layering violation).**
+
+- **Location:** `src/llm_wiki/daemon/server.py:327` (`_handle_search`), `src/llm_wiki/search/backend.py:34-37` (the `SearchBackend` Protocol), `src/llm_wiki/search/tantivy_backend.py:77-170` (the impl).
+- **Symptom:** `_handle_search` does `self._vault._backend.search_with_snippets(...)`. The `Vault` public API has `search()` (`vault.py:100`) but no `search_with_snippets`. Production code reaching into a private attribute of a neighbor object is a layering violation, AND the `SearchBackend` Protocol doesn't even declare `search_with_snippets` — so a future backend swap would break at runtime, not type-check time.
+- **Severity:** soft API contract violation. Tests passing today, but Phase 6b will add more call sites that should not perpetuate the pattern.
+- **Fix:** add `search_with_snippets` to `Vault` as a public method (thin pass-through that delegates to the backend), AND either add it to the `SearchBackend` Protocol or make it a concrete extension method that `Vault` wraps with an `isinstance`-check + fallback. Update `_handle_search` to call `self._vault.search_with_snippets(...)`. Tests in `tests/test_search/test_tantivy.py` reaching into `vault._backend` are fine (test code can be privileged); only production paths need to change.
+
+**P6A-I5: `compute_open_set` docstring and implementation disagree about temporal ordering; no protection against self-closure.**
+
+- **Location:** `src/llm_wiki/talk/page.py:85-97`.
+- **Symptom:** The docstring says "An entry is closed iff some entry with a **strictly greater** `index` references it." The implementation:
+  ```python
+  closed: set[int] = set()
+  for entry in entries:
+      for target in entry.resolves:
+          closed.add(target)
+  ```
+  …does not compare indices. An entry at index 2 with `resolves=[5]` would close entry 5 even though 2 < 5. Not test-visible because no test exercises forward-closure and the `talk-append` route doesn't allow it in practice (indices are positional and the resolver always writes later than the resolved). But the docstring lies about the contract.
+  Additionally, `TalkEntry(index=3, resolves=[3])` would close entry 3 — itself. The `test_compute_open_set_resolver_itself_remains_open` test doesn't catch this because it uses `resolves=[1]` on entry 2, never the same index.
+- **Severity:** correctness gap that will surface the moment Phase 6b's write routes accept caller-supplied `resolves` lists with looser validation.
+- **Fix:** pick one of:
+  - **Tighten implementation to match docstring:** change to `if target < entry.index: closed.add(target)`. Add a test that asserts an entry with a forward-pointing `resolves` does NOT close the future entry.
+  - **OR loosen docstring to match implementation:** remove the "strictly greater" claim. Document that any cross-reference closes regardless of order.
+  - **EITHER WAY:** add `if target != entry.index:` to prevent self-closure (recommended: silently ignore — it's a no-op gesture and shouldn't error). Add a test for the self-closure case.
+
+**P6A-I6: `phase6a_daemon_server` fixture cleanup is fragile if the auditor body ever gains an `await`.**
+
+- **Location:** `tests/test_daemon/test_server.py` (the `phase6a_daemon_server` fixture, ~lines 175-197).
+- **Symptom:** The fixture does `await asyncio.sleep(0)` then `shutil.rmtree(.issues)` to clear the noise the auditor produces on its first run. This works today because `Auditor.audit()` has no `await` inside it, so `run_auditor()` runs its body to completion in one event-loop slice. The moment someone adds an async operation to the auditor — an LLM call for classification, a network probe, a file-watcher hook — the race is real: `rmtree` will delete the `.issues` dir mid-write.
+- **Severity:** non-blocking today, but the failure mode is non-obvious (a flaky test where issues sometimes appear during a later assertion).
+- **Fix options** (in order of cost):
+  - **Cheapest:** add a `scheduler.start(defer_initial_runs=True)` flag. Phase 5b's scheduler runs workers immediately, which is the right production default — but tests that don't care about immediate runs should opt out. The fixture passes the flag.
+  - **Better:** give the scheduler a `wait_for_initial_runs()` primitive that completes when every worker has run once. Fixture awaits it, then `rmtree`s.
+  - **Best:** allow `DaemonServer(..., enabled_workers={"talk_summary"})` so test fixtures can register only the workers they need. Mirror the existing `auto_commit_user_edits` config switch pattern.
+- The Phase 6b Task 1 implementer should pick whichever option is cheapest given the scheduler API they're already touching.
+
+### Minor — at the implementer's discretion
+
+**P6A-M1: Pre-existing path traversal in talk routes (not introduced by 6a, but 6a extends the surface).**
+
+- **Location:** `src/llm_wiki/daemon/server.py:589, 607, 395`.
+- **Symptom:** `wiki_dir / f"{request['page']}.md"` with no validation of `request['page']`. A malicious request with `page="../../etc/passwd"` joins to `wiki_dir / "../../etc/passwd.md"`. The `talk-append` path would create a sibling `.talk.md` file outside the wiki on disk.
+- **Severity:** existed in Phase 5d. Phase 6a's `_read_talk_block` and `_read_issues_block` both consume the same unvalidated `page_name`. Not a regression.
+- **Fix:** add a `_validate_page_name(name: str) -> str | None` helper that clamps to the same lowercase-alnum-plus-hyphen shape that `_ISSUE_ID_RE` in `issues/queue.py` uses. Reject any name that doesn't match. Apply to every route that takes a `page_name` field. **Phase 6b should land this** — the new `page-create`/`page-update`/`page-append` routes are exactly the kind of write surface where path traversal becomes a real attack, not just a test-case curiosity.
+
+**P6A-M2: `search_with_snippets` reads each hit page with no size cap.**
+
+- **Location:** `src/llm_wiki/search/tantivy_backend.py:_extract_snippets`.
+- **Symptom:** `page_file.read_text(encoding="utf-8")` then `splitlines()` on every search hit. On a large vault with multi-MB pages, this is O(pages × size) per query.
+- **Severity:** acceptable at small-vault scale today. Bounded by `max_matches=3` per page, but unbounded by page size.
+- **Fix:** add a `max_bytes` parameter (default ~64KB) and read with `page_file.read_text(encoding="utf-8", errors="replace")[:max_bytes]`, or stream with `page_file.open(encoding="utf-8")` and break on byte budget. Add a test that creates a synthetic 10MB page and asserts the function returns within a budget.
+
+**P6A-M3: Three routes duplicate the talk-walking pattern.**
+
+- **Location:** `_read_talk_block` (server.py), `_build_attention_map` (server.py), `LibrarianAgent.refresh_talk_summaries` (librarian/agent.py).
+- **Symptom:** All three do `wiki_dir.rglob("*.talk.md")` + `TalkPage(...).load()` + skip-hidden-dirs + (optionally) `compute_open_set(...)`. Not a bug; just a pattern ripe for extraction.
+- **Fix:** extract `iter_talk_pages(wiki_dir: Path) -> Iterator[tuple[str, TalkPage]]` into `talk/page.py`. Yields `(page_name, talk_page)` pairs, hides the rglob + hidden-dir filter + name-derivation logic. Update all three call sites. Save for whichever Phase 6b task next touches one of these files.
+
+**P6A-M4: `_deterministic_summary` fallback sorts severities alphabetically.**
+
+- **Location:** `src/llm_wiki/librarian/talk_summary.py:148`.
+- **Symptom:** `sorted(by_severity.items())` produces `"critical, minor, moderate, new_connection, suggestion"` — not in severity-rank order, alphabetical.
+- **Severity:** cosmetic. Affects only the user-facing fallback summary when the LLM is unreachable.
+- **Fix:** define `_SEVERITY_RANK = {"critical": 0, "moderate": 1, "minor": 2, "suggestion": 3, "new_connection": 4}` and sort by it. One-line change. Add a test asserting the order.
+
+### Process notes for the Phase 6b implementer
+
+- **Numbering:** these are **P6A-I3** through **P6A-M4**, not new Phase 6b task numbers. Don't renumber Tasks 1-20 to fit them. They're cleanup that lands in dedicated commits with the `phase 6a` scope.
+- **Commit message convention:** `fix: phase 6a — <summary>` for the Important items, `refactor: phase 6a — <summary>` for the Minor items. This keeps the Phase 6b commit history clean and makes the carryover items easy to find with `git log --grep "phase 6a"` after the fact.
+- **Don't bundle these into Phase 6b feature commits.** The reviewer's discipline rule from Phase 6a applies: each cleanup item is its own small commit so it's individually revertable.
+- **The minor items can be skipped entirely if Phase 6b runs long.** The Important items should not be skipped — particularly P6A-I4 (layering) and P6A-I5 (correctness), which will compound as Phase 6b adds new call sites.
 
 ---
 
