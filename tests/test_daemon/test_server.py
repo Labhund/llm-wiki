@@ -293,3 +293,20 @@ async def test_read_excludes_resolved_talk_entries_from_counts(phase6a_daemon_se
     assert resp["talk"]["entry_count"] == 2
     assert resp["talk"]["open_count"] == 1
     assert resp["talk"]["recent_critical"] == []
+
+
+@pytest.mark.asyncio
+async def test_search_route_returns_matches_array(phase6a_daemon_server):
+    """The enriched search route attaches a matches array to each result."""
+    server, sock_path = phase6a_daemon_server
+    resp = await _request(sock_path, {"type": "search", "query": "k-means", "limit": 5})
+    assert resp["status"] == "ok"
+    assert resp["results"]
+    for r in resp["results"]:
+        assert "matches" in r
+        assert isinstance(r["matches"], list)
+        for m in r["matches"]:
+            assert "line" in m
+            assert "before" in m
+            assert "match" in m
+            assert "after" in m

@@ -324,12 +324,14 @@ class DaemonServer:
                 return {"status": "error", "message": f"Unknown request type: {req_type}"}
 
     def _handle_search(self, request: dict) -> dict:
-        results = self._vault.search(
-            request["query"], limit=request.get("limit", 10)
+        results = self._vault._backend.search_with_snippets(
+            request["query"],
+            limit=request.get("limit", 10),
+            vault_root=self._vault_root,
         )
         return {
             "status": "ok",
-            "results": [_serialize_result(r) for r in results],
+            "results": [_serialize_snippet_result(r) for r in results],
         }
 
     def _handle_read(self, request: dict) -> dict:
@@ -650,6 +652,23 @@ def _serialize_result(r: SearchResult) -> dict:
         "name": r.name,
         "score": r.score,
         "manifest": r.entry.to_manifest_text(),
+    }
+
+
+def _serialize_snippet_result(r) -> dict:
+    return {
+        "name": r.name,
+        "score": r.score,
+        "manifest": r.entry.to_manifest_text(),
+        "matches": [
+            {
+                "line": m.line,
+                "before": m.before,
+                "match": m.match,
+                "after": m.after,
+            }
+            for m in r.matches
+        ],
     }
 
 

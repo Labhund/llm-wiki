@@ -50,3 +50,64 @@ def test_search_returns_scores(tmp_path: Path):
     results = backend.search("PCA clustering", limit=5)
     assert len(results) >= 1
     assert results[0].score > 0.0
+
+
+def test_search_with_snippets_returns_matches_with_line_numbers(sample_vault):
+    """search_with_snippets attaches a `matches` list to each result."""
+    from llm_wiki.vault import Vault
+
+    vault = Vault.scan(sample_vault)
+    backend = vault._backend  # access the underlying tantivy backend
+    results = backend.search_with_snippets("PCA", limit=5, vault_root=sample_vault)
+    assert results, "expected at least one result for 'PCA'"
+
+    for r in results:
+        assert hasattr(r, "matches")
+        if r.matches:
+            for m in r.matches:
+                assert isinstance(m.line, int)
+                assert isinstance(m.before, str)
+                assert isinstance(m.match, str)
+                assert isinstance(m.after, str)
+
+
+def test_search_with_snippets_finds_correct_line(sample_vault):
+    """A query token's match line corresponds to the file line that contains it."""
+    from llm_wiki.vault import Vault
+
+    vault = Vault.scan(sample_vault)
+    results = vault._backend.search_with_snippets("k-means", limit=5, vault_root=sample_vault)
+    srna_result = next((r for r in results if r.name == "srna-embeddings"), None)
+    assert srna_result is not None
+
+    page_text = (sample_vault / "bioinformatics" / "srna-embeddings.md").read_text()
+    page_lines = page_text.splitlines()
+
+    for m in srna_result.matches:
+        # The line text on the matched line should contain the search term (case-insensitive)
+        assert "k-means" in page_lines[m.line - 1].lower()
+
+
+def test_search_with_snippets_attaches_nearest_heading(sample_vault):
+    """The `before` field is the nearest preceding ## heading text."""
+    from llm_wiki.vault import Vault
+
+    vault = Vault.scan(sample_vault)
+    results = vault._backend.search_with_snippets("k-means", limit=5, vault_root=sample_vault)
+    srna_result = next((r for r in results if r.name == "srna-embeddings"), None)
+    assert srna_result is not None
+
+    for m in srna_result.matches:
+        # In sample_vault, the k-means content lives in the Clustering section
+        assert m.before in ("## Clustering", "## Overview", "## Method", "## Related Pages")
+
+
+def test_search_with_snippets_empty_results_for_no_match(sample_vault):
+    """A query that hits nothing returns an empty list, not a crash."""
+    from llm_wiki.vault import Vault
+
+    vault = Vault.scan(sample_vault)
+    results = vault._backend.search_with_snippets(
+        "absolutelynothingmatchesthistoken", limit=5, vault_root=sample_vault,
+    )
+    assert results == []
