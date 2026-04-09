@@ -277,6 +277,48 @@ note: "New source may corroborate/extend/contradict this claim. Review recommend
 
 ---
 
+### 8. Source Reading Status
+
+**What:** Sources in `raw/` carry a `reading_status` field (`unread` | `in_progress` | `read`) tracking researcher engagement. Enforced by code — never requires manual header editing or LLM inference.
+
+**The flaw it fixes:** Autonomous ingest creates wiki pages that look like verified knowledge but have never been evaluated by the researcher. Reading status makes that distinction mechanical and visible.
+
+**Implementation principle:** Everything about reading status is bookkeeping — frontmatter parses, date arithmetic, file writes. Zero LLM calls. The auditor handles detection, `wiki_ingest` handles initialisation, a new `wiki_source_mark` tool handles updates. LLM is only invoked for what genuinely requires understanding (brief, deep analysis, resonance matching).
+
+**What needs to change:**
+
+1. **Source metadata format.** For PDFs: source stays as `.pdf` (immutable); companion `raw/YYYY-MM-DD-slug.md` holds extracted text + frontmatter metadata. For markdown sources: frontmatter is mutable metadata, body is immutable. Tool only ever touches frontmatter, never body.
+
+   Frontmatter fields:
+   ```yaml
+   ---
+   reading_status: unread   # unread | in_progress | read
+   ingested: 2026-04-09
+   source_type: paper       # paper | article | transcript | book | other
+   ---
+   ```
+
+2. **`wiki_ingest` initialises status.** On source copy, always writes `reading_status: unread` into frontmatter. Deterministic Python, no LLM. Autonomous ingest cannot promote a source past `unread` — only attended engagement does that.
+
+3. **New MCP tool: `wiki_source_mark(path, status)`** — the only path to update reading status. Updates frontmatter field, git-commits the change with a trailer (`Source-Status: unread→in_progress`). Pure file op, no LLM. The skill calls this at the right moments; the human never edits headers manually.
+
+4. **Extend auditor with source checks (pure Python, no LLM):**
+   - Source file missing `reading_status` → `minor` issue: "Source missing reading_status: raw/X"
+   - Source with `reading_status: unread` and `ingested` older than N days (configurable, default 30) → `minor` issue: "Unread source: raw/X (ingested DATE)"
+   - Source with `reading_status: in_progress` and no `inbox/` plan file → `moderate` issue: "In-progress source has no plan file: raw/X"
+   - Scan is O(n) file reads + frontmatter parse. No LLM.
+
+5. **Adversary weighting.** When sampling claims for verification, weight `unread` source claims higher — they've had no human review. Pure scoring adjustment in `sampling.py`, no LLM.
+
+6. **Skill protocol (when to call `wiki_source_mark`):**
+   - Brief mode start → `wiki_source_mark(source, "in_progress")`
+   - Brief mode complete, no deep session planned → `wiki_source_mark(source, "read")`
+   - Deep mode session start → `wiki_source_mark(source, "in_progress")`
+   - Deep mode plan file completed → `wiki_source_mark(source, "read")`
+   - Autonomous ingest → sets `unread` only, never calls `wiki_source_mark`
+
+---
+
 ## Future Ideas
 
 - **Vault → Managed migration tool**: Pre-packaged workflow that lets 4-8 local LLMs loose on an unstructured Obsidian vault over days/weeks to reorganize it into managed structure (raw sources separated, index built, cross-references added, provenance established). Automated "get it ship shape" pipeline.

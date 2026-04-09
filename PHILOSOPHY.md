@@ -191,6 +191,22 @@ But the same machinery — MCP write tools, session journaling, attention-aware 
 
 ---
 
+## 13. LLM is for understanding. Code is for bookkeeping.
+
+LLM inference is slow, expensive, and non-deterministic. It is reserved for tasks that genuinely require language understanding: claim extraction, adversarial verification, synthesis, commit summarisation. Everything that can be done with deterministic code must be.
+
+The auditor does not use an LLM to detect a broken wikilink — it parses the file. The reading status check does not use an LLM to determine if a source is stale — it reads a date. The compliance reviewer uses heuristics first; LLM only for the fraction of cases where heuristics can't reach. Any feature whose maintenance pass requires crawling an LLM over the vault is a feature that will not run — the cost will quietly suppress it.
+
+The rule: if a task can be expressed as a file scan, date comparison, regular expression, or graph traversal, it must be. LLM is the last resort, not the first.
+
+**Consequences:**
+- Structural integrity checks (orphans, broken links, missing markers, missing frontmatter fields, stale reading status) are pure Python — O(n) file reads, no LLM.
+- New metadata fields (reading_status, synthesis markers, plan file tracking) are written and read by deterministic code. The LLM never "fills in" missing metadata.
+- Any background worker that can't complete its core check without an LLM call is a design smell. Factor the check into a cheap code pass and a richer LLM enhancement pass — the code pass must be able to run alone.
+- When adding a new auditor check, the first question is: can I write this as a regex or a parse? Only escalate to LLM if the answer is genuinely no.
+
+---
+
 ## How to amend this document
 
 These principles are mostly immutable. Each is the distilled result of a design conversation that took hours to converge, and changing one usually means undoing decisions downstream. Treat amendments as serious — but don't treat them as forbidden. The wiki itself will teach us things over time, and when it does, the philosophy should reflect what we learned.
