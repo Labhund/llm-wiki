@@ -40,6 +40,18 @@ class ScheduledWorker:
     name: str
     interval_seconds: float
     coro_factory: Callable[[], Awaitable[None]]
+    health_probe_url: str | None = None
+
+
+async def _probe_backend(url: str) -> bool:
+    """Return True if the backend at url is reachable. False on any error."""
+    try:
+        import httpx
+        async with httpx.AsyncClient() as client:
+            r = await client.get(f"{url}/models", timeout=5.0)
+            return r.status_code < 500
+    except Exception:
+        return False
 
 
 class IntervalScheduler:
@@ -57,6 +69,7 @@ class IntervalScheduler:
         self._last_run: dict[str, str] = {}
         self._last_attempt: dict[str, str] = {}
         self._consecutive_failures: dict[str, int] = {}
+        self._backend_reachable: dict[str, bool | None] = {}
         self._stopping = False
 
     def register(self, worker: ScheduledWorker) -> None:
@@ -76,6 +89,10 @@ class IntervalScheduler:
 
     def consecutive_failures(self, name: str) -> int:
         return self._consecutive_failures.get(name, 0)
+
+    def backend_reachable(self, name: str) -> bool | None:
+        """Last probe result for worker. None if probe has not run yet."""
+        return self._backend_reachable.get(name)
 
     def workers_info(self) -> list[tuple[str, float, str | None]]:
         """Return (name, interval_seconds, last_run_iso) tuples for every registered worker.
@@ -121,6 +138,17 @@ class IntervalScheduler:
             return
 
     async def _run_once(self, worker: ScheduledWorker) -> None:
+        # Health probe — skip run (not fail) if backend is unreachable
+        if worker.health_probe_url is not None:
+            reachable = await _probe_backend(worker.health_probe_url)
+            self._backend_reachable[worker.name] = reachable
+            if not reachable:
+                logger.info(
+                    "[%s] backend unreachable at %s, skipping run",
+                    worker.name, worker.health_probe_url,
+                )
+                return
+
         now = datetime.datetime.now(datetime.timezone.utc).isoformat()
         self._last_attempt[worker.name] = now
         try:

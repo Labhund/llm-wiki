@@ -227,6 +227,55 @@ async def test_scheduler_register_duplicate_name_raises():
 
 
 @pytest.mark.asyncio
+async def test_scheduler_skips_worker_when_backend_unreachable():
+    """Worker is skipped (not failed) when health probe fails."""
+    call_count = {"n": 0}
+
+    async def worker_fn():
+        call_count["n"] += 1
+
+    scheduler = IntervalScheduler()
+    scheduler.register(ScheduledWorker(
+        name="probe-test",
+        interval_seconds=100.0,
+        coro_factory=worker_fn,
+        health_probe_url="http://127.0.0.1:19999/v1",  # nothing listening here
+    ))
+    await scheduler.start()
+    await asyncio.sleep(0.15)  # enough for the initial run attempt
+    await scheduler.stop()
+
+    # Worker should NOT have been called — backend unreachable
+    assert call_count["n"] == 0
+    # Not a failure — consecutive_failures stays 0
+    assert scheduler.consecutive_failures("probe-test") == 0
+    # last_attempt NOT set for a skipped run
+    assert scheduler.last_attempt_iso("probe-test") is None
+
+
+@pytest.mark.asyncio
+async def test_scheduler_runs_worker_when_no_probe_url():
+    """Worker without a health_probe_url runs normally."""
+    call_count = {"n": 0}
+
+    async def worker_fn():
+        call_count["n"] += 1
+
+    scheduler = IntervalScheduler()
+    scheduler.register(ScheduledWorker(
+        name="no-probe",
+        interval_seconds=100.0,
+        coro_factory=worker_fn,
+        health_probe_url=None,
+    ))
+    await scheduler.start()
+    await asyncio.sleep(0.05)
+    await scheduler.stop()
+
+    assert call_count["n"] == 1
+
+
+@pytest.mark.asyncio
 async def test_daemon_server_registers_auditor_worker(sample_vault, tmp_path):
     """Starting DaemonServer registers and runs the auditor worker."""
     from pathlib import Path
