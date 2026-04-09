@@ -55,6 +55,31 @@ llm-wiki talk list --vault /path/to/your/vault
 
 State lives in `~/.llm-wiki/vaults/` — your vault directory stays clean. The daemon keeps the index in memory, watches for file changes (Obsidian edits), and re-indexes automatically.
 
+## Connecting from an MCP client
+
+After `pip install -e .`, register the server in your MCP client's config:
+
+```json
+{
+  "mcpServers": {
+    "llm-wiki": {
+      "command": "llm-wiki",
+      "args": ["mcp"],
+      "env": { "LLM_WIKI_VAULT": "/path/to/your/vault" }
+    }
+  }
+}
+```
+
+The MCP server auto-starts the daemon on first connect. Every supervised
+write produces a git commit attributed to the calling agent via the
+`Agent:` trailer.
+
+Tools available: `wiki_search`, `wiki_read`, `wiki_manifest`, `wiki_status`,
+`wiki_query`, `wiki_ingest`, `wiki_lint`, `wiki_create`, `wiki_update`,
+`wiki_append`, `wiki_issues_list`, `wiki_issues_get`, `wiki_issues_resolve`,
+`wiki_talk_read`, `wiki_talk_post`, `wiki_talk_list`, `wiki_session_close`.
+
 ## How It Works
 
 The core insight: RAG re-derives on every query. A compiled wiki accumulates knowledge, maintains cross-references, tracks provenance, and improves over time. The agent navigates the wiki like a human browses the web — search, scan snippets, click through, skim headings, Ctrl+F — but with token budgets instead of screen pixels.
