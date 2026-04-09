@@ -47,7 +47,7 @@ class ToolDefinition:
 
 
 def _ok(response: dict) -> list[TextContent]:
-    return [TextContent(type="text", text=json.dumps(response, indent=2))]
+    return [TextContent(type="text", text=json.dumps(response, separators=(",", ":")))]
 
 
 # ---------------------------------------------------------------------------
