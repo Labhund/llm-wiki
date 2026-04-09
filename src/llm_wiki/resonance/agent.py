@@ -8,7 +8,7 @@ from typing import TYPE_CHECKING
 
 from llm_wiki.adversary.claim_extractor import Claim, extract_claims
 from llm_wiki.config import WikiConfig
-from llm_wiki.resonance.prompts import compose_resonance_messages, parse_resonance
+from llm_wiki.resonance.prompts import ResonanceVerdict, compose_resonance_messages, parse_resonance
 from llm_wiki.talk.discovery import ensure_talk_marker
 from llm_wiki.talk.page import TalkEntry, TalkPage
 
@@ -101,6 +101,10 @@ class ResonanceAgent:
             if not candidate_claims:
                 continue
 
+            # Use the first claim as a representative for the candidate page.
+            # This is an intentional simplification — the search found this page as
+            # topically related; we compare against its primary claim rather than
+            # scanning all claims.
             existing_claim = candidate_claims[0]
 
             messages = compose_resonance_messages(
@@ -133,7 +137,7 @@ class ResonanceAgent:
         self,
         new_claim: Claim,
         existing_claim: Claim,
-        verdict,
+        verdict: ResonanceVerdict,
         result: ResonanceResult,
     ) -> None:
         page_path = self._wiki_dir / f"{existing_claim.page}.md"

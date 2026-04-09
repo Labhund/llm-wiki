@@ -140,3 +140,38 @@ async def test_resonance_agent_empty_pages_noop(tmp_path: Path):
     result = await agent.run_for_pages([])
     assert result.resonance_posts == []
     vault.read_page.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_resonance_agent_llm_exception_does_not_propagate(tmp_path: Path):
+    """When the LLM raises, run_for_pages returns normally with no posts."""
+    wiki_dir = tmp_path / "wiki"
+    wiki_dir.mkdir(exist_ok=True)
+
+    new_page = _make_page_with_claim(
+        "rfdiffusion", "Noise scale controls output diversity", "raw/rfd.pdf", tmp_path
+    )
+    existing_page = _make_page_with_claim(
+        "diffusion-models", "Noise controls generative diversity", "raw/old.pdf", tmp_path
+    )
+
+    vault = MagicMock()
+    vault.read_page.side_effect = lambda name: {
+        "rfdiffusion": new_page,
+        "diffusion-models": existing_page,
+    }.get(name)
+    vault.search.return_value = [
+        SearchResult(name="diffusion-models", score=0.9, entry=MagicMock()),
+    ]
+
+    llm = MagicMock()
+    llm.complete = AsyncMock(side_effect=RuntimeError("LLM timeout"))
+
+    config = WikiConfig()
+    config.maintenance.resonance_candidates_per_claim = 1
+
+    agent = ResonanceAgent(vault=vault, vault_root=tmp_path, llm=llm, config=config)
+    result = await agent.run_for_pages(["rfdiffusion"])
+
+    assert result.resonance_posts == []
+    assert result.pages_checked == 0
