@@ -251,6 +251,8 @@ note: "New source may corroborate/extend/contradict this claim. Review recommend
 
 **Heterogeneity caveat:** Mixed registers in the same context window (compact JSON tool results + prose conversation + markdown wiki content) create format-switching overhead. The mitigation is consistency: if tool results are compact JSON, *all* tool results should be, establishing a stable agent expectation. Inconsistent formatting is worse than either choice made uniformly.
 
+**Deeper direction — rendered documents, not JSON API:** The whole system is already in one semantic space: wiki pages, skill files, talk pages, inbox plan files, agent reasoning — all markdown. JSON tool responses are the only thing breaking that coherence. The right architecture is a *rendering layer* in the daemon: store structured data internally, serve rendered markdown documents to the agent. The manifest already does this and is the best-behaved tool in the set. This is PHILOSOPHY.md Principle 2 extended to the wire protocol: plain markdown is the substrate. It also makes the system dramatically easier to debug — a developer can read MCP session logs directly, same format as the wiki itself. L1–L4 below are incremental improvements within the current JSON approach; this is the longer-term direction they point toward.
+
 **Three layers, increasing effort:**
 
 ---
@@ -385,6 +387,74 @@ This pass is hard to validate without empirical feedback. Suggested gates:
 **L4** — Same cold agent test post-skill-load. Compare behaviour. The delta between cold and skilled agent reveals what the skills are contributing vs what the tool descriptions carry alone.
 
 **Gallery as ground truth** — `docs/gallery.md` is the living reference for what agent-facing content looks like. After each layer, update the gallery examples to match. If the gallery diverges from what the daemon actually sends, that divergence is the bug.
+
+---
+
+### L5. Rendered Document Responses (Longer-Term Direction)
+
+**What:** Replace the JSON response envelope with rendered markdown documents. The daemon becomes a rendering layer: structured data stored and processed internally, markdown documents served to the agent. L1–L4 are incremental improvements; this is the architectural destination.
+
+**Why this is the right direction:**
+- The entire system is already in one semantic space — wiki pages, skills, talk pages, plan files, agent reasoning are all markdown. JSON responses are the only format break.
+- Behavioral triggers carry full semantic weight in rendered text. `[CRITICAL ISSUE]` in a document is not the same representation as `{"sev":{"crit":1}}` in a JSON blob — the former has learned emotional salience; the latter is just a number.
+- No format-switching overhead. The agent's context window is a continuous stream of one register.
+- Debuggable without tooling. A developer reading MCP session logs sees documents, not escaped JSON strings.
+- The manifest already proves the model. It returns plain text and is the best-behaved tool in the set.
+- Extends PHILOSOPHY.md Principle 2 to the wire protocol: plain markdown is the substrate.
+
+**Sketch of rendered formats:**
+
+`wiki_read` response:
+```
+[MODERATE ISSUE] broken-link-attention-mechanism-a1b2c3
+  Broken link to [[bahdanau-attention]] — no target page in vault
+
+---
+
+## Overview
+
+The [[attention mechanism]] allows a model to dynamically weight positions...
+
+[sections: Overview | Mechanism | Citations]
+
+---
+
+[talk: 2 entries, 1 open]
+One open suggestion: cross-link to [[positional-encoding]] from Mechanism section (2026-04-07).
+```
+
+`wiki_search` response:
+```
+rfdiffusion (score: 0.94)
+  Diffusion-based protein structure generation; de novo, partial diffusion, motif scaffolding
+  Match at line 42: "...For binder design, **motif scaffolding** constrains a fixed structural motif..."
+
+bindsweeper (score: 0.31)
+  Multi-dimensional parameter sweep tool — no direct match
+```
+
+`wiki_status` response:
+```
+Vault: ~/wiki
+Pages: 14 across 3 clusters | Total: 38,020 tokens
+Last indexed: 2026-04-09T14:23:11
+```
+
+**Error states:** A consistent prefix that the agent can detect reliably without parsing:
+```
+[ERROR: not-found] Page "bahdanau-attention" does not exist. Did you mean: bahdanau-2015?
+[ERROR: patch-conflict] Context mismatch at line 42. Re-read the page and retry.
+```
+
+**What needs to change:**
+1. Add a rendering pipeline to the daemon response path — `render_response(response: dict, tool: str) -> str` — called in `_ok()` before wrapping in `TextContent`
+2. Define rendered formats for all 17 tools
+3. Keep JSON internally for all daemon ↔ daemon communication; only the MCP boundary uses rendered output
+4. Update tool descriptions to describe the rendered format agents will receive
+5. Update `docs/gallery.md` throughout — this changes every agent-view example
+6. Deprecate L1 (compact JSON) once this lands — it becomes irrelevant
+
+**Sequencing:** L1–L4 can ship independently and are worth doing. L5 is the full rethink. Don't let perfect be the enemy of good — L1 in particular should ship now regardless.
 
 ---
 
