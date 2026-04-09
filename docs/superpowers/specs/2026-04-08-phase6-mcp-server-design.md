@@ -1,6 +1,6 @@
 # Phase 6: MCP Server — Design
 
-> Status: design approved, ready for implementation planning
+> Status: Phase 6a (visibility & severity) implemented; 6b (write surface) and 6c (MCP server) pending
 > Author: Markus Williams, with collaborative design from Claude (Opus 4.6)
 > Date: 2026-04-08
 
