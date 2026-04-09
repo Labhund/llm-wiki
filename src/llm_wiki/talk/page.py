@@ -88,14 +88,16 @@ def compute_open_set(entries: list[TalkEntry]) -> list[TalkEntry]:
     """Return the subset of `entries` that are not closed by any later entry.
 
     A `TalkEntry` is closed iff some entry with a strictly greater `index`
-    references it via its `resolves` list. Walks entries forward in pure
-    Python — no LLM calls, no I/O. Order of the returned list is the same
-    as the input (chronological).
+    references it via its `resolves` list. Earlier entries cannot close
+    later ones, and an entry cannot close itself — both cases are silently
+    ignored. Walks entries forward in pure Python — no LLM calls, no I/O.
+    Order of the returned list is the same as the input (chronological).
     """
     closed: set[int] = set()
     for entry in entries:
         for target in entry.resolves:
-            closed.add(target)
+            if target < entry.index:
+                closed.add(target)
     return [e for e in entries if e.index not in closed]
 
 

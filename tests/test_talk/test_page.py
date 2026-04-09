@@ -332,3 +332,41 @@ def test_compute_open_set_resolves_pointing_at_unknown_index_is_ignored():
 def test_compute_open_set_empty():
     from llm_wiki.talk.page import compute_open_set
     assert compute_open_set([]) == []
+
+
+def test_compute_open_set_forward_pointing_resolves_does_not_close():
+    """Phase 6a P6A-I5: an earlier entry pointing forward to a later index
+    must NOT close that later entry. The contract is strictly-greater
+    ordering — only entries appearing AFTER an entry can close it.
+
+    This isn't reachable through `talk-append` today (indices are positional
+    so the resolver always writes later than the resolved), but Phase 6b
+    write routes accept caller-supplied resolves lists and the docstring
+    is now load-bearing.
+    """
+    from llm_wiki.talk.page import compute_open_set
+    entries = [
+        TalkEntry(1, "t1", "@a", "first"),
+        TalkEntry(2, "t2", "@b", "tries to close 5", resolves=[5]),
+        TalkEntry(3, "t3", "@c", "third"),
+        TalkEntry(4, "t4", "@d", "fourth"),
+        TalkEntry(5, "t5", "@e", "fifth"),
+    ]
+    open_set = compute_open_set(entries)
+    # Entry 5 must remain open because the closer (index 2) appears earlier.
+    assert 5 in [e.index for e in open_set]
+
+
+def test_compute_open_set_self_closure_is_ignored():
+    """Phase 6a P6A-I5: an entry that resolves itself must not close itself.
+
+    Silently ignored — no-op gesture, doesn't error.
+    """
+    from llm_wiki.talk.page import compute_open_set
+    entries = [
+        TalkEntry(1, "t1", "@a", "first"),
+        TalkEntry(2, "t2", "@b", "second"),
+        TalkEntry(3, "t3", "@c", "weird self-closure", resolves=[3]),
+    ]
+    open_set = compute_open_set(entries)
+    assert [e.index for e in open_set] == [1, 2, 3]
