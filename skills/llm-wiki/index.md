@@ -43,4 +43,4 @@ Three options — surface the choice to the user before starting any research:
 - Add or update knowledge → `llm-wiki:write`
 - Incorporate an external source (paper, document) → `llm-wiki:ingest`
 - Hygiene pass → `llm-wiki:maintain`
-- Autonomous/cron use → `llm-wiki:autonomous`
+- Autonomous/cron use → `llm-wiki/autonomous/<subskill>`
