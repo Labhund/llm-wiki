@@ -89,6 +89,30 @@ class PageWriteService:
     def _wiki_dir(self) -> Path:
         return self._vault_root / self._config.vault.wiki_dir.rstrip("/")
 
+    def _maybe_warn_cap(self, session: Session, warnings: list[dict]) -> None:
+        cap = self._config.sessions.write_count_cap
+        ratio = self._config.sessions.cap_warn_ratio
+        threshold = int(cap * ratio)
+        if session.write_count >= threshold:
+            warnings.append({
+                "code": "session-cap-approaching",
+                "writes_used": session.write_count,
+                "writes_remaining": max(0, cap - session.write_count),
+                "message": (
+                    "Session is approaching the write count cap. Call "
+                    "wiki_session_close at a clean breakpoint before the "
+                    "daemon force-settles."
+                ),
+            })
+
+    async def _maybe_force_settle(self, session: Session) -> None:
+        cap = self._config.sessions.write_count_cap
+        if session.write_count >= cap:
+            from llm_wiki.daemon.sessions import load_journal
+            entries = load_journal(session.journal_path)
+            await self._commit_service.settle_with_fallback(session, entries)
+            self._registry.close(session)
+
     async def create(
         self,
         *,
@@ -150,6 +174,7 @@ class PageWriteService:
                     },
                 )
 
+        warnings: list[dict] = []
         async with self._coordinator.lock_for(slug):
             page_path.parent.mkdir(parents=True, exist_ok=True)
             content = self._build_page_content(title, body, citations, tags or [])
@@ -169,6 +194,9 @@ class PageWriteService:
                 content_hash_after=content_hash,
             )
             append_journal_entry(session, entry)
+            self._maybe_warn_cap(session, warnings)
+
+        await self._maybe_force_settle(session)
 
         return WriteResult(
             status="ok",
@@ -176,6 +204,7 @@ class PageWriteService:
             journal_id=str(session.write_count),
             session_id=session.id,
             content_hash=content_hash,
+            warnings=warnings,
         )
 
     async def update(
@@ -216,6 +245,7 @@ class PageWriteService:
                 details={"message": str(exc)},
             )
 
+        warnings: list[dict] = []
         async with self._coordinator.lock_for(page):
             current = page_path.read_text(encoding="utf-8")
             try:
@@ -251,6 +281,9 @@ class PageWriteService:
                 content_hash_after=content_hash,
             )
             append_journal_entry(session, entry)
+            self._maybe_warn_cap(session, warnings)
+
+        await self._maybe_force_settle(session)
 
         return WriteResult(
             status="ok",
@@ -258,6 +291,7 @@ class PageWriteService:
             journal_id=str(session.write_count),
             session_id=session.id,
             content_hash=content_hash,
+            warnings=warnings,
             details={"diff_summary": diff_summary},
         )
 
@@ -359,6 +393,9 @@ class PageWriteService:
                 content_hash_after=content_hash,
             )
             append_journal_entry(session, entry)
+            self._maybe_warn_cap(session, warnings)
+
+        await self._maybe_force_settle(session)
 
         return WriteResult(
             status="ok",

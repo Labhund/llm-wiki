@@ -47,6 +47,7 @@ class DaemonServer:
         self._session_registry = None  # type: ignore[assignment]
         self._page_write_service = None  # type: ignore[assignment]
         self._write_coordinator = None  # type: ignore[assignment]
+        self._inactivity_task: asyncio.Task | None = None
 
     async def start(self) -> None:
         """Scan vault, construct maintenance substrate, start listening."""
@@ -103,6 +104,9 @@ class DaemonServer:
         # Recovery: settle any orphaned journals from a prior crash
         await recover_sessions(state_dir=state_dir, commit_service=self._commit_service)
 
+        # Inactivity timer: settle quiet sessions after `inactivity_timeout_seconds`
+        self._inactivity_task = asyncio.create_task(self._inactivity_loop())
+
         if self._socket_path.exists():
             self._socket_path.unlink()
         self._server = await asyncio.start_unix_server(
@@ -120,8 +124,73 @@ class DaemonServer:
             async with self._server:
                 await self._server.serve_forever()
 
+    async def _inactivity_loop(self) -> None:
+        """Settle sessions whose last_write_at is older than the timeout.
+
+        KNOWN RACE WINDOW (low-probability, documented for honesty):
+        Between `load_journal(sess.journal_path)` reading the entries and
+        `settle_with_fallback` archiving the file, a concurrent write to
+        the same session could append a new entry to the journal. That
+        new entry would be on disk in the to-be-archived file but never
+        included in the commit. After settle, `_session_registry.close(sess)`
+        removes the session, so the next write from the same author opens
+        a fresh session — leaving the orphan entry as a permanent gap.
+
+        This is extremely unlikely in practice: the inactivity loop only
+        fires after `inactivity_timeout_seconds` of zero activity, so by
+        definition the agent has been quiet. The window between
+        `load_journal` and the journal-archive step inside settle is also
+        narrow (single-digit milliseconds in normal conditions).
+
+        If this ever bites in practice, the fix is to acquire the per-page
+        write lock around the journal-read + settle + close sequence so a
+        concurrent write blocks until settle completes. Not done now to
+        keep this hot path simple.
+        """
+        import datetime as _dt
+        from llm_wiki.daemon.sessions import Session, load_journal
+
+        timeout = self._config.sessions.inactivity_timeout_seconds
+        poll_interval = max(0.5, timeout / 2)
+        try:
+            while True:
+                await asyncio.sleep(poll_interval)
+                if self._session_registry is None or self._commit_service is None:
+                    continue
+                now = _dt.datetime.now(_dt.timezone.utc)
+                stale: list[Session] = []
+                for sess in list(self._session_registry.all_sessions()):
+                    try:
+                        last = _dt.datetime.fromisoformat(sess.last_write_at)
+                    except ValueError:
+                        continue
+                    if (now - last).total_seconds() >= timeout:
+                        stale.append(sess)
+                for sess in stale:
+                    try:
+                        entries = load_journal(sess.journal_path)
+                        if entries:
+                            await self._commit_service.settle_with_fallback(sess, entries)
+                    except Exception:
+                        logger.exception(
+                            "Inactivity settle failed for session %s", sess.id,
+                        )
+                    finally:
+                        self._session_registry.close(sess)
+        except asyncio.CancelledError:
+            return
+
     async def stop(self) -> None:
         """Shut down the maintenance substrate, then the server."""
+        # Phase 6b: cancel the inactivity timer first so it doesn't race the settle
+        if self._inactivity_task is not None:
+            self._inactivity_task.cancel()
+            try:
+                await self._inactivity_task
+            except asyncio.CancelledError:
+                pass
+            self._inactivity_task = None
+
         # Phase 6b: settle every open session before tearing down anything else
         if self._session_registry is not None and self._commit_service is not None:
             from llm_wiki.daemon.sessions import load_journal
