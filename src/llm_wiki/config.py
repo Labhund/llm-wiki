@@ -20,13 +20,68 @@ def _merge(dc_class, data: dict):
 
 
 @dataclass
-class LLMConfig:
-    default: str = "openai/local-instruct"
-    embeddings: str = "openai/text-embedding-3-small"
-    # Set api_base/api_key when using the litellm proxy or any non-default endpoint.
-    # Example for local litellm proxy: api_base="http://localhost:4000", api_key="sk-fake"
+class LLMBackend:
+    model: str
     api_base: Optional[str] = None
     api_key: Optional[str] = None
+
+    @classmethod
+    def from_dict(cls, data: dict) -> "LLMBackend":
+        return cls(**{k: v for k, v in data.items() if k in cls.__dataclass_fields__})
+
+
+@dataclass
+class LLMConfig:
+    # New-style: named backend profiles
+    backends: dict[str, LLMBackend] = field(default_factory=dict)
+    default_backend: str = "fast"  # backend name, not model string
+
+    # Legacy fields — kept for backward compat, used only when backends is empty
+    _default_model: Optional[str] = field(default=None, repr=False)
+    _default_api_base: Optional[str] = field(default=None, repr=False)
+    _default_api_key: Optional[str] = field(default=None, repr=False)
+
+    embeddings: str = "openai/text-embedding-3-small"
+
+    # Per-task role overrides (each resolves to a backend name, falls back to default_backend)
+    adversary: Optional[str] = None
+    ingest: Optional[str] = None
+    librarian: Optional[str] = None
+    compliance: Optional[str] = None
+    talk_summary: Optional[str] = None
+    query: Optional[str] = None
+    commit: Optional[str] = None
+
+    def __post_init__(self):
+        """Build LLMBackend objects from raw dicts (YAML loads everything as dicts).
+        If backends is empty and legacy fields are present, synthesize a single backend."""
+        if self.backends:
+            self.backends = {
+                name: LLMBackend.from_dict(v) if isinstance(v, dict) else v
+                for name, v in self.backends.items()
+            }
+        elif self._default_model:
+            self.backends = {
+                "default": LLMBackend(
+                    model=self._default_model,
+                    api_base=self._default_api_base,
+                    api_key=self._default_api_key,
+                )
+            }
+            self.default_backend = "default"
+
+    def resolve(self, role: Optional[str] = None) -> LLMBackend:
+        """Resolve a role to its backend config.
+        Falls back to default_backend if role is unset, unknown, or backend name missing."""
+        backend_name = getattr(self, role, None) if role else None
+        if not backend_name or backend_name not in self.backends:
+            backend_name = self.default_backend
+        if backend_name not in self.backends:
+            raise ValueError(
+                f"LLMConfig: backend '{backend_name}' not found. "
+                f"Available: {list(self.backends.keys())}"
+            )
+        return self.backends[backend_name]
 
 
 @dataclass
