@@ -74,19 +74,25 @@ def _run_coroutine_in_running_loop(loop: asyncio.AbstractEventLoop, coro) -> obj
     manually pump the loop with ``_run_once()`` until the future is done,
     temporarily suspending the currently-executing task so that other
     tasks (including the server's ``_handle_client``) can run in between.
+
+    Uses ``asyncio.tasks._leave_task`` / ``_enter_task`` to properly suspend
+    the outer task at the C level (required for Python 3.14+ where the C
+    task implementation no longer tracks the running task via the
+    ``_current_tasks`` dict alone).
     """
     from heapq import heappop
 
     future = asyncio.ensure_future(coro, loop=loop)
 
-    # _current_tasks maps loop → currently-executing Task.
-    # We must temporarily remove the outer task so that the inner coroutine
-    # can be stepped without hitting "Cannot enter into task while another
-    # task is being executed".
-    curr_tasks = asyncio.tasks._current_tasks  # type: ignore[attr-defined]
+    # _leave_task / _enter_task are the correct way to suspend and restore
+    # the currently-executing task in both the Python and C implementations.
+    _leave_task = asyncio.tasks._leave_task  # type: ignore[attr-defined]
+    _enter_task = asyncio.tasks._enter_task  # type: ignore[attr-defined]
 
     while not future.done():
-        outer_task = curr_tasks.pop(loop, None)
+        outer_task = asyncio.current_task()
+        if outer_task is not None:
+            _leave_task(loop, outer_task)
         try:
             # Drive the loop one iteration at a time (mirrors _run_once).
             ready = loop._ready  # type: ignore[attr-defined]
@@ -117,6 +123,6 @@ def _run_coroutine_in_running_loop(loop: asyncio.AbstractEventLoop, coro) -> obj
                     handle._run()
         finally:
             if outer_task is not None:
-                curr_tasks[loop] = outer_task
+                _enter_task(loop, outer_task)
 
     return future.result()

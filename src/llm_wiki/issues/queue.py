@@ -8,6 +8,8 @@ from pathlib import Path
 
 import yaml
 
+from llm_wiki.severity import Severity
+
 # Issue ids are filesystem-sensitive: they're concatenated with `.md` and joined
 # to the `.issues/` directory without further sanitization. Lock the shape to
 # lowercase alnum + hyphen so an attacker-controlled id can't escape the
@@ -39,6 +41,7 @@ class Issue:
     created: str
     detected_by: str
     metadata: dict = field(default_factory=dict)
+    severity: Severity = "minor"
 
     @staticmethod
     def make_id(type: str, page: str | None, key: str) -> str:
@@ -106,6 +109,7 @@ class IssueQueue:
             "id": issue.id,
             "type": issue.type,
             "status": issue.status,
+            "severity": issue.severity,
             "title": issue.title,
             "page": issue.page,
             "created": issue.created,
@@ -189,4 +193,5 @@ class IssueQueue:
             created=fm.get("created", ""),
             detected_by=fm.get("detected_by", "unknown"),
             metadata=fm.get("metadata") or {},
+            severity=fm.get("severity") or "minor",
         )

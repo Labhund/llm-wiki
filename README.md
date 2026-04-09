@@ -87,12 +87,14 @@ No markers? Falls back to `##`/`###` headings. No headings? Treated as one secti
 
 ### Maintenance Agents
 
-Four background workers run in the daemon's event loop, keeping the wiki honest over time. Each one is an asyncio coroutine on a configurable interval, and all LLM calls flow through the shared queue at `priority="maintenance"` so user-facing queries always preempt them.
+Five background workers run in the daemon's event loop, keeping the wiki honest over time. Each one is an asyncio coroutine on a configurable interval, and all LLM calls flow through the shared queue at `priority="maintenance"` so user-facing queries always preempt them.
 
 - **Auditor** — structural integrity checks (orphans, broken wikilinks, missing markers, broken citations). Files persistent issues to `wiki/.issues/<id>.md` with deterministic IDs so re-runs are idempotent. Exposed on demand via `llm-wiki lint`.
 - **Compliance reviewer** — debounced response to file edits. Heuristic checks for missing citations, structural drift (auto-inserts invisible `%% section: %%` markers), and substantive new ideas. Never touches human-authored prose.
-- **Librarian** — consumes traversal logs to refine `tags`/`summary` via LLM and recompute authority scores from the link graph plus usage. State persists in a sidecar JSON override file so refinements survive vault rescans without ever mutating page frontmatter.
-- **Adversary** — samples claims weighted by age × inverse authority, fetches the cited raw source, and verifies via LLM. Validated claims update `last_corroborated`; failures file `claim-failed` issues; ambiguous verdicts post to talk pages for human review.
+- **Librarian** — consumes traversal logs to refine `tags`/`summary` via LLM and recompute authority scores from the link graph plus usage. Also refreshes per-page talk-summary digests (Phase 6a) when a page accumulates enough new unresolved entries since the last summary. State persists in sidecar JSON files so refinements survive vault rescans without ever mutating page frontmatter.
+- **Adversary** — samples claims weighted by age × inverse authority, fetches the cited raw source, and verifies via LLM. Validated claims update `last_corroborated`; contradicted/unsupported verdicts file `claim-failed` issues at `critical` severity; ambiguous verdicts post to talk pages at `critical` severity for human review.
+
+Every finding carries a severity (`critical | moderate | minor` for issues; talk entries add `suggestion | new_connection`). The auditor and compliance reviewer set severity per check type — broken citations are critical, broken wikilinks are moderate, orphans are minor — and the daemon's `read`, `search`, and `lint` routes fold these into their responses so an active agent sees the maintenance backlog inline. Critical and moderate talk entries appear verbatim in `wiki_read`; lower-severity entries collapse into a librarian-generated 2-sentence summary. Talk-page closure is append-only: a later entry with `resolves: [N]` removes prior entry N from open counts and from `recent_critical`/`recent_moderate`, but the original entry stays in the file as audit trail.
 
 Findings flow into a shared issue queue (`llm-wiki issues list`) and append-only talk pages (`llm-wiki talk read <page>`). The agents may file issues, append to talk pages, update sidecar metadata, and insert invisible markers — but never edit human-authored markdown body content. "Human prose is sacred."
 
@@ -201,6 +203,9 @@ raw/                   # Immutable source documents
 - **[Phase 5b Plan](docs/superpowers/plans/2026-04-08-phase5b-scheduler-compliance.md)** — Implementation plan for scheduler + compliance review
 - **[Phase 5c Plan](docs/superpowers/plans/2026-04-08-phase5c-librarian.md)** — Implementation plan for librarian agent + authority scoring
 - **[Phase 5d Plan](docs/superpowers/plans/2026-04-08-phase5d-adversary-talk-pages.md)** — Implementation plan for adversary agent + talk pages
+- **[Phase 6a Plan](docs/superpowers/plans/2026-04-08-phase6a-visibility-severity.md)** — Implementation plan for visibility & severity (issues/talk severity, librarian talk summaries, enriched read/search/lint)
+- **[Phase 6b Plan](docs/superpowers/plans/2026-04-08-phase6b-write-surface.md)** — Implementation plan for write surface, sessions, journal/commit pipeline
+- **[Phase 6c Plan](docs/superpowers/plans/2026-04-08-phase6c-mcp-server.md)** — Implementation plan for MCP server + CLI subcommand
 - [LLM Wiki - Knowledge Base Pattern](docs/LLM%20Wiki%20-%20Knowledge%20Base%20Pattern.md) — Original pattern description
 - [Multi-Turn Traversal Pattern](docs/Multi-Turn%20Traversal%20Pattern.md) — How agents navigate wiki
 - [Implementation Ideas](docs/implementation-ideas/README.md) — 9 optimization designs
@@ -217,7 +222,9 @@ raw/                   # Immutable source documents
 - [x] **Phase 5b: Background Workers + Compliance Review** — Async scheduler, debounced compliance pipeline
 - [x] **Phase 5c: Librarian** — Usage-driven manifest refinement, authority scoring
 - [x] **Phase 5d: Adversary + Talk Pages** — Claim verification, async discussion sidecars
-- [ ] **Phase 6: MCP Server** — High-level + low-level tools for agent integration
+- [x] **Phase 6a: Visibility & Severity** — Severity-aware issues and talk entries, append-only closure, librarian talk summaries, enriched `read`/`search`/`lint` routes
+- [ ] **Phase 6b: Write Surface + Sessions** — V4A patches, per-author session journaling, serial commit pipeline, AST hard-rule test
+- [ ] **Phase 6c: MCP Server** — Tool definitions, `llm-wiki mcp` CLI subcommand, end-to-end smoke test
 
 ## Philosophy
 

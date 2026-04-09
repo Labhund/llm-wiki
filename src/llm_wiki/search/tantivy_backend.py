@@ -74,6 +74,97 @@ class TantivyBackend:
         self._index.reload()
         return self._index.searcher().num_docs
 
+    def search_with_snippets(
+        self,
+        query: str,
+        limit: int,
+        vault_root: Path,
+    ) -> list:
+        """Run a search and attach line-level snippet matches per result.
+
+        Tokenizes the query into terms (whitespace split, lowercased), then
+        for each result reads the page file from `vault_root` and finds the
+        first few lines that contain any term. The `before` field is the
+        nearest preceding `^##` or `^###` heading; `after` is the next
+        non-blank line. Snippet count per result is capped at 3.
+        """
+        from llm_wiki.search.backend import SnippetMatch, SnippetSearchResult
+
+        base_results = self.search(query, limit=limit)
+        if not base_results:
+            return []
+
+        terms = [t.lower() for t in query.split() if t.strip()]
+        if not terms:
+            return [
+                SnippetSearchResult(
+                    name=r.name, score=r.score, entry=r.entry, matches=[],
+                )
+                for r in base_results
+            ]
+
+        out: list = []
+        for r in base_results:
+            matches = self._extract_snippets(r.name, terms, vault_root, max_matches=3)
+            out.append(SnippetSearchResult(
+                name=r.name, score=r.score, entry=r.entry, matches=matches,
+            ))
+        return out
+
+    def _extract_snippets(
+        self,
+        page_name: str,
+        terms: list[str],
+        vault_root: Path,
+        max_matches: int,
+    ) -> list:
+        """Read the page file and find lines containing any of the query terms."""
+        from llm_wiki.search.backend import SnippetMatch
+
+        # Find the page file by name (may be nested under cluster directories)
+        page_file = None
+        for candidate in vault_root.rglob(f"{page_name}.md"):
+            rel = candidate.relative_to(vault_root)
+            if any(p.startswith(".") for p in rel.parts):
+                continue
+            if candidate.name.endswith(".talk.md"):
+                continue
+            page_file = candidate
+            break
+        if page_file is None:
+            return []
+
+        try:
+            text = page_file.read_text(encoding="utf-8")
+        except OSError:
+            return []
+        lines = text.splitlines()
+
+        matches: list = []
+        last_heading = ""
+        for i, line in enumerate(lines):
+            stripped = line.strip()
+            if stripped.startswith("## ") or stripped.startswith("### "):
+                last_heading = stripped
+                continue
+            lower = line.lower()
+            if any(term in lower for term in terms):
+                # Find the next non-blank line for `after`
+                after = ""
+                for j in range(i + 1, min(i + 5, len(lines))):
+                    if lines[j].strip():
+                        after = lines[j].strip()
+                        break
+                matches.append(SnippetMatch(
+                    line=i + 1,
+                    before=last_heading,
+                    match=line.strip(),
+                    after=after,
+                ))
+                if len(matches) >= max_matches:
+                    break
+        return matches
+
 
 def _entry_to_dict(entry: ManifestEntry) -> dict:
     return {

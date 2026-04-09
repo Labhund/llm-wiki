@@ -1,25 +1,118 @@
 from __future__ import annotations
 
 import re
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
 
 import yaml
 
+from llm_wiki.severity import Severity
+
 
 # Matches an entry header line: **<iso-timestamp> — @<author>**
+# with optional HTML-comment metadata: <!-- severity:critical, resolves:[1,2] -->
 _ENTRY_HEADER_RE = re.compile(
-    r"^\*\*(?P<ts>\S+)\s*[—-]\s*(?P<author>@\S+)\*\*\s*$",
+    r"^\*\*(?P<ts>\S+)\s*[—-]\s*(?P<author>@\S+)\*\*"
+    r"(?:\s*<!--(?P<meta>.*?)-->)?\s*$",
     re.MULTILINE,
 )
 
 
+def _parse_meta(meta_str: str | None) -> tuple[str, list[int]]:
+    """Parse a `severity:foo, resolves:[1,2]` metadata blob.
+
+    Returns (severity, resolves). Missing keys default to ("suggestion", []).
+    Whitespace and key order are tolerant. Invalid blobs return defaults.
+    """
+    if not meta_str:
+        return "suggestion", []
+
+    severity = "suggestion"
+    resolves: list[int] = []
+
+    # Split top-level by comma — but not inside [...] which holds the resolves list.
+    parts: list[str] = []
+    depth = 0
+    buf: list[str] = []
+    for ch in meta_str:
+        if ch == "[":
+            depth += 1
+            buf.append(ch)
+        elif ch == "]":
+            depth -= 1
+            buf.append(ch)
+        elif ch == "," and depth == 0:
+            parts.append("".join(buf).strip())
+            buf = []
+        else:
+            buf.append(ch)
+    if buf:
+        parts.append("".join(buf).strip())
+
+    for part in parts:
+        if ":" not in part:
+            continue
+        key, _, value = part.partition(":")
+        key = key.strip()
+        value = value.strip()
+        if key == "severity":
+            severity = value
+        elif key == "resolves":
+            inner = value.strip("[]")
+            if inner:
+                try:
+                    resolves = [int(x.strip()) for x in inner.split(",") if x.strip()]
+                except ValueError:
+                    resolves = []
+    return severity, resolves
+
+
+def _format_meta(severity: str, resolves: list[int]) -> str:
+    """Build the optional `<!-- ... -->` suffix for an entry header line.
+
+    Returns an empty string for the default case (severity='suggestion',
+    no resolves) so the writer emits the same shape as pre-Phase-6a files.
+    """
+    parts: list[str] = []
+    if severity != "suggestion":
+        parts.append(f"severity:{severity}")
+    if resolves:
+        joined = ",".join(str(i) for i in resolves)
+        parts.append(f"resolves:[{joined}]")
+    if not parts:
+        return ""
+    return f" <!-- {', '.join(parts)} -->"
+
+
+def compute_open_set(entries: list[TalkEntry]) -> list[TalkEntry]:
+    """Return the subset of `entries` that are not closed by any later entry.
+
+    A `TalkEntry` is closed iff some entry with a strictly greater `index`
+    references it via its `resolves` list. Walks entries forward in pure
+    Python — no LLM calls, no I/O. Order of the returned list is the same
+    as the input (chronological).
+    """
+    closed: set[int] = set()
+    for entry in entries:
+        for target in entry.resolves:
+            closed.add(target)
+    return [e for e in entries if e.index not in closed]
+
+
 @dataclass
 class TalkEntry:
-    """One chronological entry in a talk page."""
+    """One chronological entry in a talk page.
+
+    `index` is 1-based and positional — assigned by `TalkPage.load()` from the
+    entry's chronological position in the file. It is not stored in the file
+    and may be left as 0 by callers constructing entries to pass to `append()`.
+    """
+    index: int
     timestamp: str
     author: str
     body: str
+    severity: Severity = "suggestion"
+    resolves: list[int] = field(default_factory=list)
 
 
 class TalkPage:
@@ -74,16 +167,32 @@ class TalkPage:
         for i, match in enumerate(headers):
             ts = match.group("ts")
             author = match.group("author")
+            meta = match.group("meta")
+            severity, resolves = _parse_meta(meta)
             content_start = match.end()
             content_end = headers[i + 1].start() if i + 1 < len(headers) else len(body)
             entry_body = body[content_start:content_end].strip()
-            entries.append(TalkEntry(timestamp=ts, author=author, body=entry_body))
+            entries.append(TalkEntry(
+                index=i + 1,                  # 1-based, positional
+                timestamp=ts,
+                author=author,
+                body=entry_body,
+                severity=severity,
+                resolves=resolves,
+            ))
         return entries
 
     def append(self, entry: TalkEntry) -> None:
-        """Append a new entry, creating the file with frontmatter if missing."""
+        """Append a new entry, creating the file with frontmatter if missing.
+
+        The caller's `entry.index` is ignored — indices are positional and
+        get assigned by `load()`. The optional severity/resolves fields ride
+        in an HTML comment on the header line; the default case writes the
+        same shape as pre-Phase-6a files.
+        """
+        meta_suffix = _format_meta(entry.severity, entry.resolves)
         block = (
-            f"\n**{entry.timestamp} — {entry.author}**\n"
+            f"\n**{entry.timestamp} — {entry.author}**{meta_suffix}\n"
             f"{entry.body.strip()}\n"
         )
         if not self._path.exists():

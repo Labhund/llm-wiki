@@ -102,3 +102,59 @@ def parse_refinement(text: str) -> tuple[list[str], str | None]:
     summary = raw_summary if isinstance(raw_summary, str) and raw_summary.strip() else None
 
     return tags, summary
+
+
+def compose_talk_summary_messages(entries: "list[TalkEntry]") -> list[dict[str, str]]:
+    """Build a 2-message prompt asking for a 2-sentence digest of open talk entries.
+
+    The librarian uses this when refreshing a talk-page summary. Entries are
+    formatted compactly so the cheap maintenance model can read them all in
+    a single small prompt.
+    """
+    from llm_wiki.talk.page import TalkEntry  # local import to avoid cycles
+
+    body_lines = []
+    for e in entries:
+        body_lines.append(
+            f"[#{e.index} {e.severity} by {e.author}] {e.body.strip()}"
+        )
+    body_text = "\n".join(body_lines)
+
+    return [
+        {
+            "role": "system",
+            "content": (
+                "You are summarizing the unresolved discussion on a wiki talk page. "
+                "Produce a single 2-sentence digest that an active reader can use "
+                "to decide whether to investigate further. Do not list individual "
+                "entries — synthesize."
+            ),
+        },
+        {
+            "role": "user",
+            "content": (
+                f"Unresolved entries on this talk page:\n\n{body_text}\n\n"
+                f"Write a 2-sentence summary."
+            ),
+        },
+    ]
+
+
+def parse_talk_summary(text: str) -> str:
+    """Extract a clean 2-sentence summary from the LLM response.
+
+    The cheap model often wraps its output in quotes or prefixes. Strip
+    common decoration. Returns an empty string if the response is empty.
+    """
+    if not text:
+        return ""
+    cleaned = text.strip()
+    # Strip surrounding quotes
+    if cleaned.startswith('"') and cleaned.endswith('"'):
+        cleaned = cleaned[1:-1].strip()
+    # Strip a leading "Summary:" prefix
+    for prefix in ("Summary:", "summary:", "SUMMARY:"):
+        if cleaned.startswith(prefix):
+            cleaned = cleaned[len(prefix):].strip()
+            break
+    return cleaned

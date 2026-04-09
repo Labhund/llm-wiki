@@ -171,6 +171,22 @@ class DaemonServer:
                 len(result.talk_posts), len(result.issues_filed),
             )
 
+        async def run_talk_summary() -> None:
+            from llm_wiki.issues.queue import IssueQueue
+            from llm_wiki.librarian.agent import LibrarianAgent
+            from llm_wiki.traverse.llm_client import LLMClient
+            wiki_dir = self._vault_root / self._config.vault.wiki_dir.rstrip("/")
+            queue = IssueQueue(wiki_dir)
+            llm = LLMClient(
+                self._llm_queue,
+                model=self._config.llm.default,
+                api_base=self._config.llm.api_base,
+                api_key=self._config.llm.api_key,
+            )
+            agent = LibrarianAgent(self._vault, self._vault_root, llm, queue, self._config)
+            count = await agent.refresh_talk_summaries()
+            logger.info("Talk summary: refreshed=%d", count)
+
         self._scheduler.register(
             ScheduledWorker(
                 name="auditor",
@@ -197,6 +213,13 @@ class DaemonServer:
                 name="adversary",
                 interval_seconds=parse_interval(self._config.maintenance.adversary_interval),
                 coro_factory=run_adversary,
+            )
+        )
+        self._scheduler.register(
+            ScheduledWorker(
+                name="talk_summary",
+                interval_seconds=parse_interval(self._config.maintenance.librarian_interval),
+                coro_factory=run_talk_summary,
             )
         )
 
@@ -301,12 +324,14 @@ class DaemonServer:
                 return {"status": "error", "message": f"Unknown request type: {req_type}"}
 
     def _handle_search(self, request: dict) -> dict:
-        results = self._vault.search(
-            request["query"], limit=request.get("limit", 10)
+        results = self._vault._backend.search_with_snippets(
+            request["query"],
+            limit=request.get("limit", 10),
+            vault_root=self._vault_root,
         )
         return {
             "status": "ok",
-            "results": [_serialize_result(r) for r in results],
+            "results": [_serialize_snippet_result(r) for r in results],
         }
 
     def _handle_read(self, request: dict) -> dict:
@@ -319,7 +344,109 @@ class DaemonServer:
         )
         if content is None:
             return {"status": "error", "message": f"Page not found: {request['page_name']}"}
-        return {"status": "ok", "content": content}
+
+        page_name = request["page_name"]
+        return {
+            "status": "ok",
+            "content": content,
+            "issues": self._read_issues_block(page_name),
+            "talk": self._read_talk_block(page_name),
+        }
+
+    def _read_issues_block(self, page_name: str) -> dict:
+        """Build the per-page issues digest folded into wiki_read responses."""
+        queue = self._issue_queue()
+        all_issues = queue.list(status="open")
+        page_issues = [i for i in all_issues if i.page == page_name]
+
+        by_severity = _empty_severity_counts(_ISSUE_SEVERITIES)
+        for issue in page_issues:
+            sev = _clamp_severity(issue.severity, _ISSUE_SEVERITIES, "minor")
+            by_severity[sev] += 1
+
+        items = [
+            {
+                "id": issue.id,
+                "severity": issue.severity,
+                "title": issue.title,
+                "body": issue.body,
+            }
+            for issue in page_issues
+        ]
+        return {
+            "open_count": len(page_issues),
+            "by_severity": by_severity,
+            "items": items,
+        }
+
+    def _read_talk_block(self, page_name: str) -> dict:
+        """Build the per-page talk-page digest folded into wiki_read responses.
+
+        Critical and moderate open entries are inlined verbatim under
+        `recent_critical` / `recent_moderate`. Everything else collapses
+        into counts + the librarian's stored 2-sentence summary.
+        Resolved entries are excluded from counts and `recent_*`.
+        """
+        from llm_wiki.librarian.talk_summary import TalkSummaryStore
+        from llm_wiki.talk.page import TalkPage, compute_open_set
+
+        wiki_dir = self._vault_root / self._config.vault.wiki_dir.rstrip("/")
+        # Find the page file (may be nested) so we can derive the talk path
+        page_path = None
+        for candidate in wiki_dir.rglob(f"{page_name}.md"):
+            rel = candidate.relative_to(wiki_dir)
+            if any(p.startswith(".") for p in rel.parts):
+                continue
+            page_path = candidate
+            break
+
+        empty = {
+            "entry_count": 0,
+            "open_count": 0,
+            "by_severity": _empty_severity_counts(_TALK_SEVERITIES),
+            "summary": "",
+            "recent_critical": [],
+            "recent_moderate": [],
+        }
+        if page_path is None:
+            return empty
+
+        talk = TalkPage.for_page(page_path)
+        if not talk.exists:
+            return empty
+
+        all_entries = talk.load()
+        open_entries = compute_open_set(all_entries)
+
+        by_severity = _empty_severity_counts(_TALK_SEVERITIES)
+        for e in open_entries:
+            sev = _clamp_severity(e.severity, _TALK_SEVERITIES, "suggestion")
+            by_severity[sev] += 1
+
+        recent_critical = [
+            {"index": e.index, "ts": e.timestamp, "author": e.author, "body": e.body}
+            for e in open_entries if e.severity == "critical"
+        ]
+        recent_moderate = [
+            {"index": e.index, "ts": e.timestamp, "author": e.author, "body": e.body}
+            for e in open_entries if e.severity == "moderate"
+        ]
+
+        # Pull the librarian's stored summary if present
+        summary_store = TalkSummaryStore.load(
+            _state_dir_for(self._vault_root) / "talk_summaries.json"
+        )
+        record = summary_store.get(page_name)
+        summary_text = record.summary if record is not None else ""
+
+        return {
+            "entry_count": len(all_entries),
+            "open_count": len(open_entries),
+            "by_severity": by_severity,
+            "summary": summary_text,
+            "recent_critical": recent_critical,
+            "recent_moderate": recent_moderate,
+        }
 
     def _handle_manifest(self, request: dict) -> dict:
         text = self._vault.manifest_text(budget=request.get("budget", 16000))
@@ -348,7 +475,69 @@ class DaemonServer:
         queue = self._issue_queue()
         auditor = Auditor(self._vault, queue, self._vault_root)
         report = auditor.audit()
-        return {"status": "ok", **report.to_dict()}
+        attention_map = self._build_attention_map(queue)
+        return {
+            "status": "ok",
+            "attention_map": attention_map,
+            **report.to_dict(),
+        }
+
+    def _build_attention_map(self, queue: "IssueQueue") -> dict:
+        """Aggregate issue and talk severities across the vault.
+
+        Issue counts come from the queue (already filtered by status='open').
+        Talk counts come from walking every *.talk.md and computing the
+        open set per page. Resolved entries are excluded.
+        """
+        from llm_wiki.talk.page import TalkPage, compute_open_set
+
+        wiki_dir = self._vault_root / self._config.vault.wiki_dir.rstrip("/")
+
+        totals_issues = _empty_severity_counts(_ISSUE_SEVERITIES)
+        totals_talk = _empty_severity_counts(_TALK_SEVERITIES)
+        by_page: dict[str, dict] = {}
+
+        # Issues
+        for issue in queue.list(status="open"):
+            sev = _clamp_severity(issue.severity, _ISSUE_SEVERITIES, "minor")
+            totals_issues[sev] += 1
+            page = issue.page or "<vault>"
+            page_entry = by_page.setdefault(
+                page,
+                {
+                    "issues": _empty_severity_counts(_ISSUE_SEVERITIES),
+                    "talk": _empty_severity_counts(_TALK_SEVERITIES),
+                },
+            )
+            page_entry["issues"][sev] += 1
+
+        # Talk pages — same shape, swap vocabularies
+        if wiki_dir.exists():
+            for talk_path in sorted(wiki_dir.rglob("*.talk.md")):
+                rel = talk_path.relative_to(wiki_dir)
+                if any(p.startswith(".") for p in rel.parts):
+                    continue
+                stem = talk_path.stem
+                page_name = stem[: -len(".talk")] if stem.endswith(".talk") else stem
+                entries = TalkPage(talk_path).load()
+                open_entries = compute_open_set(entries)
+                for e in open_entries:
+                    sev = _clamp_severity(e.severity, _TALK_SEVERITIES, "suggestion")
+                    totals_talk[sev] += 1
+                    page_entry = by_page.setdefault(
+                        page_name,
+                        {
+                            "issues": _empty_severity_counts(_ISSUE_SEVERITIES),
+                            "talk": _empty_severity_counts(_TALK_SEVERITIES),
+                        },
+                    )
+                    page_entry["talk"][sev] += 1
+
+        return {
+            "pages_needing_attention": sorted(by_page.keys()),
+            "totals": {"issues": totals_issues, "talk": totals_talk},
+            "by_page": by_page,
+        }
 
     def _issue_queue(self) -> "IssueQueue":
         from llm_wiki.issues.queue import IssueQueue
@@ -417,11 +606,22 @@ class DaemonServer:
         if not page_path.exists():
             return {"status": "error", "message": f"Page not found: {request['page']}"}
 
+        severity = request.get("severity", "suggestion")
+        resolves_raw = request.get("resolves", [])
+        # Defensive: coerce to list[int] in case JSON delivers strings.
+        try:
+            resolves = [int(x) for x in resolves_raw]
+        except (TypeError, ValueError):
+            return {"status": "error", "message": "resolves must be a list of integers"}
+
         talk = TalkPage.for_page(page_path)
         entry = TalkEntry(
+            index=0,
             timestamp=_dt.datetime.now(_dt.timezone.utc).isoformat(),
             author=request["author"],
             body=request["body"],
+            severity=severity,
+            resolves=resolves,
         )
         talk.append(entry)
         ensure_talk_marker(page_path)
@@ -513,9 +713,27 @@ def _serialize_result(r: SearchResult) -> dict:
     }
 
 
+def _serialize_snippet_result(r) -> dict:
+    return {
+        "name": r.name,
+        "score": r.score,
+        "manifest": r.entry.to_manifest_text(),
+        "matches": [
+            {
+                "line": m.line,
+                "before": m.before,
+                "match": m.match,
+                "after": m.after,
+            }
+            for m in r.matches
+        ],
+    }
+
+
 def _serialize_issue(issue: "Issue", include_body: bool = False) -> dict:
     data = {
         "id": issue.id,
+        "severity": issue.severity,
         "type": issue.type,
         "status": issue.status,
         "title": issue.title,
@@ -527,3 +745,22 @@ def _serialize_issue(issue: "Issue", include_body: bool = False) -> dict:
     if include_body:
         data["body"] = issue.body
     return data
+
+
+# Severity vocabularies for the enriched routes. Issues use the strict
+# auditor subset; talk entries add suggestion + new_connection. Unknown
+# values are clamped to the safest in-vocabulary value rather than
+# silently growing the dict shape.
+_ISSUE_SEVERITIES: tuple[str, ...] = ("critical", "moderate", "minor")
+_TALK_SEVERITIES: tuple[str, ...] = (
+    "critical", "moderate", "minor", "suggestion", "new_connection",
+)
+
+
+def _empty_severity_counts(vocabulary: tuple[str, ...]) -> dict[str, int]:
+    return {sev: 0 for sev in vocabulary}
+
+
+def _clamp_severity(sev: str, vocabulary: tuple[str, ...], default: str) -> str:
+    """Return `sev` if in `vocabulary`, otherwise `default`."""
+    return sev if sev in vocabulary else default

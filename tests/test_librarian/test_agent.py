@@ -336,3 +336,214 @@ async def test_run_empty_vault(tmp_path: Path):
     result = await agent.run()
     assert result.pages_refined == []
     assert result.authorities_updated == 0
+
+
+@pytest.mark.asyncio
+async def test_refresh_talk_summaries_below_threshold_does_nothing(tmp_path):
+    """A talk page with fewer than min_new_entries open entries is skipped."""
+    from llm_wiki.config import WikiConfig
+    from llm_wiki.issues.queue import IssueQueue
+    from llm_wiki.librarian.agent import LibrarianAgent
+    from llm_wiki.librarian.talk_summary import TalkSummaryStore
+    from llm_wiki.talk.page import TalkEntry, TalkPage
+    from llm_wiki.vault import Vault, _state_dir_for
+
+    wiki = tmp_path / "wiki"
+    wiki.mkdir()
+    (wiki / "p.md").write_text("---\ntitle: P\n---\n\n## Body\n\ncontent\n")
+    talk = TalkPage(wiki / "p.talk.md")
+    # Two entries — below the default threshold of 5
+    talk.append(TalkEntry(0, "t1", "@a", "first"))
+    talk.append(TalkEntry(0, "t2", "@b", "second"))
+
+    cfg = WikiConfig()
+    vault = Vault.scan(tmp_path)
+    queue = IssueQueue(tmp_path)
+
+    class UnusedLLM:
+        async def complete(self, *args, **kwargs):
+            raise AssertionError("LLM should not be called below threshold")
+
+    agent = LibrarianAgent(vault, tmp_path, UnusedLLM(), queue, cfg)
+    summarized = await agent.refresh_talk_summaries()
+    assert summarized == 0
+
+    store = TalkSummaryStore.load(_state_dir_for(tmp_path) / "talk_summaries.json")
+    assert store.get("p") is None
+
+
+@pytest.mark.asyncio
+async def test_refresh_talk_summaries_above_threshold_summarizes(tmp_path):
+    """When open entries cross the threshold, the LLM is called and the
+    summary is persisted to the store. The high-water mark is set to the
+    max entry index in the file."""
+    from llm_wiki.config import WikiConfig
+    from llm_wiki.issues.queue import IssueQueue
+    from llm_wiki.librarian.agent import LibrarianAgent
+    from llm_wiki.librarian.talk_summary import TalkSummaryStore
+    from llm_wiki.talk.page import TalkEntry, TalkPage
+    from llm_wiki.traverse.llm_client import LLMResponse
+    from llm_wiki.vault import Vault, _state_dir_for
+
+    wiki = tmp_path / "wiki"
+    wiki.mkdir()
+    (wiki / "p.md").write_text("---\ntitle: P\n---\n\n## Body\n\ncontent\n")
+    talk = TalkPage(wiki / "p.talk.md")
+    for i in range(5):
+        talk.append(TalkEntry(0, f"t{i}", f"@a{i}", f"entry {i}"))
+
+    cfg = WikiConfig()  # threshold default = 5
+
+    class MockLLM:
+        async def complete(self, messages, temperature=0.0, priority="maintenance"):
+            return LLMResponse(content="Five open entries about validation.", tokens_used=10)
+
+    vault = Vault.scan(tmp_path)
+    queue = IssueQueue(tmp_path)
+    agent = LibrarianAgent(vault, tmp_path, MockLLM(), queue, cfg)
+    summarized = await agent.refresh_talk_summaries()
+    assert summarized == 1
+
+    store = TalkSummaryStore.load(_state_dir_for(tmp_path) / "talk_summaries.json")
+    record = store.get("p")
+    assert record is not None
+    assert "validation" in record.summary
+    # high-water mark is the max entry index = 5
+    assert record.last_max_index == 5
+
+
+@pytest.mark.asyncio
+async def test_refresh_talk_summaries_robust_to_intervening_closures(tmp_path):
+    """Closures between runs lower the open count but should not mask new
+    arrivals. The threshold counts entries with index > last_max_index that
+    are still open — measuring arrivals, not net open state."""
+    import datetime as _dt
+    from llm_wiki.config import WikiConfig
+    from llm_wiki.issues.queue import IssueQueue
+    from llm_wiki.librarian.agent import LibrarianAgent
+    from llm_wiki.librarian.talk_summary import TalkSummaryStore
+    from llm_wiki.talk.page import TalkEntry, TalkPage
+    from llm_wiki.traverse.llm_client import LLMResponse
+    from llm_wiki.vault import Vault, _state_dir_for
+
+    wiki = tmp_path / "wiki"
+    wiki.mkdir()
+    (wiki / "p.md").write_text("---\ntitle: P\n---\n\n## Body\n\ncontent\n")
+    talk = TalkPage(wiki / "p.talk.md")
+
+    # First run: 5 entries, all open → summarize, high-water = 5
+    for i in range(5):
+        talk.append(TalkEntry(0, f"t{i}", f"@a{i}", f"entry {i}"))
+
+    cfg = WikiConfig()
+    call_count = {"n": 0}
+
+    class CountingLLM:
+        async def complete(self, messages, temperature=0.0, priority="maintenance"):
+            call_count["n"] += 1
+            return LLMResponse(content="Summary text.", tokens_used=10)
+
+    vault = Vault.scan(tmp_path)
+    queue = IssueQueue(tmp_path)
+    agent = LibrarianAgent(vault, tmp_path, CountingLLM(), queue, cfg)
+    assert await agent.refresh_talk_summaries() == 1
+    assert call_count["n"] == 1
+
+    # Backdate the rate-limit timestamp so the next run isn't blocked by it
+    state_dir = _state_dir_for(tmp_path)
+    store = TalkSummaryStore.load(state_dir / "talk_summaries.json")
+    rec = store.get("p")
+    old_ts = (_dt.datetime.now(_dt.timezone.utc) - _dt.timedelta(hours=2)).isoformat()
+    store.set("p", summary=rec.summary, last_max_index=rec.last_max_index, last_summary_ts=old_ts)
+    store.save()
+
+    # Second run: append 5 NEW entries (indices 6-10), then a closer that resolves 1-4
+    for i in range(5, 10):
+        talk.append(TalkEntry(0, f"t{i}", f"@a{i}", f"entry {i}"))
+    talk.append(TalkEntry(
+        0, "t-closer", "@closer", "closes 1-4", resolves=[1, 2, 3, 4],
+    ))
+    # Open count is now: entry 5 + entries 6-10 + closer = 7
+    # Last summary high-water = 5
+    # New entries with index > 5 that are open = entries 6-10 + closer = 6 → above threshold
+
+    assert await agent.refresh_talk_summaries() == 1
+    assert call_count["n"] == 2  # LLM called again because new arrivals exceeded threshold
+
+    rec2 = store.load(state_dir / "talk_summaries.json").get("p")
+    assert rec2 is not None
+    assert rec2.last_max_index == 11  # max index in the file is now 11
+
+
+@pytest.mark.asyncio
+async def test_refresh_talk_summaries_excludes_resolved_entries(tmp_path):
+    """Resolved entries are not counted toward the threshold."""
+    from llm_wiki.config import WikiConfig
+    from llm_wiki.issues.queue import IssueQueue
+    from llm_wiki.librarian.agent import LibrarianAgent
+    from llm_wiki.talk.page import TalkEntry, TalkPage
+    from llm_wiki.vault import Vault
+
+    wiki = tmp_path / "wiki"
+    wiki.mkdir()
+    (wiki / "p.md").write_text("---\ntitle: P\n---\n\n## Body\n\ncontent\n")
+    talk = TalkPage(wiki / "p.talk.md")
+    # Five entries, but four of them get resolved → only one open + the resolver
+    for i in range(5):
+        talk.append(TalkEntry(0, f"t{i}", f"@a{i}", f"entry {i}"))
+    talk.append(TalkEntry(0, "t-close", "@closer", "closes 1-4", resolves=[1, 2, 3, 4]))
+
+    # Threshold is 5; open entries = 2 (entry 5 + the closer) → below threshold
+    cfg = WikiConfig()
+
+    class UnusedLLM:
+        async def complete(self, *args, **kwargs):
+            raise AssertionError("LLM should not be called — open count is 2, below 5")
+
+    vault = Vault.scan(tmp_path)
+    queue = IssueQueue(tmp_path)
+    agent = LibrarianAgent(vault, tmp_path, UnusedLLM(), queue, cfg)
+    summarized = await agent.refresh_talk_summaries()
+    assert summarized == 0
+
+
+@pytest.mark.asyncio
+async def test_refresh_talk_summaries_rate_limit_blocks_resummary(tmp_path):
+    """A page summarized within `talk_summary_min_interval_seconds` is skipped."""
+    import datetime as _dt
+    from llm_wiki.config import WikiConfig
+    from llm_wiki.issues.queue import IssueQueue
+    from llm_wiki.librarian.agent import LibrarianAgent
+    from llm_wiki.librarian.talk_summary import TalkSummaryStore
+    from llm_wiki.talk.page import TalkEntry, TalkPage
+    from llm_wiki.vault import Vault, _state_dir_for
+
+    wiki = tmp_path / "wiki"
+    wiki.mkdir()
+    (wiki / "p.md").write_text("---\ntitle: P\n---\n\n## Body\n\ncontent\n")
+    talk = TalkPage(wiki / "p.talk.md")
+    for i in range(6):
+        talk.append(TalkEntry(0, f"t{i}", f"@a{i}", f"entry {i}"))
+
+    # Pre-populate the store with a recent summary covering only entry 1.
+    # This leaves entries 2-6 (= 5 new arrivals) above the threshold, so the
+    # threshold check would pass on its own. The recent timestamp must be
+    # what blocks the resummary — that's the contract under test.
+    state_dir = _state_dir_for(tmp_path)
+    state_dir.mkdir(parents=True, exist_ok=True)
+    store = TalkSummaryStore.load(state_dir / "talk_summaries.json")
+    now_iso = _dt.datetime.now(_dt.timezone.utc).isoformat()
+    store.set("p", summary="recent", last_max_index=1, last_summary_ts=now_iso)
+    store.save()
+
+    cfg = WikiConfig()  # min_interval default = 3600s
+
+    class UnusedLLM:
+        async def complete(self, *args, **kwargs):
+            raise AssertionError("rate limit should block this call")
+
+    vault = Vault.scan(tmp_path)
+    queue = IssueQueue(tmp_path)
+    agent = LibrarianAgent(vault, tmp_path, UnusedLLM(), queue, cfg)
+    summarized = await agent.refresh_talk_summaries()
+    assert summarized == 0

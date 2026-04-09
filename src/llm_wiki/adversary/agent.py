@@ -163,6 +163,7 @@ class AdversaryAgent:
             id=Issue.make_id("claim-failed", claim.page, claim.id),
             type="claim-failed",
             status="open",
+            severity="critical",
             title=f"Claim on '{claim.page}' is {verdict}",
             page=claim.page,
             body=(
@@ -200,6 +201,7 @@ class AdversaryAgent:
 
         talk = TalkPage.for_page(page_path)
         entry = TalkEntry(
+            index=0,
             timestamp=now.isoformat(),
             author="@adversary",
             body=(
@@ -207,6 +209,7 @@ class AdversaryAgent:
                 f"> {claim.text}\n\n"
                 f"{explanation}"
             ),
+            severity="critical",
         )
         talk.append(entry)
         ensure_talk_marker(page_path)

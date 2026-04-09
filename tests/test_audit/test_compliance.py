@@ -318,3 +318,51 @@ def test_new_idea_skipped_for_first_time_seen_page(tmp_path: Path):
 
     result = reviewer.review_change(page, None, new)
     assert "new-idea" not in result.reasons
+
+
+def test_compliance_new_idea_issue_is_moderate(tmp_path: Path):
+    """A new-idea issue filed by the compliance reviewer has severity='moderate'."""
+    _, queue, reviewer, page = _setup(tmp_path)
+    old = "---\ntitle: P\n---\n\n## Body\n\nShort intro.\n"
+    new_paragraph = "x" * 250  # > 200 chars triggers new-idea
+    new = (
+        "---\ntitle: P\n---\n\n## Body\n\nShort intro.\n\n" + new_paragraph + "\n"
+    )
+    page.write_text(old)
+
+    result = reviewer.review_change(page, old, new)
+
+    new_idea_issues = [
+        i for i in result.issues_filed
+        if (issue := queue.get(i)) is not None and issue.type == "new-idea"
+    ]
+    assert new_idea_issues, "expected a new-idea issue"
+    for issue_id in new_idea_issues:
+        issue = queue.get(issue_id)
+        assert issue is not None
+        assert issue.severity == "moderate"
+
+
+def test_compliance_missing_citation_issue_is_moderate(tmp_path: Path):
+    """A missing-citation issue filed by the compliance reviewer has severity='moderate'."""
+    _, queue, reviewer, page = _setup(tmp_path)
+    old = "---\ntitle: P\n---\n\n## Body\n\nFirst sentence [[raw/a.pdf]].\n"
+    new = (
+        "---\ntitle: P\n---\n\n## Body\n\nFirst sentence [[raw/a.pdf]].\n\n"
+        "An uncited sentence with no citation at all.\n"
+    )
+    page.write_text(old)
+
+    result = reviewer.review_change(page, old, new)
+
+    compliance_issues = [
+        i for i in result.issues_filed
+        if (issue := queue.get(i)) is not None
+        and issue.type == "compliance"
+        and issue.metadata.get("subtype") == "missing-citation"
+    ]
+    assert compliance_issues, "expected a missing-citation issue"
+    for issue_id in compliance_issues:
+        issue = queue.get(issue_id)
+        assert issue is not None
+        assert issue.severity == "moderate"
