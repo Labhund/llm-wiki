@@ -704,11 +704,15 @@ class DaemonServer:
     def _handle_scheduler_status(self) -> dict:
         if self._scheduler is None:
             return {"status": "ok", "workers": []}
+        health = self._scheduler.health_info()
         workers = [
             {
                 "name": name,
                 "interval_seconds": interval_seconds,
                 "last_run": last_run,
+                "last_attempt": health.get(name, {}).get("last_attempt"),
+                "consecutive_failures": health.get(name, {}).get("consecutive_failures", 0),
+                "backend_reachable": health.get(name, {}).get("backend_reachable"),
             }
             for name, interval_seconds, last_run in self._scheduler.workers_info()
         ]

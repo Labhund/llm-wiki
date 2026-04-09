@@ -115,6 +115,18 @@ class IntervalScheduler:
             for w in self._workers
         ]
 
+    def health_info(self) -> dict[str, dict]:
+        """Return health snapshot for all registered workers."""
+        return {
+            worker.name: {
+                "last_run": self._last_run.get(worker.name),
+                "last_attempt": self._last_attempt.get(worker.name),
+                "consecutive_failures": self._consecutive_failures.get(worker.name, 0),
+                "backend_reachable": self._backend_reachable.get(worker.name),
+            }
+            for worker in self._workers
+        }
+
     async def start(self) -> None:
         self._stopping = False
         for worker in self._workers:

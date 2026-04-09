@@ -448,12 +448,17 @@ def maintenance_status(vault_path: Path) -> None:
         click.echo("No maintenance workers registered.")
         return
 
-    click.echo(f"{'name':<14} {'interval':<12} last_run")
-    click.echo("-" * 60)
+    click.echo(f"{'name':<16} {'interval':<10} {'failures':<10} last_run")
+    click.echo("-" * 70)
     for worker in workers:
         interval = f"{worker['interval_seconds']:.0f}s"
+        failures = worker.get("consecutive_failures", 0)
         last = worker["last_run"] or "never"
-        click.echo(f"{worker['name']:<14} {interval:<12} {last}")
+        reachable = worker.get("backend_reachable")
+        reachable_str = "" if reachable is None else (" [backend DOWN]" if not reachable else "")
+        click.echo(
+            f"{worker['name']:<16} {interval:<10} {failures:<10} {last}{reachable_str}"
+        )
 
 
 @cli.group()

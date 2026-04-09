@@ -437,3 +437,61 @@ async def test_scheduler_status_route(sample_vault, tmp_path):
         except asyncio.CancelledError:
             pass
         await server.stop()
+
+
+def test_scheduler_health_info_structure():
+    """health_info() returns per-worker dict with expected keys."""
+    scheduler = IntervalScheduler()
+
+    async def noop():
+        pass
+
+    scheduler.register(ScheduledWorker("worker-a", 1.0, noop))
+    scheduler.register(ScheduledWorker("worker-b", 2.0, noop, health_probe_url="http://x/v1"))
+
+    info = scheduler.health_info()
+    assert "worker-a" in info
+    assert "worker-b" in info
+
+    for name in ("worker-a", "worker-b"):
+        entry = info[name]
+        assert "last_run" in entry
+        assert "last_attempt" in entry
+        assert "consecutive_failures" in entry
+        assert "backend_reachable" in entry
+
+    assert info["worker-a"]["last_run"] is None  # never ran
+    assert info["worker-a"]["consecutive_failures"] == 0
+
+
+@pytest.mark.asyncio
+async def test_scheduler_status_route_includes_health(sample_vault, tmp_path):
+    """The scheduler-status daemon route includes health fields per worker."""
+    from llm_wiki.config import MaintenanceConfig, WikiConfig
+    from llm_wiki.daemon.client import DaemonClient
+    from llm_wiki.daemon.server import DaemonServer
+
+    sock_path = tmp_path / "health-test.sock"
+    config = WikiConfig(maintenance=MaintenanceConfig(auditor_interval="1s"))
+    server = DaemonServer(sample_vault, sock_path, config=config)
+    await server.start()
+    serve_task = asyncio.create_task(server.serve_forever())
+
+    try:
+        await asyncio.sleep(0.2)
+        client = DaemonClient(sock_path)
+        resp = client.request({"type": "scheduler-status"})
+
+        assert resp["status"] == "ok"
+        auditor = next(w for w in resp["workers"] if w["name"] == "auditor")
+        assert "last_attempt" in auditor
+        assert "consecutive_failures" in auditor
+        assert "backend_reachable" in auditor
+    finally:
+        server._server.close()
+        serve_task.cancel()
+        try:
+            await serve_task
+        except asyncio.CancelledError:
+            pass
+        await server.stop()
