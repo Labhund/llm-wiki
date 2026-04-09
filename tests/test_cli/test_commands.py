@@ -1,4 +1,5 @@
 import asyncio
+import os
 import threading
 from pathlib import Path
 
@@ -166,3 +167,35 @@ def test_query_via_daemon(daemon_for_cli, monkeypatch):
     assert "sRNA" in result.output
     assert "Citations:" in result.output
     assert "srna-embeddings" in result.output
+
+
+def test_default_vault_uses_env_var(tmp_path, monkeypatch):
+    """--vault defaults to LLM_WIKI_VAULT env var when set."""
+    (tmp_path / "wiki").mkdir()
+    monkeypatch.setenv("LLM_WIKI_VAULT", str(tmp_path))
+
+    from llm_wiki.cli.main import _default_vault_path
+    result = _default_vault_path()
+    assert result == str(tmp_path)
+
+
+def test_default_vault_falls_back_to_home_wiki(tmp_path, monkeypatch):
+    """--vault defaults to ~/wiki when LLM_WIKI_VAULT is unset and ~/wiki exists."""
+    monkeypatch.delenv("LLM_WIKI_VAULT", raising=False)
+    monkeypatch.setattr(Path, "home", staticmethod(lambda: tmp_path))
+    (tmp_path / "wiki").mkdir()
+
+    from llm_wiki.cli.main import _default_vault_path
+    result = _default_vault_path()
+    assert result == str(tmp_path / "wiki")
+
+
+def test_default_vault_falls_back_to_dot(tmp_path, monkeypatch):
+    """--vault defaults to '.' when neither LLM_WIKI_VAULT nor ~/wiki is set."""
+    monkeypatch.delenv("LLM_WIKI_VAULT", raising=False)
+    monkeypatch.setattr(Path, "home", staticmethod(lambda: tmp_path))
+    # Do NOT create tmp_path/wiki
+
+    from llm_wiki.cli.main import _default_vault_path
+    result = _default_vault_path()
+    assert result == "."
