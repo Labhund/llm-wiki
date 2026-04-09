@@ -816,8 +816,8 @@ class DaemonServer:
             for issue in page_issues
         ]
         return {
-            "open_count": len(page_issues),
-            "by_severity": by_severity,
+            "n": len(page_issues),
+            "sev": by_severity,
             "items": items,
         }
 
@@ -843,12 +843,12 @@ class DaemonServer:
             break
 
         empty = {
-            "entry_count": 0,
-            "open_count": 0,
-            "by_severity": _empty_severity_counts(_TALK_SEVERITIES),
+            "cnt": 0,
+            "open": 0,
+            "sev": _empty_severity_counts(_TALK_SEVERITIES),
             "summary": "",
-            "recent_critical": [],
-            "recent_moderate": [],
+            "crit": [],
+            "mod": [],
         }
         if page_path is None:
             return empty
@@ -865,11 +865,11 @@ class DaemonServer:
             sev = _clamp_severity(e.severity, _TALK_SEVERITIES, "suggestion")
             by_severity[sev] += 1
 
-        recent_critical = [
+        crit = [
             {"index": e.index, "ts": e.timestamp, "author": e.author, "body": e.body}
             for e in open_entries if e.severity == "critical"
         ]
-        recent_moderate = [
+        mod = [
             {"index": e.index, "ts": e.timestamp, "author": e.author, "body": e.body}
             for e in open_entries if e.severity == "moderate"
         ]
@@ -882,12 +882,12 @@ class DaemonServer:
         summary_text = record.summary if record is not None else ""
 
         return {
-            "entry_count": len(all_entries),
-            "open_count": len(open_entries),
-            "by_severity": by_severity,
+            "cnt": len(all_entries),
+            "open": len(open_entries),
+            "sev": by_severity,
             "summary": summary_text,
-            "recent_critical": recent_critical,
-            "recent_moderate": recent_moderate,
+            "crit": crit,
+            "mod": mod,
         }
 
     def _handle_manifest(self, request: dict) -> dict:
