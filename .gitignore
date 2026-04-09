@@ -28,5 +28,8 @@ local/
 # llm-wiki state (index, manifest cache)
 .llm-wiki/
 
+# Daemon-managed compiled pages directory (created when vault root is repo root)
+wiki/wiki/
+
 # Git worktrees (subagent isolation)
 .worktrees/
