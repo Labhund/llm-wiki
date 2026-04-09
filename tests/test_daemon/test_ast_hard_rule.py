@@ -24,12 +24,26 @@ FORBIDDEN_NAMES = {
     "_handle_page_update",
     "_handle_page_append",
     "_handle_session_close",
+    # Phase 6c: the MCP layer is for supervised paths only.
+    "MCPServer",
+    "WIKI_TOOLS",
 }
 FORBIDDEN_ROUTE_STRINGS = {
     "page-create",
     "page-update",
     "page-append",
     "session-close",
+}
+
+# Phase 6c: forbidden import modules. Background workers must never
+# import anything from llm_wiki.mcp — that whole package is the
+# supervised-write surface and must not be reachable from cron-driven
+# code paths.
+FORBIDDEN_IMPORT_MODULES = {
+    "llm_wiki.mcp",
+    "llm_wiki.mcp.server",
+    "llm_wiki.mcp.tools",
+    "llm_wiki.mcp.errors",
 }
 
 # Modules that are background-worker code paths. The scheduler reaches
@@ -96,6 +110,17 @@ def _violations_in_file(path: pathlib.Path) -> list[str]:
                 if alias.name in FORBIDDEN_NAMES:
                     violations.append(
                         f"{path}:{node.lineno}: imports forbidden symbol {alias.name!r}"
+                    )
+            if node.module in FORBIDDEN_IMPORT_MODULES:
+                violations.append(
+                    f"{path}:{node.lineno}: imports from forbidden module {node.module!r}"
+                )
+        # Plain Import (e.g. `import llm_wiki.mcp.tools`)
+        if isinstance(node, ast.Import):
+            for alias in node.names:
+                if alias.name in FORBIDDEN_IMPORT_MODULES:
+                    violations.append(
+                        f"{path}:{node.lineno}: imports forbidden module {alias.name!r}"
                     )
         # String literals containing forbidden route names
         if isinstance(node, ast.Constant) and isinstance(node.value, str):
@@ -175,6 +200,16 @@ def _violations_in_function(
                 if alias.name in FORBIDDEN_NAMES:
                     violations.append(
                         f"{source_label}:{node.lineno}: imports forbidden symbol {alias.name!r}"
+                    )
+            if node.module in FORBIDDEN_IMPORT_MODULES:
+                violations.append(
+                    f"{source_label}:{node.lineno}: imports from forbidden module {node.module!r}"
+                )
+        if isinstance(node, ast.Import):
+            for alias in node.names:
+                if alias.name in FORBIDDEN_IMPORT_MODULES:
+                    violations.append(
+                        f"{source_label}:{node.lineno}: imports forbidden module {alias.name!r}"
                     )
         if isinstance(node, ast.Constant) and isinstance(node.value, str):
             if node.value in FORBIDDEN_ROUTE_STRINGS:
