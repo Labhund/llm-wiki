@@ -122,6 +122,22 @@ class DaemonServer:
 
     async def stop(self) -> None:
         """Shut down the maintenance substrate, then the server."""
+        # Phase 6b: settle every open session before tearing down anything else
+        if self._session_registry is not None and self._commit_service is not None:
+            from llm_wiki.daemon.sessions import load_journal
+
+            for sess in list(self._session_registry.all_sessions()):
+                try:
+                    entries = load_journal(sess.journal_path)
+                    if entries:
+                        await self._commit_service.settle_with_fallback(sess, entries)
+                except Exception:
+                    logger.exception(
+                        "Failed to settle session %s on shutdown", sess.id,
+                    )
+                finally:
+                    self._session_registry.close(sess)
+
         if self._scheduler is not None:
             await self._scheduler.stop()
             self._scheduler = None
@@ -380,8 +396,38 @@ class DaemonServer:
                 return await self._handle_page_update(request)
             case "page-append":
                 return await self._handle_page_append(request)
+            case "session-close":
+                return await self._handle_session_close(request)
             case _:
                 return {"status": "error", "message": f"Unknown request type: {req_type}"}
+
+    async def _handle_session_close(self, request: dict) -> dict:
+        for f in ("author", "connection_id"):
+            if f not in request:
+                return {"status": "error", "message": f"Missing required field: {f}"}
+        if self._session_registry is None or self._commit_service is None:
+            return {"status": "error", "message": "Session machinery not initialized"}
+
+        from llm_wiki.daemon.sessions import load_journal
+
+        sess = self._session_registry.get_active(
+            request["author"], request["connection_id"],
+        )
+        if sess is None:
+            # Idempotent: closing a session that was never opened (or already
+            # settled) is not an error. The caller may be the inactivity timer
+            # racing with an explicit close, or a swarm orchestrator closing
+            # eagerly.
+            return {"status": "ok", "settled": False}
+
+        entries = load_journal(sess.journal_path)
+        result = await self._commit_service.settle_with_fallback(sess, entries)
+        self._session_registry.close(sess)
+        return {
+            "status": "ok",
+            "settled": True,
+            "commit_sha": result.commit_sha,
+        }
 
     async def _handle_page_create(self, request: dict) -> dict:
         if self._page_write_service is None:
