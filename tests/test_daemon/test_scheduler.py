@@ -342,6 +342,64 @@ async def test_daemon_server_registers_adversary_worker(sample_vault, tmp_path):
 
 
 @pytest.mark.asyncio
+async def test_scheduler_files_issue_on_threshold_crossing(tmp_path):
+    """After N consecutive failures, an issue is filed in the wiki issue queue."""
+    from llm_wiki.issues.queue import IssueQueue
+
+    wiki_dir = tmp_path / "wiki"
+    wiki_dir.mkdir()
+    issue_queue = IssueQueue(wiki_dir)
+
+    async def always_fails():
+        raise RuntimeError("backend down")
+
+    scheduler = IntervalScheduler(
+        issue_queue=issue_queue,
+        escalation_threshold=2,
+    )
+    scheduler.register(ScheduledWorker("bad-worker", 0.05, always_fails))
+    await scheduler.start()
+    await asyncio.sleep(0.3)  # enough for >= 2 failures
+    await scheduler.stop()
+
+    issues = issue_queue.list(status="open", type="worker-failure")
+    assert len(issues) == 1
+    assert "bad-worker" in issues[0].title
+    assert issues[0].severity == "moderate"
+
+
+@pytest.mark.asyncio
+async def test_scheduler_resolves_issue_on_recovery(tmp_path):
+    """Issue is auto-resolved when the worker recovers after threshold crossing."""
+    from llm_wiki.issues.queue import IssueQueue
+
+    wiki_dir = tmp_path / "wiki"
+    wiki_dir.mkdir()
+    issue_queue = IssueQueue(wiki_dir)
+
+    fail_count = {"n": 0}
+
+    async def fails_then_recovers():
+        if fail_count["n"] < 2:
+            fail_count["n"] += 1
+            raise RuntimeError("temporary failure")
+
+    scheduler = IntervalScheduler(
+        issue_queue=issue_queue,
+        escalation_threshold=2,
+    )
+    scheduler.register(ScheduledWorker("recover-worker", 0.05, fails_then_recovers))
+    await scheduler.start()
+    await asyncio.sleep(0.5)
+    await scheduler.stop()
+
+    issues_open = issue_queue.list(status="open", type="worker-failure")
+    issues_resolved = issue_queue.list(status="resolved", type="worker-failure")
+    assert len(issues_open) == 0
+    assert len(issues_resolved) == 1
+
+
+@pytest.mark.asyncio
 async def test_scheduler_status_route(sample_vault, tmp_path):
     """The scheduler-status route returns workers + last-run timestamps."""
     from llm_wiki.config import MaintenanceConfig, WikiConfig

@@ -5,7 +5,10 @@ import datetime
 import logging
 import re
 from dataclasses import dataclass
-from typing import Awaitable, Callable
+from typing import TYPE_CHECKING, Awaitable, Callable
+
+if TYPE_CHECKING:
+    from llm_wiki.issues.queue import IssueQueue
 
 logger = logging.getLogger(__name__)
 
@@ -63,13 +66,20 @@ class IntervalScheduler:
     every worker task and awaits its termination.
     """
 
-    def __init__(self) -> None:
+    def __init__(
+        self,
+        issue_queue: IssueQueue | None = None,
+        escalation_threshold: int = 3,
+    ) -> None:
         self._workers: list[ScheduledWorker] = []
         self._tasks: dict[str, asyncio.Task] = {}
         self._last_run: dict[str, str] = {}
         self._last_attempt: dict[str, str] = {}
         self._consecutive_failures: dict[str, int] = {}
         self._backend_reachable: dict[str, bool | None] = {}
+        self._issue_queue = issue_queue
+        self._escalation_threshold = escalation_threshold
+        self._escalation_issue_ids: dict[str, str] = {}  # worker_name -> open issue id
         self._stopping = False
 
     def register(self, worker: ScheduledWorker) -> None:
@@ -137,6 +147,44 @@ class IntervalScheduler:
         except asyncio.CancelledError:
             return
 
+    async def _maybe_escalate(
+        self, worker: ScheduledWorker, failures: int, exc: Exception
+    ) -> None:
+        """File a wiki issue when consecutive_failures first crosses the threshold."""
+        if self._issue_queue is None:
+            return
+        if failures != self._escalation_threshold:
+            return  # Only act at exactly the threshold crossing
+
+        from llm_wiki.issues.queue import Issue
+        import datetime as _dt
+
+        # Use a timestamp-based key so each threshold crossing creates a fresh issue
+        key = f"{worker.name}-{_dt.datetime.now(_dt.timezone.utc).strftime('%Y%m%dT%H%M%S')}"
+        issue = Issue(
+            id=Issue.make_id("worker-failure", None, key),
+            type="worker-failure",
+            status="open",
+            title=f"[{worker.name}] has failed {failures} consecutive runs",
+            page=None,
+            body=(
+                f"Last error type: {type(exc).__name__}\n"
+                f"Last error: {exc}\n\n"
+                f"The worker will retry on its next interval. "
+                f"Check that the configured LLM backend is reachable."
+            ),
+            created=Issue.now_iso(),
+            detected_by="scheduler",
+            severity="moderate",
+        )
+        _, was_new = self._issue_queue.add(issue)
+        if was_new:
+            self._escalation_issue_ids[worker.name] = issue.id
+            logger.warning(
+                "Worker %r: filed issue %s after %d consecutive failures",
+                worker.name, issue.id, failures,
+            )
+
     async def _run_once(self, worker: ScheduledWorker) -> None:
         # Health probe — skip run (not fail) if backend is unreachable
         if worker.health_probe_url is not None:
@@ -154,13 +202,23 @@ class IntervalScheduler:
         try:
             await worker.coro_factory()
             self._last_run[worker.name] = now
+            prev_failures = self._consecutive_failures.get(worker.name, 0)
             self._consecutive_failures[worker.name] = 0
+            # Auto-resolve any open escalation issue for this worker
+            if prev_failures >= self._escalation_threshold and self._issue_queue is not None:
+                issue_id = self._escalation_issue_ids.pop(worker.name, None)
+                if issue_id:
+                    self._issue_queue.update_status(issue_id, "resolved")
+                    logger.info(
+                        "Worker %r recovered; resolved issue %s", worker.name, issue_id
+                    )
         except asyncio.CancelledError:
             raise
-        except Exception:
+        except Exception as exc:
             failures = self._consecutive_failures.get(worker.name, 0) + 1
             self._consecutive_failures[worker.name] = failures
             logger.exception(
                 "Worker %r raised (consecutive_failures=%d); will retry on next interval",
                 worker.name, failures,
             )
+            await self._maybe_escalate(worker, failures, exc)

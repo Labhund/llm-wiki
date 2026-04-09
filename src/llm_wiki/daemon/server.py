@@ -67,7 +67,10 @@ class DaemonServer:
             on_settled=self._handle_settled_change,
         )
 
-        self._scheduler = IntervalScheduler()
+        self._scheduler = IntervalScheduler(
+            issue_queue=IssueQueue(wiki_dir),
+            escalation_threshold=self._config.maintenance.failure_escalation_threshold,
+        )
         self._register_maintenance_workers()
         await self._scheduler.start()
 
