@@ -1,5 +1,6 @@
 from pathlib import Path
 
+import pytest
 import yaml
 
 from llm_wiki.config import WikiConfig
@@ -7,10 +8,11 @@ from llm_wiki.config import WikiConfig
 
 def test_default_config():
     config = WikiConfig()
-    assert config.llm.default == "openai/local-instruct"
+    # New LLMConfig has no backends by default, so resolve() raises
+    with pytest.raises(ValueError):
+        config.llm.resolve()
     assert config.llm.embeddings == "openai/text-embedding-3-small"
-    assert config.llm.api_base is None
-    assert config.llm.api_key is None
+    assert config.llm.default_backend == "fast"
     assert config.search.backend == "tantivy"
     assert config.budgets.default_query == 16000
     assert config.budgets.hard_ceiling_pct == 0.8
@@ -28,24 +30,26 @@ def test_load_from_yaml(tmp_path: Path):
         "  mode: managed\n"
     )
     config = WikiConfig.load(config_file)
-    assert config.llm.default == "ollama/llama3"
+    # Old-style "default" is migrated to legacy backend
+    assert config.llm.backends["default"].model == "ollama/llama3"
     assert config.budgets.default_query == 8192
     assert config.vault.mode == "managed"
-    # Non-specified fields keep defaults
     assert config.llm.embeddings == "openai/text-embedding-3-small"
     assert config.search.backend == "tantivy"
 
 
 def test_load_missing_file():
     config = WikiConfig.load(Path("/nonexistent/config.yaml"))
-    assert config.llm.default == "openai/local-instruct"
+    with pytest.raises(ValueError):
+        config.llm.resolve()
 
 
 def test_load_empty_file(tmp_path: Path):
     config_file = tmp_path / "config.yaml"
     config_file.write_text("")
     config = WikiConfig.load(config_file)
-    assert config.llm.default == "openai/local-instruct"
+    with pytest.raises(ValueError):
+        config.llm.resolve()
 
 
 def test_maintenance_config_has_talk_summary_defaults():
