@@ -397,3 +397,37 @@ async def test_lint_attention_map_excludes_resolved_talk_entries(phase6a_daemon_
     by_page = am["by_page"].get("srna-embeddings", {})
     talk_counts = by_page.get("talk", {})
     assert talk_counts.get("critical", 0) == 0
+
+
+@pytest.mark.asyncio
+async def test_issues_routes_include_severity(phase6a_daemon_server, sample_vault):
+    """Both issues-list and issues-get carry the severity field."""
+    from llm_wiki.issues.queue import Issue, IssueQueue
+
+    server, sock_path = phase6a_daemon_server
+    queue = IssueQueue(sample_vault)
+    queue.add(Issue(
+        id=Issue.make_id("broken-citation", "srna-embeddings", "raw/missing.pdf"),
+        type="broken-citation",
+        status="open",
+        severity="critical",
+        title="Missing source",
+        page="srna-embeddings",
+        body="A test issue.",
+        created=Issue.now_iso(),
+        detected_by="auditor",
+    ))
+
+    list_resp = await _request(sock_path, {"type": "issues-list"})
+    assert list_resp["status"] == "ok"
+    assert list_resp["issues"]
+    for item in list_resp["issues"]:
+        assert "severity" in item, f"issues-list dropped severity: {item}"
+
+    get_resp = await _request(sock_path, {
+        "type": "issues-get",
+        "id": Issue.make_id("broken-citation", "srna-embeddings", "raw/missing.pdf"),
+    })
+    assert get_resp["status"] == "ok"
+    assert "severity" in get_resp["issue"]
+    assert get_resp["issue"]["severity"] == "critical"

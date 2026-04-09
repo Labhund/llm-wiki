@@ -735,6 +735,7 @@ def _serialize_snippet_result(r) -> dict:
 def _serialize_issue(issue: "Issue", include_body: bool = False) -> dict:
     data = {
         "id": issue.id,
+        "severity": issue.severity,
         "type": issue.type,
         "status": issue.status,
         "title": issue.title,
