@@ -330,9 +330,9 @@ These are the most likely to be misused. The tradeoff is not obvious:
 
 The current descriptions don't make these tradeoffs explicit. An agent that uses `wiki_query` for everything never builds its own context; an agent that uses `wiki_search` for everything misses compiled synthesis. Both are wrong patterns that the tool descriptions should prevent.
 
-**2. `wiki_read` viewport discipline**
+**2. `wiki_read` viewport guidance**
 
-The viewport parameter (`top` / `section` / `grep` / `full`) is the most important behavioural constraint in the system. The principle "never call `full` without trying `top` first" exists in the skill but not in the tool description. An agent without skills will call `full` freely. Fix: add explicit guidance to the `wiki_read` description — default to `top`, use `full` only as last resort, explain why (token budget).
+The viewport parameter (`top` / `section` / `grep` / `full`) is the most important behavioural signal in the system. The tool description should encourage reading with intent: `top` to orient, named section when you know what you need, `full` when you genuinely need the whole page (writing a patch, short page, structural analysis). The manifest provides section sizes before you read — the description should point agents at that information. Frame as a capability, not a prohibition.
 
 **3. Session management**
 
@@ -356,7 +356,7 @@ A `patch-conflict` response requires the agent to re-read the page and retry —
 
 **Cross-check field names against daemon output.** The gallery revealed a gap between what we *think* the agent receives and what it actually receives. Field names referenced in skill files must match the actual daemon response schema. After L2 (schema rename), this audit is mandatory — skill files that reference old field names will silently fail.
 
-**Viewport-first language.** "Never call `full` without trying `top` first" must survive context compaction — it needs to be expressed sharply enough that it doesn't collapse into a vague caution. Current phrasing in `index.md` is a principle; `research.md` and `write.md` should repeat it as an operational rule at the point of use.
+**Viewport guidance language.** The principle is "read with intent, the manifest gives you the map." `research.md` and `write.md` should reinforce this at the point of use — not as a prohibition on `full` but as an encouragement to check section sizes before reading.
 
 **Session-close ritual.** `wiki_session_close` reminder is present in `index.md` but needs to be echoed at the end of every skill that involves writes — `write.md`, `ingest.md`, `maintain.md`. A principle stated once in an index file doesn't survive multi-hop skill loading.
 

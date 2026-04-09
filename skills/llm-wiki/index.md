@@ -17,7 +17,7 @@ If autonomous → use `llm-wiki/autonomous/<subskill>` instead of this skill set
 
 These apply to every operation.
 
-**Viewport-first.** Never call `wiki_read` with `viewport=full` without first trying `top` or a named section. The manifest is the map; your token budget is the constraint. `full` is a last resort.
+**Viewport-aware.** The manifest tells you each page's sections and token counts before you read. Use that — `top` to orient, a named section when you know what you need, `full` when you genuinely need the whole page (writing a patch, short page, structural analysis). The goal is reading with intent, not avoiding `full` as a rule.
 
 **Traversal, not RAG.** One search → done is wrong. Enter via manifest or search, follow wikilinks with purpose, build understanding across pages. The wiki is a compiled knowledge graph, not a retrieval index.
 

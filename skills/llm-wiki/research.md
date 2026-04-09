@@ -49,7 +49,7 @@ The sub-agent follows Mode 3 (in-context manual) discipline internally.
 
 1. `wiki_manifest` with a budget — orient before searching; understand the cluster landscape
 2. `wiki_search` for entry points — do not start reading without a target
-3. `wiki_read` viewport order: `top` → named section → `grep` → `full` (never `full` first)
+3. `wiki_read` with intent — `top` to orient, named section when you know what you need, `full` when you need the whole page. The manifest gives you section sizes before you read; use them.
 4. Follow wikilinks with purpose — for each link, ask: does following this serve my stated intent?
 5. Inline issue/talk digests in `wiki_read` responses are relevant findings — critical and moderate signals are part of the research result
 
