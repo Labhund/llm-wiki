@@ -153,3 +153,9 @@ def test_ingest_config_loads_from_yaml(tmp_path):
     assert c.ingest.pdf_extractor == "local-ocr"
     assert c.ingest.local_ocr_endpoint == "http://gpu-box:8006/v1"
     assert c.ingest.local_ocr_model == "my-ocr-model"
+
+
+def test_maintenance_config_synthesis_authority_boost_default():
+    """synthesis_authority_boost defaults to 1.5."""
+    cfg = WikiConfig()
+    assert cfg.maintenance.synthesis_authority_boost == 1.5
