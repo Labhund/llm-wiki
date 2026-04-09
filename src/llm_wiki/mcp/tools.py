@@ -202,6 +202,7 @@ async def handle_wiki_ingest(ctx: ToolContext, args: dict) -> list[TextContent]:
         "source_path": args["source_path"],
         "author": args["author"],
         "dry_run": args.get("dry_run", False),
+        "source_type": args.get("source_type", "paper"),
     })
     return _ok(translate_daemon_response(response))
 
@@ -238,6 +239,12 @@ WIKI_INGEST = ToolDefinition(
                     "all filesystem writes. Returns planned concepts with "
                     "section previews instead of creating/updating pages."
                 ),
+            },
+            "source_type": {
+                "type": "string",
+                "enum": ["paper", "article", "transcript", "book", "other"],
+                "default": "paper",
+                "description": "Type of source, used to populate reading_status metadata.",
             },
         },
         "required": ["source_path", "author"],

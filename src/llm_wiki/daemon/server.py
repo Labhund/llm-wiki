@@ -926,6 +926,7 @@ class DaemonServer:
         connection_id = request["connection_id"]
         source_path = Path(request["source_path"])
         dry_run = request.get("dry_run", False)
+        source_type = request.get("source_type", "paper")
         backend = self._config.llm.resolve("ingest")
         llm = LLMClient(
             self._llm_queue,
@@ -941,6 +942,7 @@ class DaemonServer:
                 connection_id=connection_id,
                 write_service=self._page_write_service,
                 dry_run=dry_run,
+                source_type=source_type,
             )
         finally:
             if not dry_run:
