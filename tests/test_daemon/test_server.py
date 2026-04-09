@@ -161,3 +161,13 @@ async def test_query_missing_question(daemon_server):
     assert resp["status"] == "error"
     assert "question" in resp["message"]
     assert "Missing required field" in resp["message"]
+
+
+@pytest.mark.asyncio
+async def test_daemon_registers_talk_summary_worker(daemon_server):
+    """The daemon's scheduler includes a talk_summary worker after Phase 6a."""
+    server, sock_path = daemon_server
+    resp = await _request(sock_path, {"type": "scheduler-status"})
+    assert resp["status"] == "ok"
+    worker_names = [w["name"] for w in resp["workers"]]
+    assert "talk_summary" in worker_names

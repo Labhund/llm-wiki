@@ -171,6 +171,22 @@ class DaemonServer:
                 len(result.talk_posts), len(result.issues_filed),
             )
 
+        async def run_talk_summary() -> None:
+            from llm_wiki.issues.queue import IssueQueue
+            from llm_wiki.librarian.agent import LibrarianAgent
+            from llm_wiki.traverse.llm_client import LLMClient
+            wiki_dir = self._vault_root / self._config.vault.wiki_dir.rstrip("/")
+            queue = IssueQueue(wiki_dir)
+            llm = LLMClient(
+                self._llm_queue,
+                model=self._config.llm.default,
+                api_base=self._config.llm.api_base,
+                api_key=self._config.llm.api_key,
+            )
+            agent = LibrarianAgent(self._vault, self._vault_root, llm, queue, self._config)
+            count = await agent.refresh_talk_summaries()
+            logger.info("Talk summary: refreshed=%d", count)
+
         self._scheduler.register(
             ScheduledWorker(
                 name="auditor",
@@ -197,6 +213,13 @@ class DaemonServer:
                 name="adversary",
                 interval_seconds=parse_interval(self._config.maintenance.adversary_interval),
                 coro_factory=run_adversary,
+            )
+        )
+        self._scheduler.register(
+            ScheduledWorker(
+                name="talk_summary",
+                interval_seconds=parse_interval(self._config.maintenance.librarian_interval),
+                coro_factory=run_talk_summary,
             )
         )
 
