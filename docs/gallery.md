@@ -88,8 +88,8 @@ The agent calls `wiki_read("attention-mechanism", viewport="top")` and receives:
   "status": "ok",
   "content": "## Overview\n\nThe [[attention mechanism]] allows a model to dynamically weight positions...\n\n[TOC: Overview | Mechanism | Citations]",
   "issues": {
-    "open_count": 1,
-    "by_severity": {"critical": 0, "moderate": 1, "minor": 0},
+    "n": 1,
+    "sev": {"critical": 0, "moderate": 1, "minor": 0},
     "items": [
       {
         "id": "broken-link-attention-mechanism-a1b2c3",
@@ -100,12 +100,12 @@ The agent calls `wiki_read("attention-mechanism", viewport="top")` and receives:
     ]
   },
   "talk": {
-    "entry_count": 2,
-    "open_count": 1,
-    "by_severity": {"critical": 0, "moderate": 0, "minor": 0, "suggestion": 1, "new_connection": 0},
+    "cnt": 2,
+    "open": 1,
+    "sev": {"critical": 0, "moderate": 0, "minor": 0, "suggestion": 1, "new_connection": 0},
     "summary": "One open suggestion: cross-link to [[positional-encoding]] from Mechanism section (2026-04-07).",
-    "recent_critical": [],
-    "recent_moderate": []
+    "crit": [],
+    "mod": []
   }
 }
 ```
@@ -170,8 +170,8 @@ Clear hit on `rfdiffusion`. Agent skips `bindsweeper` — low score, no match.
   "status": "ok",
   "content": "## Overview\n\nRFDiffusion is a diffusion model for protein structure generation...\n\n[TOC: Overview | Design Modes | Motif Scaffolding | Contigs Syntax | Citations]",
   "issues": {
-    "open_count": 1,
-    "by_severity": {"critical": 1, "moderate": 0, "minor": 0},
+    "n": 1,
+    "sev": {"critical": 1, "moderate": 0, "minor": 0},
     "items": [
       {
         "id": "claim-failed-rfdiffusion-b3c4d5",
@@ -182,9 +182,9 @@ Clear hit on `rfdiffusion`. Agent skips `bindsweeper` — low score, no match.
     ]
   },
   "talk": {
-    "entry_count": 1, "open_count": 1,
-    "by_severity": {"critical": 1},
-    "recent_critical": [
+    "cnt": 1, "open": 1,
+    "sev": {"critical": 1},
+    "crit": [
       {"index": 1, "author": "@adversary", "body": "Success rate claim contradicted by ProteinDJ paper Table 2. Requires human review."}
     ],
     "summary": "Critical adversary finding: success rate claim contradicted by ProteinDJ benchmarks."
@@ -202,8 +202,8 @@ The agent sees a critical issue immediately. It cannot answer the research quest
 {
   "status": "ok",
   "content": "## Motif Scaffolding\n\nMotif scaffolding constrains a fixed structural motif (e.g. a binding epitope) and generates a surrounding scaffold via diffusion. The `contig` parameter specifies which residues are fixed...\n\nSee also: [[contigs-syntax]]",
-  "issues": { "open_count": 1, "by_severity": {"critical": 1} },
-  "talk": { "entry_count": 1, "open_count": 1 }
+  "issues": { "n": 1, "sev": {"critical": 1} },
+  "talk": { "cnt": 1, "open": 1 }
 }
 ```
 
@@ -296,12 +296,12 @@ The agent never reads the `.talk.md` file directly unless it calls `wiki_talk_re
 
 ```json
 "talk": {
-  "entry_count": 3,
-  "open_count": 1,
-  "by_severity": {"critical": 0, "moderate": 1, "suggestion": 0},
+  "cnt": 3,
+  "open": 1,
+  "sev": {"critical": 0, "moderate": 1, "suggestion": 0},
   "summary": "Adversary verified scaling factor claim (SUPPORTED, 2026-04-08). Librarian cross-link suggestion resolved.",
-  "recent_critical": [],
-  "recent_moderate": [
+  "crit": [],
+  "mod": [
     {
       "index": 2,
       "author": "@adversary",
