@@ -73,12 +73,14 @@ class AdversaryAgent:
         if not entries:
             return result
 
-        # 1. Extract claims from every page
+        # 1. Extract claims from every non-synthesis page
         all_claims: list[Claim] = []
         for name in entries:
             page = self._vault.read_page(name)
             if page is None:
                 continue
+            if page.frontmatter.get("status") == "synthesis":
+                continue  # resonance agent handles synthesis pages; adversary skips them
             all_claims.extend(extract_claims(page))
 
         if not all_claims:
