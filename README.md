@@ -55,6 +55,31 @@ llm-wiki talk list --vault /path/to/your/vault
 
 State lives in `~/.llm-wiki/vaults/` — your vault directory stays clean. The daemon keeps the index in memory, watches for file changes (Obsidian edits), and re-indexes automatically.
 
+## Connecting from an MCP client
+
+After `pip install -e .`, register the server in your MCP client's config:
+
+```json
+{
+  "mcpServers": {
+    "llm-wiki": {
+      "command": "llm-wiki",
+      "args": ["mcp"],
+      "env": { "LLM_WIKI_VAULT": "/path/to/your/vault" }
+    }
+  }
+}
+```
+
+The MCP server auto-starts the daemon on first connect. Every supervised
+write produces a git commit attributed to the calling agent via the
+`Agent:` trailer.
+
+Tools available: `wiki_search`, `wiki_read`, `wiki_manifest`, `wiki_status`,
+`wiki_query`, `wiki_ingest`, `wiki_lint`, `wiki_create`, `wiki_update`,
+`wiki_append`, `wiki_issues_list`, `wiki_issues_get`, `wiki_issues_resolve`,
+`wiki_talk_read`, `wiki_talk_post`, `wiki_talk_list`, `wiki_session_close`.
+
 ## How It Works
 
 The core insight: RAG re-derives on every query. A compiled wiki accumulates knowledge, maintains cross-references, tracks provenance, and improves over time. The agent navigates the wiki like a human browses the web — search, scan snippets, click through, skim headings, Ctrl+F — but with token budgets instead of screen pixels.
@@ -100,7 +125,7 @@ Findings flow into a shared issue queue (`llm-wiki issues list`) and append-only
 
 ### Supervised Write Surface (Phase 6b)
 
-The daemon also exposes three write routes for supervised agents — `page-create`, `page-update`, `page-append` — which a Phase 6c MCP server will surface to frontier models as `wiki_create` / `wiki_update` / `wiki_append`. Every write must declare an `author` and a `connection_id`; writes without both are rejected. Updates use a V4A-style patch format (exact match with a fuzzy fallback for trailing-whitespace and minor-typo drift, structured `patch-conflict` errors otherwise) so the agent can re-read and retry instead of clobbering the page.
+The daemon also exposes three write routes for supervised agents — `page-create`, `page-update`, `page-append` — which the Phase 6c MCP server surfaces to frontier models as `wiki_create` / `wiki_update` / `wiki_append`. Every write must declare an `author` and a `connection_id`; writes without both are rejected. Updates use a V4A-style patch format (exact match with a fuzzy fallback for trailing-whitespace and minor-typo drift, structured `patch-conflict` errors otherwise) so the agent can re-read and retry instead of clobbering the page.
 
 Writes are grouped into per-author **sessions** that batch into a single git commit. A session settles — and produces one commit — on inactivity timeout (default 5 min), write-count cap (default 30, with a `session-cap-approaching` warning at 60% of the cap), explicit `session-close`, or daemon shutdown. The pipeline:
 
@@ -111,6 +136,23 @@ Writes are grouped into per-author **sessions** that batch into a single git com
 5. **Recovery on startup** — orphaned journals from a daemon crash get processed through the same settle pipeline before the new daemon accepts requests.
 
 The commit message carries `Session: <id>`, `Agent: <author>`, and `Writes: <count>` trailers, so `git log --grep "Agent: researcher-3"` becomes a meaningful audit query — the swarm-equivalent of `git log --author=...`. Talk pages and issues continue to live outside the supervised write surface; background workers can post to either, but **mechanically cannot reach the write routes**. An AST hard-rule test walks every module under `daemon/`, `audit/`, `librarian/`, `adversary/`, `talk/` at every test run and fails if any background-worker code path imports or references `PageWriteService` or the write-route handlers — closing the gap that pure code review would otherwise leave open.
+
+### MCP Server (Phase 6c)
+
+`llm-wiki mcp` runs an [MCP](https://modelcontextprotocol.io) server over stdio that wraps every daemon route as a tool. Register it in any MCP-capable client (Claude Code, Claude Desktop, Cursor, agent frameworks) and the model can read, query, and write through the same daemon the CLI uses. See [Connecting from an MCP client](#connecting-from-an-mcp-client) for the snippet.
+
+The server is a thin pass-through. Each tool is one async function that forwards `(name, args)` to a daemon route via `DaemonClient.arequest`, translates `{status: "error", code, message}` responses into structured `McpToolError` exceptions, and returns the daemon's payload as a `TextContent` blob. The MCP layer holds no business logic — every decision (validation, name collisions, patch application, journaling, commit) lives in the daemon, so adding a tool is a one-line edit to `WIKI_TOOLS` in `mcp/tools.py`. Seventeen tools across four families:
+
+- **Read** — `wiki_search`, `wiki_read` (with inline issue/talk digest), `wiki_manifest`, `wiki_status`
+- **Query** — `wiki_query` (multi-turn traversal, daemon drives), `wiki_ingest` (session-aware), `wiki_lint` (vault-wide attention map)
+- **Write** — `wiki_create`, `wiki_update` (V4A patch), `wiki_append` (heading-anchored)
+- **Maintenance** — `wiki_issues_list` / `_get` / `_resolve`, `wiki_talk_read` / `_post` / `_list`, `wiki_session_close`
+
+The server generates one `connection_id` UUID at startup and threads it into every write tool's daemon request via a `ToolContext`, so all writes from a single MCP stdio session land in one daemon session keyed on `(author, connection_id)` and settle into a single git commit. `wiki_session_close` uses the same `connection_id` so explicit settles match the session this MCP client owns. Read tools ignore it.
+
+The hard-rule guarantee from Phase 6b extends naturally: an AST test walks `audit/`, `librarian/`, `adversary/`, `talk/`, and `daemon/` and fails if any background-worker code path imports `MCPServer`, `WIKI_TOOLS`, or any module under `llm_wiki.mcp.*` — the MCP layer is for the supervised path only, mechanically.
+
+Tools deliberately *not* in the surface: no `wiki_delete` (page deletion is `rm` + `git commit`), no raw overwrite tool, no `wiki_commit` / `wiki_revert` (commits happen automatically via the session pipeline; reverts happen via `git revert` outside the daemon).
 
 ## Philosophy
 
@@ -243,7 +285,7 @@ raw/                   # Immutable source documents
 - [x] **Phase 5d: Adversary + Talk Pages** — Claim verification, async discussion sidecars
 - [x] **Phase 6a: Visibility & Severity** — Severity-aware issues and talk entries, append-only closure, librarian talk summaries, enriched `read`/`search`/`lint` routes
 - [x] **Phase 6b: Write Surface + Sessions** — V4A patches, per-author session journaling, serial commit pipeline, recovery, inactivity/cap settle, AST hard-rule test, session-aware ingest
-- [ ] **Phase 6c: MCP Server** — Tool definitions, `llm-wiki mcp` CLI subcommand, end-to-end smoke test
+- [x] **Phase 6c: MCP Server** — 17 MCP tools over stdio, `llm-wiki mcp` CLI subcommand, stable per-session `connection_id`, end-to-end smoke test, AST hard-rule extended to forbid MCP imports from background workers
 
 ## Philosophy
 

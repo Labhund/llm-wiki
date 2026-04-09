@@ -52,6 +52,18 @@ class DaemonClient:
             writer.close()
             await writer.wait_closed()
 
+    async def arequest(self, msg: dict) -> dict:
+        """Async public entry point — ``await client.arequest(msg)``.
+
+        Use this from any code that already runs inside an event loop
+        (the MCP server, async test code, future async daemons). It
+        bypasses the synchronous ``request()`` path entirely, so it
+        does NOT touch ``_run_coroutine_in_running_loop``'s private
+        asyncio internals. Functionally identical to ``request()`` but
+        type-honest about being async.
+        """
+        return await self._async_request(msg)
+
     def is_running(self) -> bool:
         """Return True if the daemon is reachable via its socket."""
         if not self._socket_path.exists():
