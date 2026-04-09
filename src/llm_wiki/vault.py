@@ -55,7 +55,7 @@ class Vault:
 
         # Validate that this directory looks like a vault before walking.
         has_config = (root / "schema" / "config.yaml").exists()
-        has_vault_dir = (root / "raw").exists() or (root / "wiki").exists()
+        has_vault_dir = (root / "raw").is_dir() or (root / "wiki").is_dir()
         if not has_config and not has_vault_dir:
             raise ValueError(
                 f"Path '{root}' does not appear to be an llm-wiki vault. "
