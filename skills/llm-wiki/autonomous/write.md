@@ -22,6 +22,8 @@ Only write what is clearly and directly supported by an explicit source already 
 
 Same tools as attended write — `wiki_create` (citations required), `wiki_update` (V4A patch, re-read first), `wiki_append` (heading-anchored, citations required). Session opens implicitly on first write.
 
+**Wikilinks:** Link every salient noun, technical term, and named entity on its first mention. Same posture as attended write — aggressive linking is always correct, even in autonomous mode.
+
 ## Error Recovery
 
 - `patch-conflict` on `wiki_update` twice → `wiki_talk_post` noting the conflict; do not rewrite the whole page; count toward cap
