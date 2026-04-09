@@ -158,3 +158,72 @@ def parse_talk_summary(text: str) -> str:
             cleaned = cleaned[len(prefix):].strip()
             break
     return cleaned
+
+
+def compose_commit_summary_messages(
+    author: str,
+    entries: "list[JournalEntry]",
+) -> list[dict[str, str]]:
+    """Build a 2-message prompt asking for a commit summary.
+
+    The cheap maintenance LLM gets the journal entries and produces a
+    one-line subject (≤60 chars) plus 2-5 bullet points. The settle
+    pipeline parses this into the commit body.
+    """
+    body_lines = []
+    for e in entries:
+        intent = e.intent or ""
+        body_lines.append(
+            f"- {e.tool} {e.path}: {e.summary}"
+            + (f" — {intent}" if intent else "")
+        )
+    body_text = "\n".join(body_lines)
+
+    return [
+        {
+            "role": "system",
+            "content": (
+                "You write git commit messages for wiki edits made by AI agents. "
+                "Format: a single one-line subject (max 60 characters), then a "
+                "blank line, then 2-5 bullet points describing what changed and "
+                "why. Use the intent field when present."
+            ),
+        },
+        {
+            "role": "user",
+            "content": (
+                f"Here are {len(entries)} wiki edits from one session by agent {author}:\n\n"
+                f"{body_text}\n\n"
+                f"Produce the commit message."
+            ),
+        },
+    ]
+
+
+def parse_commit_summary(text: str) -> tuple[str, list[str]]:
+    """Split LLM commit-message output into (subject, bullets).
+
+    Returns ("", []) if the response is empty or unparseable. The subject
+    is truncated to 60 characters; bullets are taken from lines starting
+    with `-` or `*`.
+    """
+    if not text or not text.strip():
+        return "", []
+    cleaned = text.strip()
+    parts = cleaned.split("\n\n", 1)
+    subject_block = parts[0].strip()
+    rest = parts[1] if len(parts) > 1 else ""
+
+    # Subject is the first non-empty line of the subject block
+    subject_lines = [l for l in subject_block.splitlines() if l.strip()]
+    subject = subject_lines[0].strip() if subject_lines else ""
+    if len(subject) > 60:
+        subject = subject[:57] + "..."
+
+    bullets: list[str] = []
+    for line in rest.splitlines():
+        stripped = line.strip()
+        if stripped.startswith(("-", "*")):
+            bullets.append(stripped[1:].strip())
+
+    return subject, bullets
