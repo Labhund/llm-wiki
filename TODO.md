@@ -344,7 +344,7 @@ A `patch-conflict` response requires the agent to re-read the page and retry —
 
 **What needs to change:**
 1. Rewrite `wiki_manifest`, `wiki_search`, `wiki_query` descriptions to include explicit disambiguation language
-2. Add viewport discipline to `wiki_read` description (default top, `full` is last resort)
+2. Update `wiki_read` description: frame viewport as intent-driven, not rule-driven — `top` to orient, section when you know what you need, `full` when you genuinely need the whole page (patch, short page, structural analysis). Point at manifest section sizes.
 3. Add session reminder to all three write tool descriptions (`wiki_create`, `wiki_update`, `wiki_append`)
 4. Add patch-conflict re-read protocol to `wiki_update` description
 
@@ -356,7 +356,8 @@ A `patch-conflict` response requires the agent to re-read the page and retry —
 
 **Cross-check field names against daemon output.** The gallery revealed a gap between what we *think* the agent receives and what it actually receives. Field names referenced in skill files must match the actual daemon response schema. After L2 (schema rename), this audit is mandatory — skill files that reference old field names will silently fail.
 
-**Viewport guidance language.** The principle is "read with intent, the manifest gives you the map." `research.md` and `write.md` should reinforce this at the point of use — not as a prohibition on `full` but as an encouragement to check section sizes before reading.
+**Viewport guidance language.** All skill files that involve reading need the updated framing: read with intent, use the manifest section sizes, `full` is appropriate when you genuinely need the whole page. The old "never `full` first" prohibition has been removed from `index.md` and `research.md` — audit `write.md`, `maintain.md`, `ingest.md`, and autonomous skill files for any remaining prohibitive language and replace with the intent-driven framing.
+
 
 **Session-close ritual.** `wiki_session_close` reminder is present in `index.md` but needs to be echoed at the end of every skill that involves writes — `write.md`, `ingest.md`, `maintain.md`. A principle stated once in an index file doesn't survive multi-hop skill loading.
 
@@ -366,7 +367,7 @@ A `patch-conflict` response requires the agent to re-read the page and retry —
 
 **What needs to change:**
 1. After L2, grep all skill files for old field names and update
-2. Add viewport-first as an operational rule (not just a principle) in `research.md` and `write.md`
+2. Audit all skill files for prohibitive viewport language (`never full`, `full is a last resort`) and replace with intent-driven framing — `write.md`, `maintain.md`, `ingest.md`, autonomous files
 3. Add session-close reminder at the end of every skill that involves writes
 4. Add traversal hop-count guidance to `research.md`
 5. Audit autonomous skill files line-by-line against tool descriptions
