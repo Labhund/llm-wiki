@@ -158,3 +158,22 @@ Situate claims, don't extract them. For each concept, how does it connect to wha
 **Wikilinks:** every salient noun, technical term, and named entity on first mention. Writing habit, not a checklist.
 
 **Scope:** if 10+ pages estimated, flag before committing — large ingests benefit from Deep mode so synthesis doesn't get buried in bulk creation.
+
+---
+
+## Reading Status Protocol
+
+Call `wiki_source_mark` to track your engagement with a source. The daemon
+commits the change to git with a `Source-Status:` trailer for audit. You
+never edit frontmatter manually.
+
+| Moment | Call |
+|---|---|
+| Brief mode — start reading | `wiki_source_mark(source_path, "in_progress", author)` |
+| Brief mode — done, no deep session planned | `wiki_source_mark(source_path, "read", author)` |
+| Deep mode — session start | `wiki_source_mark(source_path, "in_progress", author)` |
+| Deep mode — plan file complete | `wiki_source_mark(source_path, "read", author)` |
+| Autonomous ingest | Do not call `wiki_source_mark` — autonomous ingest sets `unread` only |
+
+`source_path` is the path to either the binary source (`raw/foo.pdf`) or
+its companion (`raw/foo.md`) — both are accepted by the daemon.
