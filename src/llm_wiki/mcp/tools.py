@@ -201,6 +201,7 @@ async def handle_wiki_ingest(ctx: ToolContext, args: dict) -> list[TextContent]:
         "connection_id": ctx.connection_id,
         "source_path": args["source_path"],
         "author": args["author"],
+        "dry_run": args.get("dry_run", False),
     })
     return _ok(translate_daemon_response(response))
 
@@ -211,7 +212,11 @@ WIKI_INGEST = ToolDefinition(
         "Ingest a source file (PDF, DOCX, markdown, URL, image) into the "
         "wiki. The daemon runs extraction, identifies concepts, and creates "
         "or updates pages. Every internal write journals under your session "
-        "so the whole ingest produces one git commit attributed to you."
+        "so the whole ingest produces one git commit attributed to you.\n\n"
+        "When dry_run is true, the full pipeline runs (extraction, concept "
+        "identification, page content generation) but no pages are written. "
+        "Returns a preview of concepts that would be created/updated with "
+        "section headings and content previews. Use to inspect before committing."
     ),
     input_schema={
         "type": "object",
@@ -225,6 +230,15 @@ WIKI_INGEST = ToolDefinition(
                 ),
             },
             "author": {"type": "string", "description": "Your agent identifier"},
+            "dry_run": {
+                "type": "boolean",
+                "default": False,
+                "description": (
+                    "Preview mode: run extraction and generation but skip "
+                    "all filesystem writes. Returns planned concepts with "
+                    "section previews instead of creating/updating pages."
+                ),
+            },
         },
         "required": ["source_path", "author"],
     },

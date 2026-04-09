@@ -31,14 +31,40 @@ class ConceptPlan:
 
 
 @dataclass
+class SectionPreview:
+    """A single section generated during dry-run."""
+    heading: str
+    content: str
+
+
+@dataclass
+class ConceptPreview:
+    """Preview of a concept that would be created/updated (dry-run only)."""
+    name: str
+    title: str
+    is_update: bool
+    passages: list[str] = field(default_factory=list)
+    sections: list[SectionPreview] = field(default_factory=list)
+
+    @property
+    def content_chars(self) -> int:
+        return sum(len(s.content) for s in self.sections)
+
+
+@dataclass
 class IngestResult:
     """Result of ingesting one source document."""
     source_path: Path
     pages_created: list[str] = field(default_factory=list)   # concept slugs
     pages_updated: list[str] = field(default_factory=list)   # concept slugs
+    dry_run: bool = False
+    concepts_planned: list[ConceptPreview] = field(default_factory=list)
+    source_chars: int = 0
 
     @property
     def concepts_found(self) -> int:
+        if self.dry_run:
+            return len(self.concepts_planned)
         return len(self.pages_created) + len(self.pages_updated)
 
 
@@ -64,8 +90,13 @@ class IngestAgent:
         author: str = "cli",
         connection_id: str = "cli",
         write_service: "PageWriteService | None" = None,
+        dry_run: bool = False,
     ) -> IngestResult:
         """Ingest one source file into the wiki.
+
+        When `dry_run` is True, runs extraction and concept/page generation
+        but skips all filesystem writes. The result contains `concepts_planned`
+        with previews of what would be created/updated.
 
         When `write_service` is provided, all page creates/appends are routed
         through it so they journal under the caller's session and land in the
@@ -73,8 +104,11 @@ class IngestAgent:
         legacy direct-write path (used by older code paths only — new code
         should always pass write_service).
         """
-        result = IngestResult(source_path=source_path)
         wiki_dir = vault_root / self._config.vault.wiki_dir.rstrip("/")
+        result = IngestResult(
+            source_path=source_path,
+            dry_run=dry_run,
+        )
 
         try:
             source_ref = str(source_path.relative_to(vault_root))
@@ -87,6 +121,8 @@ class IngestAgent:
                 "Extraction failed for %s: %s", source_path, extraction.error
             )
             return result
+
+        result.source_chars = len(extraction.content)
 
         budget = self._config.budgets.default_ingest
         messages = compose_concept_extraction_messages(
@@ -101,7 +137,6 @@ class IngestAgent:
             logger.info("No concepts identified in %s", source_path)
             return result
 
-        wiki_dir.mkdir(parents=True, exist_ok=True)
         for concept in concepts:
             page_messages = compose_page_content_messages(
                 concept_title=concept.title,
@@ -119,13 +154,28 @@ class IngestAgent:
                 )
                 continue
 
-            if write_service is not None:
+            section_previews = [
+                SectionPreview(heading=s.heading, content=s.content)
+                for s in sections
+            ]
+
+            if dry_run:
+                page_path = wiki_dir / f"{concept.name}.md"
+                result.concepts_planned.append(ConceptPreview(
+                    name=concept.name,
+                    title=concept.title,
+                    is_update=page_path.exists(),
+                    passages=concept.passages,
+                    sections=section_previews,
+                ))
+            elif write_service is not None:
                 await self._write_via_service(
                     write_service, wiki_dir, concept, sections, source_ref,
                     author=author, connection_id=connection_id, result=result,
                 )
             else:
                 # Legacy direct-write path
+                wiki_dir.mkdir(parents=True, exist_ok=True)
                 written = write_page(
                     wiki_dir, concept.name, concept.title, sections, source_ref,
                 )

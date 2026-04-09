@@ -900,6 +900,7 @@ class DaemonServer:
 
         connection_id = request["connection_id"]
         source_path = Path(request["source_path"])
+        dry_run = request.get("dry_run", False)
         llm = LLMClient(
             self._llm_queue,
             model=self._config.llm.default,
@@ -913,13 +914,49 @@ class DaemonServer:
                 author=author,
                 connection_id=connection_id,
                 write_service=self._page_write_service,
+                dry_run=dry_run,
             )
         finally:
-            try:
-                await self.rescan()
-            except Exception:
-                logger.warning("Failed to rescan vault after ingest")
+            if not dry_run:
+                try:
+                    await self.rescan()
+                except Exception:
+                    logger.warning("Failed to rescan vault after ingest")
 
+        # Dry-run response
+        if dry_run:
+            concepts = []
+            for cp in result.concepts_planned:
+                sections = []
+                for s in cp.sections:
+                    preview_text = s.content[:200]
+                    if len(s.content) > 200:
+                        preview_text += "..."
+                    sections.append({
+                        "heading": s.heading,
+                        "content_chars": len(s.content),
+                        "preview": preview_text,
+                    })
+                concepts.append({
+                    "name": cp.name,
+                    "title": cp.title,
+                    "action": "update" if cp.is_update else "create",
+                    "passage_count": len(cp.passages),
+                    "section_count": len(cp.sections),
+                    "content_chars": cp.content_chars,
+                    "sections": sections,
+                })
+            return {
+                "status": "ok",
+                "dry_run": True,
+                "source_path": str(source_path),
+                "source_chars": result.source_chars,
+                "concepts_found": result.concepts_found,
+                "concepts": concepts,
+                "message": "DRY RUN — no pages written",
+            }
+
+        # Live ingest response (unchanged)
         # Apply response cap (mcp.ingest_response_max_pages)
         cap = self._config.mcp.ingest_response_max_pages
         all_pages = result.pages_created + result.pages_updated

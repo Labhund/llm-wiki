@@ -256,7 +256,11 @@ def lint(vault_path: Path) -> None:
     "--vault", "vault_path", type=click.Path(exists=True, path_type=Path),
     default=".", help="Path to vault",
 )
-def ingest(source_path: Path, vault_path: Path) -> None:
+@click.option(
+    "--dry-run", "dry_run", is_flag=True, default=False,
+    help="Preview: run extraction and generation but skip all writes.",
+)
+def ingest(source_path: Path, vault_path: Path, dry_run: bool) -> None:
     """Ingest a source document — extracts concepts and creates wiki pages."""
     import uuid as _uuid
     client = _get_client(vault_path)
@@ -265,9 +269,29 @@ def ingest(source_path: Path, vault_path: Path) -> None:
         "source_path": str(source_path.resolve()),
         "author": "cli",
         "connection_id": _uuid.uuid4().hex,
+        "dry_run": dry_run,
     })
     if resp["status"] != "ok":
         raise click.ClickException(resp.get("message", "Ingest failed"))
+
+    if dry_run:
+        click.echo("DRY RUN — no pages written")
+        click.echo(f"Source: {resp['source_path']} ({resp['source_chars']} chars)")
+        click.echo(f"Concepts found: {resp['concepts_found']}")
+        for c in resp.get("concepts", []):
+            action = "UPDATE" if c["action"] == "update" else "NEW"
+            click.echo(f"  [{action}] {c['name']} ({c['title']})")
+            click.echo(
+                f"    {c['section_count']} sections, "
+                f"{c['content_chars']} chars, "
+                f"{c['passage_count']} passages"
+            )
+            for s in c.get("sections", []):
+                click.echo(f"    ## {s['heading']} ({s['content_chars']} chars)")
+                preview = s["preview"]
+                for line in preview.split("\n"):
+                    click.echo(f"      {line}")
+        return
 
     created = resp.get("created", [])
     updated = resp.get("updated", [])
