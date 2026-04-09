@@ -60,12 +60,11 @@ It references [[some-other-page]] in passing.
 
 @pytest.fixture
 def sample_vault(tmp_path: Path) -> Path:
-    """Create a temporary vault with sample pages."""
-    # Add wiki/ directory to pass vault validation guard
+    """Create a temporary vault with sample pages under wiki/."""
     wiki_dir = tmp_path / "wiki"
     wiki_dir.mkdir()
 
-    bio = tmp_path / "bioinformatics"
+    bio = wiki_dir / "bioinformatics"
     bio.mkdir()
     (bio / "srna-embeddings.md").write_text(SAMPLE_PAGE_WITH_MARKERS)
     (bio / "inter-rep-variant-analysis.md").write_text(
@@ -77,15 +76,14 @@ def sample_vault(tmp_path: Path) -> Path:
         "See [[srna-embeddings]] and [[clustering-metrics]].\n"
     )
 
-    ml = tmp_path / "machine-learning"
+    ml = wiki_dir / "machine-learning"
     ml.mkdir()
     (ml / "clustering-metrics.md").write_text(SAMPLE_PAGE_NO_MARKERS)
 
-    (tmp_path / "no-structure.md").write_text(SAMPLE_PAGE_NO_STRUCTURE)
+    (wiki_dir / "no-structure.md").write_text(SAMPLE_PAGE_NO_STRUCTURE)
 
     yield tmp_path
 
-    # Clean up state dir under ~/.llm-wiki/vaults/ for this tmp vault
     import shutil
     from llm_wiki.vault import _state_dir_for
     state_dir = _state_dir_for(tmp_path)

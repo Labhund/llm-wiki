@@ -191,7 +191,7 @@ def test_vault_scan_excludes_talk_pages(sample_vault):
     from llm_wiki.vault import Vault
 
     # Create a talk page sidecar in the fixture vault
-    talk = sample_vault / "bioinformatics" / "srna-embeddings.talk.md"
+    talk = sample_vault / "wiki" / "bioinformatics" / "srna-embeddings.talk.md"
     talk.write_text(
         "---\npage: srna-embeddings\n---\n\n"
         "**2026-04-08T10:00:00+00:00 — @adversary**\nVerified.\n"
@@ -250,3 +250,20 @@ def test_scan_accepts_directory_with_wiki_dir(tmp_path):
 
     vault = Vault.scan(tmp_path)
     assert vault.page_count == 0
+
+
+def test_vault_scan_ignores_raw_companion_files(tmp_path: Path):
+    """Companion .md files in raw/ must never appear as wiki pages."""
+    wiki_dir = tmp_path / "wiki"
+    wiki_dir.mkdir()
+    raw_dir = tmp_path / "raw"
+    raw_dir.mkdir()
+    (wiki_dir / "real-page.md").write_text("---\ntitle: Real\n---\n\nContent.\n")
+    (raw_dir / "2026-04-10-paper.pdf").write_bytes(b"%PDF-1.4 fake")
+    (raw_dir / "2026-04-10-paper.md").write_text(
+        "---\nreading_status: unread\n---\nExtracted text.\n"
+    )
+    vault = Vault.scan(tmp_path)
+    assert "real-page" in vault.manifest_entries()
+    assert "2026-04-10-paper" not in vault.manifest_entries()
+    assert vault.page_count == 1

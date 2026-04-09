@@ -80,7 +80,7 @@ def test_search_with_snippets_finds_correct_line(sample_vault):
     srna_result = next((r for r in results if r.name == "srna-embeddings"), None)
     assert srna_result is not None
 
-    page_text = (sample_vault / "bioinformatics" / "srna-embeddings.md").read_text()
+    page_text = (sample_vault / "wiki" / "bioinformatics" / "srna-embeddings.md").read_text()
     page_lines = page_text.splitlines()
 
     for m in srna_result.matches:

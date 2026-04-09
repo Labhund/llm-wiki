@@ -91,6 +91,7 @@ class IngestAgent:
         connection_id: str = "cli",
         write_service: "PageWriteService | None" = None,
         dry_run: bool = False,
+        source_type: str = "paper",
     ) -> IngestResult:
         """Ingest one source file into the wiki.
 
@@ -104,6 +105,9 @@ class IngestAgent:
         legacy direct-write path (used by older code paths only — new code
         should always pass write_service).
         """
+        from llm_wiki.ingest.source_meta import init_companion, write_companion_body
+        companion = init_companion(source_path, vault_root, source_type=source_type)
+
         wiki_dir = vault_root / self._config.vault.wiki_dir.rstrip("/")
         result = IngestResult(
             source_path=source_path,
@@ -123,6 +127,12 @@ class IngestAgent:
             return result
 
         result.source_chars = len(extraction.content)
+
+        if companion:
+            try:
+                write_companion_body(companion, extraction.content)
+            except Exception as e:  # noqa: BLE001
+                logger.warning("Failed to write companion body for %s: %s", source_path, e)
 
         budget = self._config.budgets.default_ingest
         messages = compose_concept_extraction_messages(

@@ -46,6 +46,8 @@ def sample_claims(
     n: int,
     rng: Random,
     now: datetime.datetime,
+    unread_sources: "set[str] | None" = None,
+    unread_weight: float = 1.5,
 ) -> list[Claim]:
     """Weighted sample without replacement using the Efraimidis-Spirakis trick.
 
@@ -67,6 +69,8 @@ def sample_claims(
             authority = 0.0
             last_corr = None
         weight = age_factor(last_corr, now) * (1.5 - authority)
+        if unread_sources and claim.citation in unread_sources:
+            weight *= unread_weight
         if weight <= 0:
             weight = 1e-9
         u = rng.random()

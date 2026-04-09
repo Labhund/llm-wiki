@@ -325,7 +325,7 @@ async def test_read_inlines_critical_talk_entries(phase6a_daemon_server, sample_
     from llm_wiki.talk.page import TalkEntry, TalkPage
 
     server, sock_path = phase6a_daemon_server
-    page_path = sample_vault / "bioinformatics" / "srna-embeddings.md"
+    page_path = sample_vault / "wiki" / "bioinformatics" / "srna-embeddings.md"
     talk = TalkPage.for_page(page_path)
     talk.append(TalkEntry(
         0, "2026-04-08T10:00:00+00:00", "@adversary",
@@ -358,7 +358,7 @@ async def test_read_excludes_resolved_talk_entries_from_counts(phase6a_daemon_se
     from llm_wiki.talk.page import TalkEntry, TalkPage
 
     server, sock_path = phase6a_daemon_server
-    page_path = sample_vault / "bioinformatics" / "srna-embeddings.md"
+    page_path = sample_vault / "wiki" / "bioinformatics" / "srna-embeddings.md"
     talk = TalkPage.for_page(page_path)
     talk.append(TalkEntry(0, "t1", "@adv", "first", severity="critical"))
     talk.append(TalkEntry(0, "t2", "@user", "closes 1", resolves=[1]))
@@ -442,7 +442,7 @@ async def test_lint_attention_map_aggregates_talk_severities(phase6a_daemon_serv
     from llm_wiki.talk.page import TalkEntry, TalkPage
 
     server, sock_path = phase6a_daemon_server
-    page_path = sample_vault / "bioinformatics" / "srna-embeddings.md"
+    page_path = sample_vault / "wiki" / "bioinformatics" / "srna-embeddings.md"
     talk = TalkPage.for_page(page_path)
     talk.append(TalkEntry(
         0, "2026-04-08T10:00:00+00:00", "@adv",
@@ -462,7 +462,7 @@ async def test_lint_attention_map_excludes_resolved_talk_entries(phase6a_daemon_
     from llm_wiki.talk.page import TalkEntry, TalkPage
 
     server, sock_path = phase6a_daemon_server
-    page_path = sample_vault / "bioinformatics" / "srna-embeddings.md"
+    page_path = sample_vault / "wiki" / "bioinformatics" / "srna-embeddings.md"
     talk = TalkPage.for_page(page_path)
     talk.append(TalkEntry(0, "t1", "@adv", "first", severity="critical"))
     talk.append(TalkEntry(0, "t2", "@user", "closes 1", resolves=[1]))

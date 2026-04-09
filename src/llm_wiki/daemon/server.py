@@ -487,6 +487,8 @@ class DaemonServer:
                 return await self._handle_page_append(request)
             case "session-close":
                 return await self._handle_session_close(request)
+            case "source-mark":
+                return await self._handle_source_mark(request)
             case _:
                 return {"status": "error", "message": f"Unknown request type: {req_type}"}
 
@@ -516,6 +518,63 @@ class DaemonServer:
             "status": "ok",
             "settled": True,
             "commit_sha": result.commit_sha,
+        }
+
+    async def _handle_source_mark(self, request: dict) -> dict:
+        source_path_str = request.get("source_path")
+        status = request.get("status")
+        author = request.get("author", "cli")
+
+        if not source_path_str:
+            return {"status": "error", "message": "Missing required field: source_path"}
+        if status not in ("unread", "in_progress", "read"):
+            return {"status": "error", "message": "status must be unread|in_progress|read"}
+
+        path = Path(source_path_str)
+        raw_dir = self._vault_root / "raw"
+        try:
+            path.relative_to(raw_dir)
+        except ValueError:
+            return {"status": "error", "message": "source_path must be under raw/"}
+
+        if not path.exists():
+            return {"status": "error", "message": f"Source not found: {source_path_str}"}
+
+        from llm_wiki.ingest.source_meta import read_frontmatter, write_frontmatter
+
+        old_status = read_frontmatter(path).get("reading_status", "unknown")
+        try:
+            write_frontmatter(path, {"reading_status": status})
+        except ValueError as e:
+            return {"status": "error", "message": str(e)}
+
+        # Direct git commit — outside the session/journal pipeline
+        rel_path = str(path.relative_to(self._vault_root))
+        commit_message = (
+            f"meta: mark {path.name} {status}\n\n"
+            f"Source-Status: {old_status}\u2192{status}\n"
+            f"Author: {author}"
+        )
+        async with self._commit_lock:
+            import subprocess
+            subprocess.run(
+                ["git", "add", rel_path],
+                cwd=self._vault_root,
+                check=True,
+                capture_output=True,
+            )
+            subprocess.run(
+                ["git", "commit", "-m", commit_message],
+                cwd=self._vault_root,
+                check=True,
+                capture_output=True,
+            )
+
+        return {
+            "status": "ok",
+            "path": source_path_str,
+            "old_status": old_status,
+            "new_status": status,
         }
 
     async def _handle_page_create(self, request: dict) -> dict:
@@ -926,6 +985,7 @@ class DaemonServer:
         connection_id = request["connection_id"]
         source_path = Path(request["source_path"])
         dry_run = request.get("dry_run", False)
+        source_type = request.get("source_type", "paper")
         backend = self._config.llm.resolve("ingest")
         llm = LLMClient(
             self._llm_queue,
@@ -941,6 +1001,7 @@ class DaemonServer:
                 connection_id=connection_id,
                 write_service=self._page_write_service,
                 dry_run=dry_run,
+                source_type=source_type,
             )
         finally:
             if not dry_run:

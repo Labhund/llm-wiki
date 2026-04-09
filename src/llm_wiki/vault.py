@@ -62,11 +62,14 @@ class Vault:
                 "Pass --vault <path> or run from inside a vault directory."
             )
 
-        # Find all markdown files, excluding hidden directories
-        md_files = sorted(root.rglob("*.md"))
+        # Find all markdown files inside wiki_dir only.
+        # raw/ companions and inbox/ plan files are intentionally excluded.
+        wiki_dir = root / config.vault.wiki_dir.rstrip("/")
+        wiki_dir.mkdir(parents=True, exist_ok=True)
+        md_files = sorted(wiki_dir.rglob("*.md"))
         md_files = [
             f for f in md_files
-            if not any(p.startswith(".") for p in f.relative_to(root).parts)
+            if not any(p.startswith(".") for p in f.relative_to(wiki_dir).parts)
             and not f.name.endswith(".talk.md")
         ]
 
@@ -79,8 +82,8 @@ class Vault:
             page = Page.parse(md_file)
             pages[page.path.stem] = page
 
-            # Cluster from parent directory name, or "root" if top-level
-            rel = md_file.relative_to(root)
+            # Cluster from first subdir within wiki/, or "root" for top-level files
+            rel = md_file.relative_to(wiki_dir)
             cluster = rel.parts[0] if len(rel.parts) > 1 else "root"
 
             entry = build_entry(page, cluster=cluster)
