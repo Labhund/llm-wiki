@@ -377,6 +377,185 @@ WIKI_APPEND = ToolDefinition(
 
 
 # ---------------------------------------------------------------------------
+# Maintenance-side
+# ---------------------------------------------------------------------------
+
+async def handle_wiki_issues_list(ctx: ToolContext, args: dict) -> list[TextContent]:
+    response = await ctx.client.arequest({
+        "type": "issues-list",
+        "status_filter": args.get("status_filter"),
+        "type_filter": args.get("type_filter"),
+    })
+    return _ok(translate_daemon_response(response))
+
+
+WIKI_ISSUES_LIST = ToolDefinition(
+    name="wiki_issues_list",
+    description=(
+        "List issues in the queue. Filter by status (open/resolved/wontfix) "
+        "or type (broken-link, broken-citation, missing-markers, orphan, "
+        "new-idea, compliance, claim-failed)."
+    ),
+    input_schema={
+        "type": "object",
+        "properties": {
+            "status_filter": {"type": "string"},
+            "type_filter": {"type": "string"},
+        },
+    },
+    handler=handle_wiki_issues_list,
+)
+
+
+async def handle_wiki_issues_get(ctx: ToolContext, args: dict) -> list[TextContent]:
+    response = await ctx.client.arequest({"type": "issues-get", "id": args["id"]})
+    return _ok(translate_daemon_response(response))
+
+
+WIKI_ISSUES_GET = ToolDefinition(
+    name="wiki_issues_get",
+    description="Read the full body of one issue by id.",
+    input_schema={
+        "type": "object",
+        "properties": {"id": {"type": "string"}},
+        "required": ["id"],
+    },
+    handler=handle_wiki_issues_get,
+)
+
+
+async def handle_wiki_issues_resolve(ctx: ToolContext, args: dict) -> list[TextContent]:
+    response = await ctx.client.arequest({
+        "type": "issues-update",
+        "id": args["id"],
+        "status": "resolved",
+        "author": args["author"],
+    })
+    return _ok(translate_daemon_response(response))
+
+
+WIKI_ISSUES_RESOLVE = ToolDefinition(
+    name="wiki_issues_resolve",
+    description=(
+        "Mark an issue as resolved. Session-aware: lands in your session "
+        "commit. Use this after fixing the underlying problem (e.g. after "
+        "wiki_update or wiki_append fixes a broken-link)."
+    ),
+    input_schema={
+        "type": "object",
+        "properties": {
+            "id": {"type": "string"},
+            "author": {"type": "string"},
+        },
+        "required": ["id", "author"],
+    },
+    handler=handle_wiki_issues_resolve,
+)
+
+
+async def handle_wiki_talk_read(ctx: ToolContext, args: dict) -> list[TextContent]:
+    response = await ctx.client.arequest({"type": "talk-read", "page": args["page"]})
+    return _ok(translate_daemon_response(response))
+
+
+WIKI_TALK_READ = ToolDefinition(
+    name="wiki_talk_read",
+    description=(
+        "Read all entries on a page's talk page (full thread, including "
+        "resolved entries). For most cases the digest folded into wiki_read "
+        "is enough — use this only when you need the full thread history."
+    ),
+    input_schema={
+        "type": "object",
+        "properties": {"page": {"type": "string"}},
+        "required": ["page"],
+    },
+    handler=handle_wiki_talk_read,
+)
+
+
+async def handle_wiki_talk_post(ctx: ToolContext, args: dict) -> list[TextContent]:
+    response = await ctx.client.arequest({
+        "type": "talk-append",
+        "page": args["page"],
+        "author": args["author"],
+        "body": args["body"],
+        "severity": args.get("severity", "suggestion"),
+        "resolves": args.get("resolves", []),
+    })
+    return _ok(translate_daemon_response(response))
+
+
+WIKI_TALK_POST = ToolDefinition(
+    name="wiki_talk_post",
+    description=(
+        "Post a new entry on a page's talk page. Use this for half-formed "
+        "ideas, ambiguous findings, contradictions, or anything you cannot "
+        "yet cite to a source. Pass resolves=[N] to close prior entry N. "
+        "Severity: critical | moderate | minor | suggestion | new_connection."
+    ),
+    input_schema={
+        "type": "object",
+        "properties": {
+            "page": {"type": "string"},
+            "author": {"type": "string"},
+            "body": {"type": "string"},
+            "severity": {
+                "type": "string",
+                "enum": ["critical", "moderate", "minor", "suggestion", "new_connection"],
+                "default": "suggestion",
+            },
+            "resolves": {
+                "type": "array",
+                "items": {"type": "integer"},
+            },
+        },
+        "required": ["page", "author", "body"],
+    },
+    handler=handle_wiki_talk_post,
+)
+
+
+async def handle_wiki_talk_list(ctx: ToolContext, args: dict) -> list[TextContent]:
+    response = await ctx.client.arequest({"type": "talk-list"})
+    return _ok(translate_daemon_response(response))
+
+
+WIKI_TALK_LIST = ToolDefinition(
+    name="wiki_talk_list",
+    description="List all pages that have a talk page (any entries).",
+    input_schema={"type": "object", "properties": {}},
+    handler=handle_wiki_talk_list,
+)
+
+
+async def handle_wiki_session_close(ctx: ToolContext, args: dict) -> list[TextContent]:
+    response = await ctx.client.arequest({
+        "type": "session-close",
+        "connection_id": ctx.connection_id,
+        "author": args["author"],
+    })
+    return _ok(translate_daemon_response(response))
+
+
+WIKI_SESSION_CLOSE = ToolDefinition(
+    name="wiki_session_close",
+    description=(
+        "Explicitly settle your session — commit all pending writes "
+        "immediately instead of waiting for the inactivity timeout. "
+        "Useful at clean breakpoints or before disconnecting. Idempotent: "
+        "closing an already-settled session returns settled=false."
+    ),
+    input_schema={
+        "type": "object",
+        "properties": {"author": {"type": "string"}},
+        "required": ["author"],
+    },
+    handler=handle_wiki_session_close,
+)
+
+
+# ---------------------------------------------------------------------------
 # Registration list
 # ---------------------------------------------------------------------------
 
@@ -391,5 +570,11 @@ WIKI_TOOLS: list[ToolDefinition] = [
     WIKI_CREATE,
     WIKI_UPDATE,
     WIKI_APPEND,
-    # Task 6 appends more tools here.
+    WIKI_ISSUES_LIST,
+    WIKI_ISSUES_GET,
+    WIKI_ISSUES_RESOLVE,
+    WIKI_TALK_READ,
+    WIKI_TALK_POST,
+    WIKI_TALK_LIST,
+    WIKI_SESSION_CLOSE,
 ]

@@ -284,3 +284,90 @@ def test_wiki_tools_includes_write_side():
     assert "wiki_create" in names
     assert "wiki_update" in names
     assert "wiki_append" in names
+
+
+@pytest.mark.asyncio
+async def test_wiki_issues_list_tool(mock_client, mock_ctx):
+    from llm_wiki.mcp.tools import handle_wiki_issues_list
+    mock_client.arequest.return_value = {"status": "ok", "issues": []}
+    await handle_wiki_issues_list(mock_ctx, {"status_filter": "open"})
+    sent = mock_client.arequest.call_args[0][0]
+    assert sent["type"] == "issues-list"
+    assert sent["status_filter"] == "open"
+
+
+@pytest.mark.asyncio
+async def test_wiki_issues_get_tool(mock_client, mock_ctx):
+    from llm_wiki.mcp.tools import handle_wiki_issues_get
+    mock_client.arequest.return_value = {"status": "ok", "issue": {}}
+    await handle_wiki_issues_get(mock_ctx, {"id": "broken-link-foo-abc"})
+    sent = mock_client.arequest.call_args[0][0]
+    assert sent["type"] == "issues-get"
+    assert sent["id"] == "broken-link-foo-abc"
+
+
+@pytest.mark.asyncio
+async def test_wiki_issues_resolve_tool_requires_author(mock_client, mock_ctx):
+    from llm_wiki.mcp.tools import handle_wiki_issues_resolve
+    mock_client.arequest.return_value = {"status": "ok"}
+    await handle_wiki_issues_resolve(mock_ctx, {
+        "id": "broken-link-foo-abc",
+        "author": "alice",
+    })
+    sent = mock_client.arequest.call_args[0][0]
+    assert sent["type"] == "issues-update"
+    assert sent["status"] == "resolved"
+
+
+@pytest.mark.asyncio
+async def test_wiki_talk_post_tool_passes_severity_and_resolves(mock_client, mock_ctx):
+    from llm_wiki.mcp.tools import handle_wiki_talk_post
+    mock_client.arequest.return_value = {"status": "ok"}
+    await handle_wiki_talk_post(mock_ctx, {
+        "page": "foo",
+        "body": "x",
+        "author": "alice",
+        "severity": "critical",
+        "resolves": [3],
+    })
+    sent = mock_client.arequest.call_args[0][0]
+    assert sent["type"] == "talk-append"
+    assert sent["severity"] == "critical"
+    assert sent["resolves"] == [3]
+
+
+@pytest.mark.asyncio
+async def test_wiki_session_close_tool(mock_client, mock_ctx):
+    from llm_wiki.mcp.tools import handle_wiki_session_close
+    mock_client.arequest.return_value = {
+        "status": "ok", "settled": True, "commit_sha": "abc",
+    }
+    await handle_wiki_session_close(mock_ctx, {"author": "alice"})
+    sent = mock_client.arequest.call_args[0][0]
+    assert sent["type"] == "session-close"
+    assert sent["author"] == "alice"
+    # Critical: session-close uses the same connection_id as the writes
+    # that opened the session, so the daemon's get_active() finds it.
+    assert sent["connection_id"] == "test-mcp-conn"
+
+
+def test_wiki_tools_includes_maintenance_side():
+    from llm_wiki.mcp.tools import WIKI_TOOLS
+    names = {t.name for t in WIKI_TOOLS}
+    assert "wiki_issues_list" in names
+    assert "wiki_issues_get" in names
+    assert "wiki_issues_resolve" in names
+    assert "wiki_talk_read" in names
+    assert "wiki_talk_post" in names
+    assert "wiki_talk_list" in names
+    assert "wiki_session_close" in names
+
+
+def test_wiki_tools_does_not_include_delete_or_commit():
+    """Per the spec's 'Tools deliberately not in the surface' section."""
+    from llm_wiki.mcp.tools import WIKI_TOOLS
+    names = {t.name for t in WIKI_TOOLS}
+    assert "wiki_delete" not in names
+    assert "wiki_write" not in names
+    assert "wiki_commit" not in names
+    assert "wiki_revert" not in names
