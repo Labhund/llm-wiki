@@ -5,6 +5,7 @@ from pathlib import Path
 
 import yaml
 
+# Exported: used by audit/checks.py for bare-source detection.
 _SUPPORTED_BINARY = frozenset({
     ".pdf", ".docx", ".png", ".jpg", ".jpeg", ".gif", ".bmp", ".tiff"
 })
@@ -50,7 +51,7 @@ def write_frontmatter(path: Path, updates: dict) -> None:
     fm.update(updates)
     new_fm = yaml.dump(fm, default_flow_style=False, allow_unicode=True, sort_keys=False).strip()
     if body and not body.startswith("\n"):
-        body = "\n" + body
+        body = "\n" + body  # ensure closing --- is on its own line
     path.write_text(f"---\n{new_fm}\n---{body}", encoding="utf-8")
 
 
