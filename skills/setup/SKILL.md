@@ -41,9 +41,11 @@ If the agent framework (e.g., Hermes) ships with pre-MCP wiki skills that assume
 mkdir -p ~/wiki/{raw,wiki,schema}
 ```
 
-- `raw/` — immutable source material (papers, articles, transcripts)
-- `wiki/` — compiled wiki pages (daemon-owned)
+- `raw/` — immutable source copies. When ingesting a source, copy it verbatim to `raw/YYYY-MM-DD-slug.md` (flat — no subdirectories). This is a copy, not a transcription. All `source_ref` values in wiki citations must point here.
+- `wiki/` — compiled wiki pages (daemon-owned; do not edit directly)
 - `schema/` — configuration, prompts, agent definitions
+
+**Existing Obsidian vault:** If you already have an Obsidian vault, you can use it as the llm-wiki vault root instead of creating `~/wiki`. Set `LLM_WIKI_VAULT` to the vault root and create `raw/` and `schema/` inside it. The daemon writes compiled pages to `wiki/` (configurable via `wiki_dir`), which Obsidian will index alongside existing notes.
 
 ### Step 2: Write Vault Config
 
@@ -84,6 +86,8 @@ maintenance:
   authority_recalc: "12h"
   talk_pages_enabled: true
 ```
+
+**`wiki_dir`** sets the subdirectory for compiled pages (relative to vault root). Defaults to `wiki/`. Change this if your Obsidian vault already uses a different directory for content (e.g., `notes/`).
 
 **Backend assignment rationale:**
 
@@ -200,3 +204,12 @@ Tell the user:
 - **Port conflicts.** The ports in the config template are defaults. Always confirm the user's actual inference endpoints.
 - **First MCP connect is slow.** The daemon starts on first connect — importing litellm, building the tantivy index. 30+ seconds on first call is normal. The 120s timeout handles this.
 - **Backend model strings must match litellm format.** For local servers behind LiteLLM proxy, use `openai/<model-name>`. For direct llama-server, check what the `/v1/models` endpoint returns.
+- **Do not edit `wiki/` files directly.** The daemon treats git history as the audit trail. Direct edits bypass compliance review and session tracking. Always write through the MCP tools.
+
+---
+
+## Obsidian Integration
+
+Open the vault root as an Obsidian vault. Obsidian indexes both `wiki/` (compiled pages with `[[wikilinks]]`) and `raw/` (source copies). The wikilinks in compiled pages resolve within Obsidian's graph normally.
+
+Do not use Obsidian to edit files in `wiki/` — the daemon's compliance reviewer and adversary treat the git history as authoritative. Read in Obsidian; write through MCP.
