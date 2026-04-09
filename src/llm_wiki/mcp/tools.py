@@ -67,10 +67,10 @@ WIKI_SEARCH = ToolDefinition(
     name="wiki_search",
     description=(
         "Keyword-search the wiki and return ranked manifest entries with "
-        "match snippets. Use this when you have a specific term and want to "
-        "find which pages cover it. Use wiki_manifest when you don't have a "
-        "term yet; use wiki_query when you have a question and want a "
-        "compiled answer without loading pages yourself."
+        "line-numbered match snippets. Use this when you have a specific "
+        "term and want to find which pages cover it. Use wiki_manifest when "
+        "you don't have a term yet; use wiki_query when you have a question "
+        "and want a compiled answer without loading pages yourself."
     ),
     input_schema={
         "type": "object",
@@ -346,10 +346,11 @@ async def handle_wiki_update(ctx: ToolContext, args: dict) -> list[TextContent]:
 WIKI_UPDATE = ToolDefinition(
     name="wiki_update",
     description=(
-        "Apply a V4A-format patch to an existing page. The patch envelope is "
+        "Apply a V4A-format patch to an existing page. Never rewrite the "
+        "whole page from scratch — always patch. The patch envelope is "
         "*** Begin Patch / *** Update File: <path> / @@ <context> @@ / "
         "context+/-/space lines / *** End Patch. On patch-conflict: re-read "
-        "the page and retry — never rewrite the whole page from scratch. "
+        "the page and retry with a fresh patch. "
         "Opens a session on first call; close explicitly with "
         "wiki_session_close when done."
     ),
