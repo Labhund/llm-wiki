@@ -98,3 +98,49 @@ async def test_summarize_open_entries_falls_back_on_llm_error():
 async def test_summarize_open_entries_empty_returns_empty_string():
     summary = await summarize_open_entries([], llm=None)
     assert summary == ""
+
+
+def test_deterministic_summary_orders_by_severity_rank():
+    """P6A-M4: deterministic fallback sorts severities by rank, not alphabet.
+
+    Alphabetical order produces "critical, minor, moderate, ..." which
+    misleads readers about precedence. Rank order is:
+    critical → moderate → minor → suggestion → new_connection.
+    """
+    from llm_wiki.librarian.talk_summary import _deterministic_summary
+
+    entries = [
+        TalkEntry(1, "t", "@a", "x", severity="minor"),
+        TalkEntry(2, "t", "@a", "x", severity="suggestion"),
+        TalkEntry(3, "t", "@a", "x", severity="critical"),
+        TalkEntry(4, "t", "@a", "x", severity="new_connection"),
+        TalkEntry(5, "t", "@a", "x", severity="moderate"),
+        TalkEntry(6, "t", "@a", "x", severity="critical"),
+    ]
+    summary = _deterministic_summary(entries)
+    # Expected: 6 unresolved talk entries: 2 critical, 1 moderate, 1 minor,
+    # 1 suggestion, 1 new_connection.
+    assert summary.startswith("6 unresolved talk entries: ")
+    body = summary[len("6 unresolved talk entries: "):].rstrip(".")
+    parts = [p.strip() for p in body.split(",")]
+    severities_in_order = [p.split()[1] for p in parts]
+    assert severities_in_order == [
+        "critical", "moderate", "minor", "suggestion", "new_connection",
+    ]
+
+
+def test_deterministic_summary_rank_skips_unknown_severities():
+    """Unknown severities sort after known ones, alphabetically among themselves."""
+    from llm_wiki.librarian.talk_summary import _deterministic_summary
+
+    entries = [
+        TalkEntry(1, "t", "@a", "x", severity="critical"),
+        TalkEntry(2, "t", "@a", "x", severity="zzz_unknown"),
+        TalkEntry(3, "t", "@a", "x", severity="aaa_unknown"),
+    ]
+    summary = _deterministic_summary(entries)
+    # Known first (critical), then unknowns alphabetically (aaa, zzz).
+    body = summary[len("3 unresolved talk entries: "):].rstrip(".")
+    parts = [p.strip() for p in body.split(",")]
+    severities_in_order = [p.split()[1] for p in parts]
+    assert severities_in_order == ["critical", "aaa_unknown", "zzz_unknown"]
