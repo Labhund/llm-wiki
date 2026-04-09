@@ -119,3 +119,58 @@ def test_wiki_tools_includes_read_side():
     assert "wiki_read" in names
     assert "wiki_manifest" in names
     assert "wiki_status" in names
+
+
+@pytest.mark.asyncio
+async def test_wiki_query_tool(mock_client, mock_ctx):
+    from llm_wiki.mcp.tools import handle_wiki_query
+    mock_client.arequest.return_value = {
+        "status": "ok",
+        "answer": "answer text",
+        "citations": ["foo"],
+        "outcome": "complete",
+        "needs_more_budget": False,
+        "log": {},
+    }
+    await handle_wiki_query(mock_ctx, {"question": "What is k-means?"})
+    sent = mock_client.arequest.call_args[0][0]
+    assert sent["type"] == "query"
+    assert sent["question"] == "What is k-means?"
+
+
+@pytest.mark.asyncio
+async def test_wiki_ingest_tool_passes_author(mock_client, mock_ctx):
+    from llm_wiki.mcp.tools import handle_wiki_ingest
+    mock_client.arequest.return_value = {
+        "status": "ok", "pages_created": 2, "pages_updated": 0,
+        "created": ["a", "b"], "updated": [], "concepts_found": 2,
+    }
+    await handle_wiki_ingest(mock_ctx, {
+        "source_path": "/raw/paper.pdf",
+        "author": "alice",
+    })
+    sent = mock_client.arequest.call_args[0][0]
+    assert sent["type"] == "ingest"
+    assert sent["source_path"] == "/raw/paper.pdf"
+    assert sent["author"] == "alice"
+
+
+@pytest.mark.asyncio
+async def test_wiki_lint_tool(mock_client, mock_ctx):
+    from llm_wiki.mcp.tools import handle_wiki_lint
+    mock_client.arequest.return_value = {
+        "status": "ok",
+        "structural": {},
+        "attention_map": {"pages_needing_attention": [], "totals": {}, "by_page": {}},
+    }
+    await handle_wiki_lint(mock_ctx, {})
+    sent = mock_client.arequest.call_args[0][0]
+    assert sent["type"] == "lint"
+
+
+def test_wiki_tools_includes_query_side():
+    from llm_wiki.mcp.tools import WIKI_TOOLS
+    names = {t.name for t in WIKI_TOOLS}
+    assert "wiki_query" in names
+    assert "wiki_ingest" in names
+    assert "wiki_lint" in names

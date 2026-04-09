@@ -163,6 +163,94 @@ WIKI_STATUS = ToolDefinition(
 
 
 # ---------------------------------------------------------------------------
+# Query-side
+# ---------------------------------------------------------------------------
+
+async def handle_wiki_query(ctx: ToolContext, args: dict) -> list[TextContent]:
+    response = await ctx.client.arequest({
+        "type": "query",
+        "question": args["question"],
+        "budget": args.get("budget"),
+    })
+    return _ok(translate_daemon_response(response))
+
+
+WIKI_QUERY = ToolDefinition(
+    name="wiki_query",
+    description=(
+        "Ask the wiki a question. The daemon performs multi-turn traversal "
+        "with budget management and returns a synthesized answer plus the "
+        "citations it relied on. Your context only sees the final answer — "
+        "the navigation log stays on the daemon side."
+    ),
+    input_schema={
+        "type": "object",
+        "properties": {
+            "question": {"type": "string"},
+            "budget": {"type": "integer"},
+        },
+        "required": ["question"],
+    },
+    handler=handle_wiki_query,
+)
+
+
+async def handle_wiki_ingest(ctx: ToolContext, args: dict) -> list[TextContent]:
+    response = await ctx.client.arequest({
+        "type": "ingest",
+        "connection_id": ctx.connection_id,
+        "source_path": args["source_path"],
+        "author": args["author"],
+    })
+    return _ok(translate_daemon_response(response))
+
+
+WIKI_INGEST = ToolDefinition(
+    name="wiki_ingest",
+    description=(
+        "Ingest a source file (PDF, DOCX, markdown, URL, image) into the "
+        "wiki. The daemon runs extraction, identifies concepts, and creates "
+        "or updates pages. Every internal write journals under your session "
+        "so the whole ingest produces one git commit attributed to you."
+    ),
+    input_schema={
+        "type": "object",
+        "properties": {
+            "source_path": {
+                "type": "string",
+                "description": (
+                    "Source to ingest. Accepts a local filesystem path "
+                    "(PDF, DOCX, markdown, plain text, image with OCR) "
+                    "or a URL the daemon can fetch."
+                ),
+            },
+            "author": {"type": "string", "description": "Your agent identifier"},
+        },
+        "required": ["source_path", "author"],
+    },
+    handler=handle_wiki_ingest,
+)
+
+
+async def handle_wiki_lint(ctx: ToolContext, args: dict) -> list[TextContent]:
+    response = await ctx.client.arequest({"type": "lint"})
+    return _ok(translate_daemon_response(response))
+
+
+WIKI_LINT = ToolDefinition(
+    name="wiki_lint",
+    description=(
+        "Run structural integrity checks AND return the vault-wide attention "
+        "map (issue + talk-entry counts per page, by severity). Near-instant, "
+        "no LLM. Call this at the start of a session to know exactly where "
+        "in the vault to focus."
+    ),
+    input_schema={"type": "object", "properties": {}},
+    handler=handle_wiki_lint,
+)
+
+
+# ---------------------------------------------------------------------------
 # Registration list
 # ---------------------------------------------------------------------------
 
@@ -171,5 +259,8 @@ WIKI_TOOLS: list[ToolDefinition] = [
     WIKI_READ,
     WIKI_MANIFEST,
     WIKI_STATUS,
-    # Tasks 4–6 append more tools here.
+    WIKI_QUERY,
+    WIKI_INGEST,
+    WIKI_LINT,
+    # Tasks 5–6 append more tools here.
 ]
