@@ -550,6 +550,51 @@ WIKI_TALK_LIST = ToolDefinition(
 )
 
 
+async def handle_wiki_source_mark(ctx: ToolContext, args: dict) -> list[TextContent]:
+    response = await ctx.client.arequest({
+        "type": "source-mark",
+        "source_path": args["source_path"],
+        "status": args["status"],
+        "author": args["author"],
+    })
+    return _ok(translate_daemon_response(response))
+
+
+WIKI_SOURCE_MARK = ToolDefinition(
+    name="wiki_source_mark",
+    description=(
+        "Update the reading_status of a source file in raw/. Call this to track "
+        "your engagement with a source: 'in_progress' when you start reading it, "
+        "'read' when you finish. The change is committed to git with a "
+        "Source-Status trailer for audit. Valid statuses: unread, in_progress, read.\n\n"
+        "Skill protocol:\n"
+        "- Brief mode start → in_progress\n"
+        "- Brief mode complete (no deep session) → read\n"
+        "- Deep mode session start → in_progress\n"
+        "- Deep mode plan complete → read"
+    ),
+    input_schema={
+        "type": "object",
+        "properties": {
+            "source_path": {
+                "type": "string",
+                "description": "Path to the source file or its companion .md (must be under raw/)",
+            },
+            "status": {
+                "type": "string",
+                "enum": ["unread", "in_progress", "read"],
+            },
+            "author": {
+                "type": "string",
+                "description": "Your agent identifier (e.g. 'claude-researcher')",
+            },
+        },
+        "required": ["source_path", "status", "author"],
+    },
+    handler=handle_wiki_source_mark,
+)
+
+
 async def handle_wiki_session_close(ctx: ToolContext, args: dict) -> list[TextContent]:
     response = await ctx.client.arequest({
         "type": "session-close",
@@ -597,5 +642,6 @@ WIKI_TOOLS: list[ToolDefinition] = [
     WIKI_TALK_READ,
     WIKI_TALK_POST,
     WIKI_TALK_LIST,
+    WIKI_SOURCE_MARK,
     WIKI_SESSION_CLOSE,
 ]
