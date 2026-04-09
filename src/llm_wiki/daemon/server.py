@@ -417,12 +417,22 @@ class DaemonServer:
         if not page_path.exists():
             return {"status": "error", "message": f"Page not found: {request['page']}"}
 
+        severity = request.get("severity", "suggestion")
+        resolves_raw = request.get("resolves", [])
+        # Defensive: coerce to list[int] in case JSON delivers strings.
+        try:
+            resolves = [int(x) for x in resolves_raw]
+        except (TypeError, ValueError):
+            return {"status": "error", "message": "resolves must be a list of integers"}
+
         talk = TalkPage.for_page(page_path)
         entry = TalkEntry(
             index=0,
             timestamp=_dt.datetime.now(_dt.timezone.utc).isoformat(),
             author=request["author"],
             body=request["body"],
+            severity=severity,
+            resolves=resolves,
         )
         talk.append(entry)
         ensure_talk_marker(page_path)
