@@ -405,6 +405,8 @@ Better pattern for large-context models:
 manifest → wiki_read_many([page1, page2, page3]) → [one prefill, 15k tokens] → reason → write
 ```
 
+The same applies *within* a single page. Reading "overview" then "mechanism" on the same page is two decode cycles when it should be one prefill. `wiki_read` currently accepts a single viewport — a `sections` parameter accepting a list would collapse N intra-page reads into one call.
+
 The manifest already gives the agent the routing information it needs. The missing piece is a bulk loading tool to act on it in one shot.
 
 **The skill philosophy also needs updating.** The careful sip-at-a-time posture in the current skills was designed for 8-32k context windows. For large-context models, it actively penalises efficiency. Skills should acknowledge that the right behaviour is model/context-dependent: if context is abundant, load relevant content generously; tool round-trips are the bottleneck, not tokens.
@@ -434,7 +436,27 @@ wiki_read_many(pages=[
 
 ---
 
-### 2. `wiki_read_cluster` — Load an Entire Cluster
+### 2. `wiki_read` — Multi-Section Viewport
+
+**What:** Extend `wiki_read` to accept multiple sections in one call, returning them concatenated with section headers preserved.
+
+**Proposed interface:**
+```python
+wiki_read("rfdiffusion", viewport="sections", sections=["overview", "motif-scaffolding", "citations"])
+```
+
+**Behaviour:** Returns the named sections in order, same inline issue/talk digest as a normal read. If a named section doesn't exist, include a `missing_sections` field in the response rather than failing — lets the agent adapt without a retry round-trip.
+
+**Backwards compatible:** Existing `viewport="top"`, `viewport="section"`, `viewport="full"`, `viewport="grep"` all unchanged. `viewport="sections"` (plural) is the new multi-section path.
+
+**What needs to change:**
+1. Extend `wiki_read` handler in `src/llm_wiki/mcp/tools.py` to accept `sections: list[str]` when `viewport="sections"`
+2. Daemon page-read logic to concatenate named sections
+3. Tool description update — surface the multi-section option explicitly
+
+---
+
+### 3. `wiki_read_cluster` — Load an Entire Cluster
 
 **What:** Load all pages in a named cluster in one call. The manifest already organises pages into clusters; this makes bulk cluster loading a first-class operation.
 
