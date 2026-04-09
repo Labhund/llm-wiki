@@ -479,7 +479,67 @@ class DaemonServer:
         queue = self._issue_queue()
         auditor = Auditor(self._vault, queue, self._vault_root)
         report = auditor.audit()
-        return {"status": "ok", **report.to_dict()}
+        attention_map = self._build_attention_map(queue)
+        return {
+            "status": "ok",
+            "attention_map": attention_map,
+            **report.to_dict(),
+        }
+
+    def _build_attention_map(self, queue: "IssueQueue") -> dict:
+        """Aggregate issue and talk severities across the vault.
+
+        Issue counts come from the queue (already filtered by status='open').
+        Talk counts come from walking every *.talk.md and computing the
+        open set per page. Resolved entries are excluded.
+        """
+        from llm_wiki.talk.page import TalkPage, compute_open_set
+
+        wiki_dir = self._vault_root / self._config.vault.wiki_dir.rstrip("/")
+
+        empty_issues = lambda: {"critical": 0, "moderate": 0, "minor": 0}
+        empty_talk = lambda: {
+            "critical": 0, "moderate": 0, "minor": 0,
+            "suggestion": 0, "new_connection": 0,
+        }
+
+        totals_issues = empty_issues()
+        totals_talk = empty_talk()
+        by_page: dict[str, dict] = {}
+
+        # Issues
+        for issue in queue.list(status="open"):
+            sev = issue.severity if issue.severity in totals_issues else "minor"
+            totals_issues[sev] += 1
+            page = issue.page or "<vault>"
+            page_entry = by_page.setdefault(
+                page, {"issues": empty_issues(), "talk": empty_talk()},
+            )
+            page_entry["issues"][sev] += 1
+
+        # Talk pages
+        if wiki_dir.exists():
+            for talk_path in sorted(wiki_dir.rglob("*.talk.md")):
+                rel = talk_path.relative_to(wiki_dir)
+                if any(p.startswith(".") for p in rel.parts):
+                    continue
+                stem = talk_path.stem
+                page_name = stem[: -len(".talk")] if stem.endswith(".talk") else stem
+                entries = TalkPage(talk_path).load()
+                open_entries = compute_open_set(entries)
+                for e in open_entries:
+                    sev = e.severity if e.severity in totals_talk else "suggestion"
+                    totals_talk[sev] += 1
+                    page_entry = by_page.setdefault(
+                        page_name, {"issues": empty_issues(), "talk": empty_talk()},
+                    )
+                    page_entry["talk"][sev] += 1
+
+        return {
+            "pages_needing_attention": sorted(by_page.keys()),
+            "totals": {"issues": totals_issues, "talk": totals_talk},
+            "by_page": by_page,
+        }
 
     def _issue_queue(self) -> "IssueQueue":
         from llm_wiki.issues.queue import IssueQueue

@@ -310,3 +310,90 @@ async def test_search_route_returns_matches_array(phase6a_daemon_server):
             assert "before" in m
             assert "match" in m
             assert "after" in m
+
+
+@pytest.mark.asyncio
+async def test_lint_response_includes_attention_map(phase6a_daemon_server):
+    """The lint route response carries an attention_map block."""
+    server, sock_path = phase6a_daemon_server
+    resp = await _request(sock_path, {"type": "lint"})
+    assert resp["status"] == "ok"
+    assert "attention_map" in resp
+    am = resp["attention_map"]
+    assert "pages_needing_attention" in am
+    assert "totals" in am
+    assert "by_page" in am
+    assert "issues" in am["totals"]
+    assert "talk" in am["totals"]
+    for severity in ("critical", "moderate", "minor"):
+        assert severity in am["totals"]["issues"]
+    for severity in ("critical", "moderate", "minor", "suggestion", "new_connection"):
+        assert severity in am["totals"]["talk"]
+
+
+@pytest.mark.asyncio
+async def test_lint_attention_map_aggregates_issue_severities(phase6a_daemon_server, sample_vault):
+    """An open critical issue raises the totals.issues.critical count."""
+    from llm_wiki.issues.queue import Issue, IssueQueue
+
+    server, sock_path = phase6a_daemon_server
+    queue = IssueQueue(sample_vault)
+    queue.add(Issue(
+        id=Issue.make_id("broken-citation", "srna-embeddings", "raw/missing.pdf"),
+        type="broken-citation",
+        status="open",
+        severity="critical",
+        title="Missing source",
+        page="srna-embeddings",
+        body="A test critical issue.",
+        created=Issue.now_iso(),
+        detected_by="auditor",
+        metadata={"target": "raw/missing.pdf"},
+    ))
+
+    resp = await _request(sock_path, {"type": "lint"})
+    assert resp["status"] == "ok"
+    am = resp["attention_map"]
+    assert am["totals"]["issues"]["critical"] >= 1
+    assert "srna-embeddings" in am["pages_needing_attention"]
+    assert am["by_page"]["srna-embeddings"]["issues"]["critical"] >= 1
+
+
+@pytest.mark.asyncio
+async def test_lint_attention_map_aggregates_talk_severities(phase6a_daemon_server, sample_vault):
+    """A critical talk entry raises the totals.talk.critical count."""
+    from llm_wiki.talk.page import TalkEntry, TalkPage
+
+    server, sock_path = phase6a_daemon_server
+    page_path = sample_vault / "bioinformatics" / "srna-embeddings.md"
+    talk = TalkPage.for_page(page_path)
+    talk.append(TalkEntry(
+        0, "2026-04-08T10:00:00+00:00", "@adv",
+        "Critical talk entry", severity="critical",
+    ))
+
+    resp = await _request(sock_path, {"type": "lint"})
+    assert resp["status"] == "ok"
+    am = resp["attention_map"]
+    assert am["totals"]["talk"]["critical"] >= 1
+    assert "srna-embeddings" in am["pages_needing_attention"]
+
+
+@pytest.mark.asyncio
+async def test_lint_attention_map_excludes_resolved_talk_entries(phase6a_daemon_server, sample_vault):
+    """Resolved talk entries don't show up in the attention map counts."""
+    from llm_wiki.talk.page import TalkEntry, TalkPage
+
+    server, sock_path = phase6a_daemon_server
+    page_path = sample_vault / "bioinformatics" / "srna-embeddings.md"
+    talk = TalkPage.for_page(page_path)
+    talk.append(TalkEntry(0, "t1", "@adv", "first", severity="critical"))
+    talk.append(TalkEntry(0, "t2", "@user", "closes 1", resolves=[1]))
+
+    resp = await _request(sock_path, {"type": "lint"})
+    assert resp["status"] == "ok"
+    am = resp["attention_map"]
+    # The critical entry is resolved → must not be counted
+    by_page = am["by_page"].get("srna-embeddings", {})
+    talk_counts = by_page.get("talk", {})
+    assert talk_counts.get("critical", 0) == 0
