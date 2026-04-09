@@ -19,8 +19,12 @@ import os
 import uuid
 from dataclasses import asdict, dataclass
 from pathlib import Path
+from typing import TYPE_CHECKING
 
 from llm_wiki.config import SessionsConfig
+
+if TYPE_CHECKING:
+    from llm_wiki.daemon.commit import CommitService
 
 logger = logging.getLogger(__name__)
 
@@ -187,3 +191,42 @@ class SessionRegistry:
 
     def all_sessions(self) -> list[Session]:
         return list(self._sessions.values())
+
+
+async def recover_sessions(
+    state_dir: Path,
+    commit_service: "CommitService",
+) -> int:
+    """Settle every orphaned journal under <state_dir>/sessions/.
+
+    Called once at daemon startup. For each non-archived journal, builds
+    a stub Session, loads its entries, and runs the commit service's
+    settle pipeline. Returns the number of journals successfully recovered.
+    """
+    orphans = scan_orphaned_journals(state_dir)
+    recovered = 0
+    for journal_path in orphans:
+        entries = load_journal(journal_path)
+        if not entries:
+            logger.info("Skipping empty journal %s", journal_path)
+            continue
+
+        # Reconstruct a stub Session from the journal's first entry
+        first = entries[0]
+        sess = Session(
+            id=journal_path.stem,
+            author=first.author,
+            connection_id="recovered",
+            opened_at=first.ts,
+            last_write_at=entries[-1].ts,
+            write_count=len(entries),
+            journal_path=journal_path,
+        )
+        try:
+            await commit_service.settle_with_fallback(sess, entries)
+            recovered += 1
+        except Exception:
+            logger.exception("Failed to recover journal %s", journal_path)
+            # Don't archive on failure — leave for the next attempt
+            continue
+    return recovered
