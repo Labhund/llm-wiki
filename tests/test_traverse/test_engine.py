@@ -26,7 +26,8 @@ def _turn(salient: str, candidates: list[dict], hypothesis: str = "TBD",
 @pytest.mark.asyncio
 async def test_no_search_results(tmp_path):
     """Empty vault → immediate candidates_exhausted."""
-    (tmp_path / "empty.md").write_text("nothing useful")
+    (tmp_path / "wiki").mkdir()  # satisfy vault validation guard
+    (tmp_path / "wiki" / "empty.md").write_text("nothing useful")
     vault = Vault.scan(tmp_path)
     config = WikiConfig()
     mock_llm = MockLLMClient([])
