@@ -150,6 +150,13 @@ class VaultConfig:
 
 
 @dataclass
+class IngestConfig:
+    pdf_extractor: str = "pdftotext"              # pdftotext | local-ocr | marker | nougat
+    local_ocr_endpoint: str = "http://localhost:8006/v1"
+    local_ocr_model: str = "qianfan-ocr"
+
+
+@dataclass
 class HonchoConfig:
     enabled: bool = False
     endpoint: str = "http://localhost:8000"
@@ -188,6 +195,7 @@ class WikiConfig:
     budgets: BudgetConfig = field(default_factory=BudgetConfig)
     maintenance: MaintenanceConfig = field(default_factory=MaintenanceConfig)
     vault: VaultConfig = field(default_factory=VaultConfig)
+    ingest: IngestConfig = field(default_factory=IngestConfig)
     honcho: HonchoConfig = field(default_factory=HonchoConfig)
     mcp: MCPConfig = field(default_factory=MCPConfig)
     sessions: SessionsConfig = field(default_factory=SessionsConfig)

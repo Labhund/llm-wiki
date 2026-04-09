@@ -1198,6 +1198,11 @@ class DaemonServer:
                     f"Use wiki_lint to see the full attention map."
                 ),
             })
+        if result.extraction_warning:
+            warnings.append({
+                "code": "extraction-quality",
+                "message": result.extraction_warning,
+            })
 
         response = {
             "status": "ok",
@@ -1210,6 +1215,7 @@ class DaemonServer:
         if truncated:
             response["truncated"] = True
             response["shown"] = cap
+        if warnings:
             response["warnings"] = warnings
         return response
 

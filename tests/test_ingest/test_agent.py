@@ -169,3 +169,83 @@ async def test_ingest_extraction_failure_returns_error(tmp_path: Path):
     assert result.pages_created == []
     assert result.pages_updated == []
     assert mock_llm.calls == []
+
+
+# ---------------------------------------------------------------------------
+# extraction_warning threading
+# ---------------------------------------------------------------------------
+
+@pytest.mark.asyncio
+async def test_ingest_result_includes_extraction_warning(tmp_path):
+    """When extraction returns a quality_warning, IngestResult carries it through."""
+    from unittest.mock import AsyncMock, patch, MagicMock
+    from llm_wiki.config import WikiConfig
+    from llm_wiki.ingest.agent import IngestAgent
+    from llm_wiki.ingest.extractor import ExtractionResult
+
+    # Source file
+    source = tmp_path / "raw" / "paper.pdf"
+    source.parent.mkdir(parents=True)
+    source.write_bytes(b"fake pdf")
+    (tmp_path / "wiki").mkdir()
+
+    config = WikiConfig()
+
+    # Patched extract_text that returns a result with a quality_warning
+    warned_result = ExtractionResult(
+        success=True,
+        content="x\n" * 50,
+        extraction_method="pdf",
+        token_count=50,
+        quality_warning="low word/line ratio (1.0) — extraction may be mangled",
+    )
+
+    fake_llm = AsyncMock()
+    fake_llm.complete = AsyncMock(return_value=MagicMock(content='{"concepts": []}'))
+
+    with patch("llm_wiki.ingest.agent.extract_text", return_value=warned_result):
+        agent = IngestAgent(config=config, llm=fake_llm)
+        result = await agent.ingest(
+            source_path=source,
+            vault_root=tmp_path,
+            dry_run=True,
+        )
+
+    assert result.extraction_warning == "low word/line ratio (1.0) — extraction may be mangled"
+
+
+@pytest.mark.asyncio
+async def test_ingest_result_extraction_warning_absent_on_clean_extraction(tmp_path):
+    """Clean extraction produces IngestResult with extraction_warning = None."""
+    from unittest.mock import AsyncMock, patch, MagicMock
+    from llm_wiki.config import WikiConfig
+    from llm_wiki.ingest.agent import IngestAgent
+    from llm_wiki.ingest.extractor import ExtractionResult
+
+    source = tmp_path / "raw" / "paper.pdf"
+    source.parent.mkdir(parents=True)
+    source.write_bytes(b"fake pdf")
+    (tmp_path / "wiki").mkdir()
+
+    config = WikiConfig()
+
+    clean_result = ExtractionResult(
+        success=True,
+        content="Normal text content with good word line ratio.\n" * 5,
+        extraction_method="pdf",
+        token_count=100,
+        quality_warning=None,
+    )
+
+    fake_llm = AsyncMock()
+    fake_llm.complete = AsyncMock(return_value=MagicMock(content='{"concepts": []}'))
+
+    with patch("llm_wiki.ingest.agent.extract_text", return_value=clean_result):
+        agent = IngestAgent(config=config, llm=fake_llm)
+        result = await agent.ingest(
+            source_path=source,
+            vault_root=tmp_path,
+            dry_run=True,
+        )
+
+    assert result.extraction_warning is None

@@ -132,3 +132,24 @@ def test_maintenance_config_has_resonance_defaults():
     assert cfg.maintenance.resonance_matching is False
     assert cfg.maintenance.resonance_candidates_per_claim == 3
     assert cfg.maintenance.resonance_stale_weeks == 4
+
+
+def test_ingest_config_defaults():
+    c = WikiConfig()
+    assert c.ingest.pdf_extractor == "pdftotext"
+    assert c.ingest.local_ocr_endpoint == "http://localhost:8006/v1"
+    assert c.ingest.local_ocr_model == "qianfan-ocr"
+
+
+def test_ingest_config_loads_from_yaml(tmp_path):
+    cfg_file = tmp_path / "config.yaml"
+    cfg_file.write_text(
+        "ingest:\n"
+        "  pdf_extractor: local-ocr\n"
+        "  local_ocr_endpoint: http://gpu-box:8006/v1\n"
+        "  local_ocr_model: my-ocr-model\n"
+    )
+    c = WikiConfig.load(cfg_file)
+    assert c.ingest.pdf_extractor == "local-ocr"
+    assert c.ingest.local_ocr_endpoint == "http://gpu-box:8006/v1"
+    assert c.ingest.local_ocr_model == "my-ocr-model"

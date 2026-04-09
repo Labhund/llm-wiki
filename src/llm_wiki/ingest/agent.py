@@ -60,6 +60,7 @@ class IngestResult:
     dry_run: bool = False
     concepts_planned: list[ConceptPreview] = field(default_factory=list)
     source_chars: int = 0
+    extraction_warning: str | None = None    # set when extraction quality is suspect
 
     @property
     def concepts_found(self) -> int:
@@ -119,7 +120,10 @@ class IngestAgent:
         except ValueError:
             source_ref = source_path.name
 
-        extraction = await extract_text(source_path)
+        extraction = await extract_text(
+            source_path,
+            ingest_config=self._config.ingest,
+        )
         if not extraction.success:
             logger.warning(
                 "Extraction failed for %s: %s", source_path, extraction.error
@@ -127,6 +131,8 @@ class IngestAgent:
             return result
 
         result.source_chars = len(extraction.content)
+        if extraction.quality_warning:
+            result.extraction_warning = extraction.quality_warning
 
         if companion:
             try:
