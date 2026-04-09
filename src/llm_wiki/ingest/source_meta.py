@@ -41,8 +41,7 @@ def write_frontmatter(path: Path, updates: dict) -> None:
             fm_text = content[3:end].strip()
             body = content[end + 4:]  # everything after the closing \n---
         else:
-            fm_text = ""
-            body = content
+            raise ValueError(f"Malformed frontmatter in {path}: opening --- found but no closing ---")
     else:
         fm_text = ""
         body = content
@@ -78,10 +77,9 @@ def init_companion(
     if companion.exists():
         return None
     today = datetime.date.today().isoformat()
-    companion.write_text(
-        f"---\nreading_status: unread\ningested: {today}\nsource_type: {source_type}\n---\n",
-        encoding="utf-8",
-    )
+    fm = {"reading_status": "unread", "ingested": today, "source_type": source_type}
+    fm_text = yaml.dump(fm, default_flow_style=False, allow_unicode=True, sort_keys=False).strip()
+    companion.write_text(f"---\n{fm_text}\n---\n", encoding="utf-8")
     return companion
 
 

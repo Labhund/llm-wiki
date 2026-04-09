@@ -40,6 +40,13 @@ def test_read_frontmatter_missing_file_returns_empty(tmp_path: Path):
     assert read_frontmatter(tmp_path / "nonexistent.md") == {}
 
 
+def test_read_frontmatter_yaml_error_returns_empty(tmp_path: Path):
+    f = tmp_path / "bad.md"
+    f.write_text("---\nkey: [unclosed\n---\n")
+    from llm_wiki.ingest.source_meta import read_frontmatter
+    assert read_frontmatter(f) == {}
+
+
 # ---------------------------------------------------------------------------
 # write_frontmatter
 # ---------------------------------------------------------------------------
@@ -117,6 +124,16 @@ def test_init_companion_returns_none_for_markdown_source(tmp_path: Path):
     raw_dir = tmp_path / "raw"
     raw_dir.mkdir()
     md = raw_dir / "article.md"
+    md.write_text("# Article\n\nContent.\n")
+    from llm_wiki.ingest.source_meta import init_companion
+    assert init_companion(md, tmp_path) is None
+
+
+def test_init_companion_returns_none_for_markdown_extension(tmp_path: Path):
+    """Both .md and .markdown extensions must return None."""
+    raw_dir = tmp_path / "raw"
+    raw_dir.mkdir()
+    md = raw_dir / "article.markdown"
     md.write_text("# Article\n\nContent.\n")
     from llm_wiki.ingest.source_meta import init_companion
     assert init_companion(md, tmp_path) is None
