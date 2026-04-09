@@ -41,3 +41,15 @@ Read the full issue before deciding anything. Some issues have obvious fixes; so
 ## Key Principle
 
 Maintenance is not a rewrite pass. Fixes should be surgical. If you find yourself wanting to rewrite body content during a lint pass, flag it as a separate task and move on.
+
+## Resonance Review
+
+`wiki_lint` flags open `resonance` talk entries older than the configured threshold. Each entry means the system found a possible connection between a new source and an existing claim.
+
+For each resonance entry:
+1. Read the existing page (`wiki_read`)
+2. Read the new source reference in the entry body
+3. Decide: corroborate (add cross-reference), extend (append with citation), contradict (post adversary talk entry), or dismiss (resolve the resonance entry as a false match)
+4. Resolve the entry: `wiki_talk_post` on the same page with `resolves: [N]` referencing the resonance entry index
+
+A resonance entry is not a finding that demands action — it is a prompt for a human judgement call. Dismissing false matches is a valid and useful outcome.

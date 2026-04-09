@@ -53,6 +53,8 @@ The sub-agent follows Mode 3 (in-context manual) discipline internally.
 4. Follow wikilinks with purpose — for each link, ask: does following this serve my stated intent?
 5. Inline issue/talk digests in `wiki_read` responses are relevant findings — critical and moderate signals are part of the research result
 
+**3-hop minimum before synthesis.** Manifest or search (hop 1) → read a page (hop 2) → follow at least one wikilink from it (hop 3). Any non-trivial research question warrants this before answering. If the answer is obvious after hop 1, the question was trivial.
+
 ## Exit Condition
 
 Traversal ends when you can answer the stated intent. Not when pages run out.

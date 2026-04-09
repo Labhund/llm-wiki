@@ -21,6 +21,10 @@ These apply to every operation.
 
 **Traversal, not RAG.** One search → done is wrong. Enter via manifest or search, follow wikilinks with purpose, build understanding across pages. The wiki is a compiled knowledge graph, not a retrieval index.
 
+**Tool calls have real cost.** Each tool call is a decode cycle plus daemon round-trip. Prefill is 10-100× cheaper than decode per token. If you need multiple pages, load them in bulk when possible — fewer calls, one prefill. Orient with the manifest first, then load what you need in one pass.
+
+**Minimum traversal depth.** For any non-trivial research question, at least 3 hops before synthesis: manifest or search → at least one page read → follow at least one wikilink. One search result → done is wrong. The wiki is a graph, not a retrieval index.
+
 **Talk pages absorb everything uncitable.** No source → `wiki_talk_post`, not `wiki_create`. Main pages require citations. This is a first-class path, not a workaround.
 
 **Sessions are work units.** All writes in a coherent task share one session. Sessions open implicitly on the first write call — no explicit open needed. Close explicitly with `wiki_session_close` — don't rely on inactivity timeout. Watch for `session-cap-approaching` (emitted at write 18; hard cap at 30) — wrap up the current work unit or plan to continue in a new session.
