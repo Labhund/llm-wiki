@@ -84,6 +84,21 @@ class TalkSummaryStore:
     def delete(self, page_name: str) -> None:
         self._entries.pop(page_name, None)
 
+    def page_names(self) -> list[str]:
+        """Return the list of page names currently tracked in the store."""
+        return list(self._entries.keys())
+
+    def prune(self, live_page_names: set[str]) -> int:
+        """Drop entries for pages not in `live_page_names`.
+
+        Returns the number of entries removed. The caller is responsible
+        for calling `save()` afterwards if anything was pruned.
+        """
+        stale = [name for name in self._entries if name not in live_page_names]
+        for name in stale:
+            del self._entries[name]
+        return len(stale)
+
     def save(self) -> None:
         self._path.parent.mkdir(parents=True, exist_ok=True)
         payload = {name: asdict(rec) for name, rec in self._entries.items()}

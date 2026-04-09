@@ -166,6 +166,7 @@ class LibrarianAgent:
         min_interval = self._config.maintenance.talk_summary_min_interval_seconds
         now = _dt.datetime.now(_dt.timezone.utc)
         refreshed = 0
+        live_page_names: set[str] = set()
 
         for talk_path in sorted(wiki_dir.rglob("*.talk.md")):
             # Skip files inside hidden directories (e.g. .issues)
@@ -173,15 +174,19 @@ class LibrarianAgent:
             if any(p.startswith(".") for p in rel.parts):
                 continue
 
+            # Page slug derives from the talk file's stem.
+            # Track every live talk file (even ones that won't be summarized
+            # this round) so the prune step at the bottom doesn't drop them.
+            stem = talk_path.stem
+            page_name = stem[: -len(".talk")] if stem.endswith(".talk") else stem
+            live_page_names.add(page_name)
+
             talk = TalkPage(talk_path)
             entries = talk.load()
             if not entries:
                 continue
             open_entries = compute_open_set(entries)
 
-            # Page slug derives from the talk file's stem
-            stem = talk_path.stem
-            page_name = stem[: -len(".talk")] if stem.endswith(".talk") else stem
             current_max_index = max(e.index for e in entries)
 
             existing = store.get(page_name)
@@ -221,7 +226,12 @@ class LibrarianAgent:
             )
             refreshed += 1
 
-        if refreshed > 0:
+        # Prune entries for talk files that no longer exist on disk.
+        # Mirrors the `overrides.prune(set(entries))` discipline applied to
+        # ManifestOverrides above. Save when either pruning or refreshing
+        # produced a change.
+        pruned = store.prune(live_page_names)
+        if refreshed > 0 or pruned > 0:
             store.save()
         return refreshed
 
