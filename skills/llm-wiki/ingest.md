@@ -105,6 +105,8 @@ The briefing is the value. Page creation is optional and user-directed.
 
 Claim-by-claim iterative analysis. The compounding is a byproduct; the research is the point.
 
+**Persistent cursor:** Mode 3 creates a plan file in `inbox/` at the vault root. This file is the full context for the ingest — claim list, decisions, session notes. It persists across sessions and is committed to git at each checkpoint. `wiki_lint` surfaces any `inbox/` plan with `status: in-progress` so active ingests are never silently forgotten.
+
 ### Setup
 
 1. Confirm source is in `raw/`
@@ -181,21 +183,3 @@ Situate claims, don't extract them. For each concept, how does it connect to wha
 
 **Scope:** if 10+ pages estimated, flag before committing — large ingests benefit from Deep mode so synthesis doesn't get buried in bulk creation.
 
----
-
-## Reading Status Protocol
-
-Call `wiki_source_mark` to track your engagement with a source. The daemon
-commits the change to git with a `Source-Status:` trailer for audit. You
-never edit frontmatter manually.
-
-| Moment | Call |
-|---|---|
-| Brief mode — start reading | `wiki_source_mark(source_path, "in_progress", author)` |
-| Brief mode — done, no deep session planned | `wiki_source_mark(source_path, "read", author)` |
-| Deep mode — session start | `wiki_source_mark(source_path, "in_progress", author)` |
-| Deep mode — plan file complete | `wiki_source_mark(source_path, "read", author)` |
-| Autonomous ingest | Do not call `wiki_source_mark` — autonomous ingest sets `unread` only |
-
-`source_path` is the path to either the binary source (`raw/foo.pdf`) or
-its companion (`raw/foo.md`) — both are accepted by the daemon.

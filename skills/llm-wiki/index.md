@@ -25,6 +25,8 @@ These apply to every operation.
 
 **Sessions are work units.** All writes in a coherent task share one session. Sessions open implicitly on the first write call — no explicit open needed. Close explicitly with `wiki_session_close` — don't rely on inactivity timeout. Watch for `session-cap-approaching` (emitted at write 18; hard cap at 30) — wrap up the current work unit or plan to continue in a new session.
 
+**`inbox/` is the multi-session cursor.** Deep ingests (`llm-wiki/ingest` Mode 3) create a plan file in `inbox/` before any wiki write. The plan file carries the claim list, decisions, and session notes — it's the full context needed to resume across sessions without relying on conversation memory. `wiki_lint` surfaces any in-progress plan so nothing gets abandoned silently.
+
 **Inline maintenance signals are load-bearing.** `wiki_read` folds in issue/talk digests. Critical and moderate signals are findings. Writing over a page with open critical issues makes the wiki worse.
 
 **Wiki before training data.** When the wiki covers a topic, derive from compiled wiki knowledge first — not from training data alone. `wiki_query` or manual traversal before you answer or write. This keeps the knowledge graph self-reinforcing.
@@ -43,6 +45,6 @@ Three options — surface the choice to the user before starting any research:
 
 - Research something → `llm-wiki/research`
 - Add or update knowledge → `llm-wiki/write`
-- Incorporate an external source (paper, document) → `llm-wiki/ingest` (queue / brief / deep)
+- Incorporate an external source (paper, document) → `llm-wiki/ingest` (queue / brief / deep — deep creates a persistent `inbox/` plan file)
 - Hygiene pass → `llm-wiki/maintain`
 - Autonomous/cron use → `llm-wiki/autonomous/<subskill>`
