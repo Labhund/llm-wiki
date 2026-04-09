@@ -79,7 +79,10 @@ Opens file, reads until closing `---`, parses YAML. Returns `{}` if no frontmatt
 Reads frontmatter, merges `updates` into it, reconstructs the file with updated frontmatter block. Body is preserved byte-for-byte.
 
 **`init_companion(source_path: Path, vault_root: Path, source_type: str) -> Path | None`**
-For binary sources under `vault_root/raw/`: creates `{stem}.md` alongside the binary with `reading_status: unread`, `ingested: today`, `source_type`. Creates frontmatter-only (no body). Returns the companion path, or `None` if source is not under `raw/`. No-op if companion already exists (idempotent). Purely sync — no extraction.
+For binary sources under `vault_root/raw/`: creates `{stem}.md` alongside the binary with `reading_status: unread`, `ingested: today`, `source_type`. Creates frontmatter-only (no body). Returns `None` on all no-op paths: source not under `raw/`, or companion already exists. Returns the new companion `Path` only when a companion was freshly created. Callers guard body-write with `if companion:` — this correctly skips the write on idempotent re-runs. Purely sync — no extraction.
+
+**`write_companion_body(path: Path, text: str) -> None`**
+Appends extracted text as body after the closing `---` of an existing frontmatter-only companion file. Called by `IngestAgent` immediately after extraction, only when `init_companion` returned a path (i.e. the companion was just created). Not a general-purpose append — assumes the file currently ends at the closing `---`.
 
 ### 3. `ingest/agent.py`
 
@@ -87,12 +90,19 @@ At the start of `IngestAgent.ingest()`, before any LLM call:
 
 ```python
 if source_path.is_relative_to(vault_root / "raw"):
-    companion = init_companion(source_path, vault_root, source_type="paper")
+    companion = init_companion(source_path, vault_root, source_type=source_type)  # passed from caller
 ```
 
-`source_type` defaults to `"paper"`; the `wiki_ingest` MCP tool exposes it as an optional parameter for callers who know better.
+`source_type` is threaded from the `wiki_ingest` MCP tool arg (optional, defaults to `"paper"`) through `_handle_ingest` into `IngestAgent.ingest()` into `init_companion`.
 
-After extraction completes (the existing `extract_text()` call), `IngestAgent` writes the extracted text as the companion body if a companion was created. This keeps `source_meta.py` sync and extraction in `IngestAgent` where it already lives.
+After extraction completes (the existing `extract_text()` call), `IngestAgent` writes the extracted text as the companion body:
+
+```python
+if companion:  # None means not newly created — skip body write on re-ingest
+    write_companion_body(companion, extraction.content)
+```
+
+This keeps `source_meta.py` sync and extraction in `IngestAgent` where it already lives.
 
 If source is not under `raw/`, ingest proceeds unchanged (backwards compat).
 
@@ -107,9 +117,13 @@ Walks `raw/` and raises four issue types:
 | `bare-source` | File with extension in `_SUPPORTED_BINARY` (`.pdf`, `.docx`, `.png`, `.jpg`, `.jpeg`, `.gif`, `.bmp`, `.tiff`) in `raw/` with no companion `.md` | `minor` |
 | `missing-reading-status` | `.md` in `raw/` with no `reading_status` in frontmatter | `minor` |
 | `unread-source` | `reading_status: unread` and `ingested` > N days ago (config: `audit.unread_source_days`, default 30) | `minor` |
-| `in-progress-no-plan` | `reading_status: in_progress` and no plan file in `inbox/` whose `source:` frontmatter matches | `moderate` |
+| `in-progress-no-plan` | `reading_status: in_progress` and no plan file in `inbox/` whose `source:` frontmatter matches (see match contract below) | `moderate` |
 
 The `in-progress-no-plan` check skips gracefully if `inbox/` does not exist (the `inbox/` convention is a separate PR).
+
+**Match contract for `in-progress-no-plan`:** the check normalises the source file path to its vault-relative form `raw/<filename>` (e.g. `raw/2026-04-09-foo.pdf`) and compares it against the `source:` field in each inbox plan file's frontmatter. The plan file must use the same canonical form. Bare filenames (`2026-04-09-foo.pdf`) and absolute paths are not accepted as matches — the skill documents the canonical form and the daemon enforces it in `wiki_source_mark`.
+
+**Out of scope — orphaned companions:** if a binary source is deleted but its companion `.md` remains, the companion will not trigger `bare-source` (it's a `.md`). It will instead surface as `missing-reading-status` or `unread-source`, which is acceptable noise. A dedicated `orphaned-companion` check is deferred until the `inbox/` PR is merged and the full source lifecycle is in place.
 
 ### 5. `audit/auditor.py`
 
@@ -142,8 +156,10 @@ When sampling claims for verification, apply a weight multiplier to claims sourc
 **Source arrives via `wiki_ingest`:**
 ```
 wiki_ingest(raw/foo.pdf, author)
-  → init_companion() → raw/foo.md created (reading_status: unread)
-  → extract, identify concepts, write wiki pages
+  → init_companion() → raw/foo.md created (frontmatter only, reading_status: unread)
+  → extract_text(raw/foo.pdf) → extracted text
+  → write_companion_body(raw/foo.md, extracted text)  ← body written after extraction
+  → LLM identifies concepts, writes wiki pages
   → vault rescan
 ```
 
@@ -201,7 +217,7 @@ All errors are deterministic:
 | File | Change |
 |---|---|
 | `src/llm_wiki/vault.py` | Scope rglob to `wiki_dir` |
-| `src/llm_wiki/ingest/source_meta.py` | **New** — frontmatter helpers + `init_companion` |
+| `src/llm_wiki/ingest/source_meta.py` | **New** — frontmatter helpers + `init_companion` + `write_companion_body` |
 | `src/llm_wiki/ingest/agent.py` | Call `init_companion` at ingest start |
 | `src/llm_wiki/audit/checks.py` | Add `find_source_gaps` |
 | `src/llm_wiki/audit/auditor.py` | Add `config` param, call `find_source_gaps` |
