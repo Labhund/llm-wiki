@@ -296,3 +296,177 @@ async def test_quality_signal_skipped_on_failed_extraction(tmp_path: Path):
 
     assert not result.success
     assert result.quality_warning is None
+
+
+# ---------------------------------------------------------------------------
+# local-ocr extractor
+# ---------------------------------------------------------------------------
+
+@pytest.mark.asyncio
+async def test_extract_pdf_local_ocr_success(tmp_path: Path):
+    """local-ocr path calls _render_pdf_pages_to_base64 and _call_vision_api."""
+    pdf = tmp_path / "paper.pdf"
+    pdf.write_bytes(b"fake pdf")
+
+    with patch("llm_wiki.ingest.extractor._render_pdf_pages_to_base64", return_value=["base64img"]) as mock_render, \
+         patch("llm_wiki.ingest.extractor._call_vision_api", return_value="# Extracted\n\nContent.") as mock_api:
+        config = IngestConfig(
+            pdf_extractor="local-ocr",
+            local_ocr_endpoint="http://localhost:8006/v1",
+            local_ocr_model="qianfan-ocr",
+        )
+        result = await extract_text(pdf, ingest_config=config)
+
+    assert result.success
+    assert result.content == "# Extracted\n\nContent."
+    assert result.extraction_method == "pdf"
+    mock_render.assert_called_once_with(pdf)
+    mock_api.assert_called_once_with("http://localhost:8006/v1", "qianfan-ocr", ["base64img"])
+
+
+@pytest.mark.asyncio
+async def test_extract_pdf_local_ocr_render_failure(tmp_path: Path):
+    """pdftoppm failure returns a failed ExtractionResult."""
+    pdf = tmp_path / "paper.pdf"
+    pdf.write_bytes(b"fake pdf")
+
+    with patch("llm_wiki.ingest.extractor._render_pdf_pages_to_base64", side_effect=RuntimeError("pdftoppm not found")):
+        config = IngestConfig(pdf_extractor="local-ocr")
+        result = await extract_text(pdf, ingest_config=config)
+
+    assert not result.success
+    assert "pdftoppm" in result.error
+
+
+@pytest.mark.asyncio
+async def test_extract_pdf_local_ocr_api_failure(tmp_path: Path):
+    """Vision API failure returns a failed ExtractionResult."""
+    pdf = tmp_path / "paper.pdf"
+    pdf.write_bytes(b"fake pdf")
+
+    with patch("llm_wiki.ingest.extractor._render_pdf_pages_to_base64", return_value=["img"]), \
+         patch("llm_wiki.ingest.extractor._call_vision_api", side_effect=Exception("connection refused")):
+        config = IngestConfig(pdf_extractor="local-ocr")
+        result = await extract_text(pdf, ingest_config=config)
+
+    assert not result.success
+    assert "Vision API" in result.error
+
+
+# ---------------------------------------------------------------------------
+# marker extractor
+# ---------------------------------------------------------------------------
+
+@pytest.mark.asyncio
+async def test_extract_pdf_marker_success(tmp_path: Path):
+    """marker_single subprocess produces output and extraction succeeds."""
+    pdf = tmp_path / "paper.pdf"
+    pdf.write_bytes(b"fake pdf")
+
+    async def _fake_marker(cmd, *args, **kwargs):
+        # asyncio.create_subprocess_exec receives args as positional params
+        full_cmd = (cmd,) + args
+        output_dir = full_cmd[full_cmd.index("--output-dir") + 1]
+        stem = Path(full_cmd[1]).stem
+        out_dir = Path(output_dir) / stem
+        out_dir.mkdir(parents=True)
+        (out_dir / f"{stem}.md").write_text("# Paper\n\nContent from marker.\n")
+        mock = AsyncMock()
+        mock.returncode = 0
+        mock.communicate = AsyncMock(return_value=(b"", b""))
+        return mock
+
+    with patch("asyncio.create_subprocess_exec", side_effect=_fake_marker):
+        config = IngestConfig(pdf_extractor="marker")
+        result = await extract_text(pdf, ingest_config=config)
+
+    assert result.success
+    assert "Content from marker." in result.content
+
+
+@pytest.mark.asyncio
+async def test_extract_pdf_marker_failure(tmp_path: Path):
+    """marker_single non-zero exit returns a failed ExtractionResult."""
+    pdf = tmp_path / "paper.pdf"
+    pdf.write_bytes(b"fake pdf")
+
+    mock_proc = AsyncMock()
+    mock_proc.returncode = 1
+    mock_proc.communicate = AsyncMock(return_value=(b"", b"marker: error processing file"))
+
+    with patch("asyncio.create_subprocess_exec", return_value=mock_proc):
+        config = IngestConfig(pdf_extractor="marker")
+        result = await extract_text(pdf, ingest_config=config)
+
+    assert not result.success
+    assert "marker" in result.error
+
+
+# ---------------------------------------------------------------------------
+# nougat extractor
+# ---------------------------------------------------------------------------
+
+@pytest.mark.asyncio
+async def test_extract_pdf_nougat_success(tmp_path: Path):
+    """nougat subprocess produces .mmd output and extraction succeeds."""
+    pdf = tmp_path / "paper.pdf"
+    pdf.write_bytes(b"fake pdf")
+
+    async def _fake_nougat(cmd, *args, **kwargs):
+        # asyncio.create_subprocess_exec receives args as positional params
+        full_cmd = (cmd,) + args
+        output_dir = full_cmd[full_cmd.index("-o") + 1]
+        stem = Path(full_cmd[1]).stem
+        (Path(output_dir) / f"{stem}.mmd").write_text("# Nougat output\n\nEquations here.\n")
+        mock = AsyncMock()
+        mock.returncode = 0
+        mock.communicate = AsyncMock(return_value=(b"", b""))
+        return mock
+
+    with patch("asyncio.create_subprocess_exec", side_effect=_fake_nougat):
+        config = IngestConfig(pdf_extractor="nougat")
+        result = await extract_text(pdf, ingest_config=config)
+
+    assert result.success
+    assert "Nougat output" in result.content
+
+
+@pytest.mark.asyncio
+async def test_extract_pdf_nougat_failure(tmp_path: Path):
+    """nougat non-zero exit returns a failed ExtractionResult."""
+    pdf = tmp_path / "paper.pdf"
+    pdf.write_bytes(b"fake pdf")
+
+    mock_proc = AsyncMock()
+    mock_proc.returncode = 1
+    mock_proc.communicate = AsyncMock(return_value=(b"", b"nougat: CUDA not available"))
+
+    with patch("asyncio.create_subprocess_exec", return_value=mock_proc):
+        config = IngestConfig(pdf_extractor="nougat")
+        result = await extract_text(pdf, ingest_config=config)
+
+    assert not result.success
+    assert "nougat" in result.error
+
+
+# ---------------------------------------------------------------------------
+# unknown extractor falls back to pdftotext
+# ---------------------------------------------------------------------------
+
+@pytest.mark.asyncio
+async def test_extract_pdf_unknown_extractor_falls_back_to_pdftotext(tmp_path: Path):
+    """An unrecognised pdf_extractor value falls back to pdftotext."""
+    pdf = tmp_path / "paper.pdf"
+    pdf.write_bytes(b"fake pdf")
+
+    mock_proc = AsyncMock()
+    mock_proc.returncode = 0
+    mock_proc.communicate = AsyncMock(return_value=(b"fallback text", b""))
+
+    with patch("asyncio.create_subprocess_exec", return_value=mock_proc) as mock_exec:
+        config = IngestConfig(pdf_extractor="unknown-tool")
+        result = await extract_text(pdf, ingest_config=config)
+
+    assert result.success
+    args = mock_exec.call_args[0]
+    assert args[0] == "pdftotext"
