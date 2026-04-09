@@ -163,6 +163,60 @@ async def test_scheduler_isolates_worker_errors():
 
 
 @pytest.mark.asyncio
+async def test_scheduler_tracks_last_attempt_on_failure():
+    """last_attempt is set even when the worker fails; last_run is not."""
+    async def failing():
+        raise RuntimeError("oops")
+
+    scheduler = IntervalScheduler()
+    scheduler.register(ScheduledWorker("fail", 100.0, failing))
+    await scheduler.start()
+    await asyncio.sleep(0.05)
+    await scheduler.stop()
+
+    assert scheduler.last_attempt_iso("fail") is not None
+    assert scheduler.last_run_iso("fail") is None  # never succeeded
+
+
+@pytest.mark.asyncio
+async def test_scheduler_increments_consecutive_failures():
+    """consecutive_failures increments on each failed run."""
+    call_count = {"n": 0}
+
+    async def failing():
+        call_count["n"] += 1
+        raise RuntimeError("oops")
+
+    scheduler = IntervalScheduler()
+    scheduler.register(ScheduledWorker("fail", 0.05, failing))
+    await scheduler.start()
+    await asyncio.sleep(0.2)
+    await scheduler.stop()
+
+    assert scheduler.consecutive_failures("fail") >= 2
+
+
+@pytest.mark.asyncio
+async def test_scheduler_resets_consecutive_failures_on_success():
+    """consecutive_failures resets to 0 after a successful run."""
+    fail_until = {"n": 2}
+
+    async def sometimes_fails():
+        if fail_until["n"] > 0:
+            fail_until["n"] -= 1
+            raise RuntimeError("not yet")
+
+    scheduler = IntervalScheduler()
+    scheduler.register(ScheduledWorker("maybe", 0.05, sometimes_fails))
+    await scheduler.start()
+    await asyncio.sleep(0.4)
+    await scheduler.stop()
+
+    assert scheduler.consecutive_failures("maybe") == 0
+    assert scheduler.last_run_iso("maybe") is not None
+
+
+@pytest.mark.asyncio
 async def test_scheduler_register_duplicate_name_raises():
     scheduler = IntervalScheduler()
     async def noop() -> None:

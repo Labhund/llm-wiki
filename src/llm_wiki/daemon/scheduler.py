@@ -55,6 +55,8 @@ class IntervalScheduler:
         self._workers: list[ScheduledWorker] = []
         self._tasks: dict[str, asyncio.Task] = {}
         self._last_run: dict[str, str] = {}
+        self._last_attempt: dict[str, str] = {}
+        self._consecutive_failures: dict[str, int] = {}
         self._stopping = False
 
     def register(self, worker: ScheduledWorker) -> None:
@@ -68,6 +70,12 @@ class IntervalScheduler:
 
     def last_run_iso(self, name: str) -> str | None:
         return self._last_run.get(name)
+
+    def last_attempt_iso(self, name: str) -> str | None:
+        return self._last_attempt.get(name)
+
+    def consecutive_failures(self, name: str) -> int:
+        return self._consecutive_failures.get(name, 0)
 
     def workers_info(self) -> list[tuple[str, float, str | None]]:
         """Return (name, interval_seconds, last_run_iso) tuples for every registered worker.
@@ -113,12 +121,18 @@ class IntervalScheduler:
             return
 
     async def _run_once(self, worker: ScheduledWorker) -> None:
+        now = datetime.datetime.now(datetime.timezone.utc).isoformat()
+        self._last_attempt[worker.name] = now
         try:
             await worker.coro_factory()
-            self._last_run[worker.name] = datetime.datetime.now(
-                datetime.timezone.utc
-            ).isoformat()
+            self._last_run[worker.name] = now
+            self._consecutive_failures[worker.name] = 0
         except asyncio.CancelledError:
             raise
         except Exception:
-            logger.exception("Worker %r raised; will retry on next interval", worker.name)
+            failures = self._consecutive_failures.get(worker.name, 0) + 1
+            self._consecutive_failures[worker.name] = failures
+            logger.exception(
+                "Worker %r raised (consecutive_failures=%d); will retry on next interval",
+                worker.name, failures,
+            )
