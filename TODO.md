@@ -243,6 +243,150 @@ note: "New source may corroborate/extend/contradict this claim. Review recommend
 
 ---
 
+## LLM-Facing Interface Optimisation — Information Density Pass
+
+**Origin:** Building `docs/gallery.md` (2026-04-09) revealed a concrete mismatch between the designed interface and how an LLM actually consumes it. The human mental model — pretty-printed JSON, verbose key names, whitespace-aided navigation — is actively wasteful for LLM consumers. This section captures the work needed to fix that across all three layers: serialisation, response schema design, and tool description / skill quality.
+
+**Core insight:** LLMs process all tokens in parallel via attention. They don't scan sequentially. Indentation and whitespace that help a human navigate a JSON blob do nothing for the LLM — they are pure token overhead. Research backing: "Lost in the Middle" (Liu et al. 2023) shows positional effects in long contexts; compact token sequences keep related fields closer in the attention field. The consistent finding from serialisation format comparisons is that whitespace adds tokens, not comprehension. The human gets content unrolled and re-expressed by the LLM in readable form — the LLM should receive the raw content in dense form.
+
+**Heterogeneity caveat:** Mixed registers in the same context window (compact JSON tool results + prose conversation + markdown wiki content) create format-switching overhead. The mitigation is consistency: if tool results are compact JSON, *all* tool results should be, establishing a stable agent expectation. Inconsistent formatting is worse than either choice made uniformly.
+
+**Three layers, increasing effort:**
+
+---
+
+### L1. Compact Serialisation (One Line, Immediate Win)
+
+**What:** Replace `json.dumps(indent=2)` with `json.dumps(separators=(',',':'))` in the `_ok()` helper that wraps all MCP tool responses.
+
+**Where:** `src/llm_wiki/mcp/tools.py:50`
+
+**Current:**
+```python
+return [TextContent(type="text", text=json.dumps(response, indent=2))]
+```
+**After:**
+```python
+return [TextContent(type="text", text=json.dumps(response, separators=(",", ":")))]
+```
+
+**Impact:** Applies to all 17 tools in one change. Removes all indentation whitespace from every tool response. No schema changes, no behaviour changes, no skill updates needed — compact JSON parses identically to pretty-printed JSON and the LLM reads it without assistance.
+
+**Validation:** Log response sizes for a representative session before and after. Compute average token reduction. Expect 20–35% reduction on deeply nested responses (issues/talk digests).
+
+---
+
+### L2. Response Schema Design — Key Names and Field Audit
+
+**What:** Audit all 17 tool response schemas for token efficiency. Two categories of fields require different treatment:
+
+**Programmatically-read fields** — the agent extracts a value and acts on it; the key name never appears in agent reasoning or output. These can use short keys at zero comprehension cost.
+
+**Reasoning-read fields** — the agent includes the value in its output or reasoning chain. Short keys here push ambiguity downstream. These stay verbose.
+
+**Fields to shorten (programmatically read, agent never surfaces these in prose):**
+
+`wiki_read` response:
+```
+issues.open_count    → issues.n
+issues.by_severity   → issues.sev
+talk.entry_count     → talk.cnt
+talk.open_count      → talk.open
+talk.by_severity     → talk.sev
+talk.recent_critical → talk.crit
+talk.recent_moderate → talk.mod
+```
+
+**Fields to keep verbose (agent reasons about or surfaces these):**
+- `summary`, `body`, `title`, `message` — always stay readable
+- `content` in `wiki_read` — the page text itself, never shorten
+- `manifest` in `wiki_search` results — agent uses this for routing decisions
+
+**Fields that warrant a harder look before deciding:**
+- `wiki_search` `matches` array structure — the before/match/after format is verbose but the LLM uses it for relevance judgement; test whether a simpler format degrades routing accuracy
+- `wiki_manifest` envelope — already returns plain text in `content`; the JSON wrapper is minimal
+
+**What needs to change:**
+1. Identify where response dicts are constructed in `src/llm_wiki/daemon/server.py` and update field names there
+2. Check `translate_daemon_response()` in `tools.py` — if it remaps field names, update there too
+3. Update all 17 tool descriptions to reference new field names where field names appear in descriptions
+4. Audit skill files for references to specific field names — update to match
+5. Update `docs/gallery.md` examples to reflect new compact field names
+
+---
+
+### L3. Tool Descriptions and Navigation Clarity
+
+**What:** Tool descriptions in `tools.py` are what an agent sees without skill files loaded. They must stand alone — skill files are prompt engineering on top, not a substitute for good tool descriptions. A cold agent (no skills) should make correct tool selection from descriptions alone.
+
+**Gaps to close:**
+
+**1. Three-tool disambiguation: `wiki_manifest` / `wiki_search` / `wiki_query`**
+
+These are the most likely to be misused. The tradeoff is not obvious:
+- `wiki_manifest` — orient when you don't know where to look yet; zero reading cost
+- `wiki_search` — know a term, want to find which pages cover it
+- `wiki_query` — have a specific question, want a synthesised answer at near-zero context cost (daemon traverses internally)
+
+The current descriptions don't make these tradeoffs explicit. An agent that uses `wiki_query` for everything never builds its own context; an agent that uses `wiki_search` for everything misses compiled synthesis. Both are wrong patterns that the tool descriptions should prevent.
+
+**2. `wiki_read` viewport discipline**
+
+The viewport parameter (`top` / `section` / `grep` / `full`) is the most important behavioural constraint in the system. The principle "never call `full` without trying `top` first" exists in the skill but not in the tool description. An agent without skills will call `full` freely. Fix: add explicit guidance to the `wiki_read` description — default to `top`, use `full` only as last resort, explain why (token budget).
+
+**3. Session management**
+
+`wiki_session_close` is the most commonly dropped step. The description should make explicit: all write tools auto-open a session on first call; not closing means relying on inactivity timeout (5 min), which may not fire in short fast sessions. Consider adding a session-open reminder to each write tool description: "Opens a session on first call if none is active; close explicitly with `wiki_session_close` when done."
+
+**4. `wiki_update` patch conflict protocol**
+
+A `patch-conflict` response requires the agent to re-read the page and retry — never rewrite the whole page from scratch. This is a critical behavioural contract that needs to be in the tool description, not only the skill. An agent without the skill will default to full-page rewrite on conflict, which is destructive.
+
+**What needs to change:**
+1. Rewrite `wiki_manifest`, `wiki_search`, `wiki_query` descriptions to include explicit disambiguation language
+2. Add viewport discipline to `wiki_read` description (default top, `full` is last resort)
+3. Add session reminder to all three write tool descriptions (`wiki_create`, `wiki_update`, `wiki_append`)
+4. Add patch-conflict re-read protocol to `wiki_update` description
+
+---
+
+### L4. Skill Files — Prompt Engineering Audit
+
+**What:** The skill files are the highest-leverage prompt engineering layer but also token-heavy. Two goals: tighten information density, and verify the behavioural contracts they establish still match what the tools actually do.
+
+**Cross-check field names against daemon output.** The gallery revealed a gap between what we *think* the agent receives and what it actually receives. Field names referenced in skill files must match the actual daemon response schema. After L2 (schema rename), this audit is mandatory — skill files that reference old field names will silently fail.
+
+**Viewport-first language.** "Never call `full` without trying `top` first" must survive context compaction — it needs to be expressed sharply enough that it doesn't collapse into a vague caution. Current phrasing in `index.md` is a principle; `research.md` and `write.md` should repeat it as an operational rule at the point of use.
+
+**Session-close ritual.** `wiki_session_close` reminder is present in `index.md` but needs to be echoed at the end of every skill that involves writes — `write.md`, `ingest.md`, `maintain.md`. A principle stated once in an index file doesn't survive multi-hop skill loading.
+
+**Traversal depth.** `research.md` says "one search → done is wrong" but doesn't anchor this. Add: a minimum of 3 hops (manifest → search → at least one read → follow at least one wikilink) before synthesis is reasonable for non-trivial questions. Makes the guidance testable.
+
+**Autonomous skill files.** These run without user feedback — the contracts they establish need to be sharper than attended equivalents. Review `autonomous/ingest.md` and `autonomous/write.md` against actual tool descriptions and daemon behaviour. Any divergence is a silent failure.
+
+**What needs to change:**
+1. After L2, grep all skill files for old field names and update
+2. Add viewport-first as an operational rule (not just a principle) in `research.md` and `write.md`
+3. Add session-close reminder at the end of every skill that involves writes
+4. Add traversal hop-count guidance to `research.md`
+5. Audit autonomous skill files line-by-line against tool descriptions
+
+---
+
+### Validation Approach
+
+This pass is hard to validate without empirical feedback. Suggested gates:
+
+**L1** — Token count before/after across a representative session. Measure average response size. Expect 20–35% reduction on nested responses. This is the only layer with a mechanical success condition.
+
+**L3** — Cold agent test: load the MCP tools with no skill files, ask a research question, observe whether the agent makes correct tool selections. If it calls `wiki_full` immediately or skips `wiki_manifest`, the tool descriptions are still failing.
+
+**L4** — Same cold agent test post-skill-load. Compare behaviour. The delta between cold and skilled agent reveals what the skills are contributing vs what the tool descriptions carry alone.
+
+**Gallery as ground truth** — `docs/gallery.md` is the living reference for what agent-facing content looks like. After each layer, update the gallery examples to match. If the gallery diverges from what the daemon actually sends, that divergence is the bug.
+
+---
+
 ## Future Ideas
 
 - **Vault → Managed migration tool**: Pre-packaged workflow that lets 4-8 local LLMs loose on an unstructured Obsidian vault over days/weeks to reorganize it into managed structure (raw sources separated, index built, cross-references added, provenance established). Automated "get it ship shape" pipeline.
