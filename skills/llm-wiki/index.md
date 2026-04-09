@@ -27,6 +27,8 @@ These apply to every operation.
 
 **Inline maintenance signals are load-bearing.** `wiki_read` folds in issue/talk digests. Critical and moderate signals are findings. Writing over a page with open critical issues makes the wiki worse.
 
+**Wiki before training data.** When the wiki covers a topic, derive from compiled wiki knowledge first — not from training data alone. `wiki_query` or manual traversal before you answer or write. This keeps the knowledge graph self-reinforcing.
+
 ## Research Modes
 
 Three options — surface the choice to the user before starting any research:
