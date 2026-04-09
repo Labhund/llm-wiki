@@ -133,3 +133,86 @@ def test_parse_patch_bare_at_at_header():
     )
     patch = parse_patch(text)
     assert patch.hunks[0].context_hint == ""
+
+
+MULTI_HUNK_PATCH = """\
+*** Begin Patch
+*** Update File: wiki/foo.md
+@@ ## Section A @@
+ first context
+-old text
++new text
+@@ ## Section B @@
+ second context
++entirely new line
+ trailing context
+*** End Patch
+"""
+
+
+def test_parse_patch_multi_hunk():
+    from llm_wiki.daemon.v4a_patch import parse_patch
+    patch = parse_patch(MULTI_HUNK_PATCH)
+    assert len(patch.hunks) == 2
+    assert patch.hunks[0].context_hint == "## Section A"
+    assert patch.hunks[1].context_hint == "## Section B"
+    # Hunk A: 1 context + 1 remove + 1 add
+    assert sum(1 for l in patch.hunks[0].lines if l.kind == "context") == 1
+    assert sum(1 for l in patch.hunks[0].lines if l.kind == "remove") == 1
+    assert sum(1 for l in patch.hunks[0].lines if l.kind == "add") == 1
+    # Hunk B: 2 context + 0 remove + 1 add (addition-only-ish)
+    assert sum(1 for l in patch.hunks[1].lines if l.kind == "context") == 2
+    assert sum(1 for l in patch.hunks[1].lines if l.kind == "remove") == 0
+    assert sum(1 for l in patch.hunks[1].lines if l.kind == "add") == 1
+
+
+ADDITION_ONLY_PATCH = """\
+*** Begin Patch
+*** Update File: wiki/foo.md
+@@ ## End @@
+ last existing line
++brand new line one
++brand new line two
+*** End Patch
+"""
+
+
+def test_parse_patch_addition_only_hunk():
+    """A hunk with only context + add lines (no removes) is valid."""
+    from llm_wiki.daemon.v4a_patch import parse_patch
+    patch = parse_patch(ADDITION_ONLY_PATCH)
+    assert len(patch.hunks) == 1
+    lines = patch.hunks[0].lines
+    assert lines[0].kind == "context"
+    assert lines[1].kind == "add"
+    assert lines[2].kind == "add"
+    assert sum(1 for l in lines if l.kind == "remove") == 0
+
+
+def test_parse_patch_blank_context_line_inside_hunk():
+    """A blank line in the middle of a hunk is treated as an empty context line.
+
+    Also: parser tolerates one optional leading space after `+` or `-`, so
+    LLM-generated patches that write `+ added` (with separator space) parse
+    the same as `+added` (no space). The cost is that a literal added line
+    starting with a space loses one space — acceptable for a wiki where
+    that pattern is extremely rare.
+    """
+    from llm_wiki.daemon.v4a_patch import parse_patch
+    text = (
+        "*** Begin Patch\n"
+        "*** Update File: wiki/foo.md\n"
+        "@@ @@\n"
+        " before\n"
+        "\n"
+        "+ added\n"
+        " after\n"
+        "*** End Patch\n"
+    )
+    patch = parse_patch(text)
+    assert len(patch.hunks) == 1
+    lines = patch.hunks[0].lines
+    assert lines[0].text == "before"
+    assert lines[1].kind == "context" and lines[1].text == ""
+    assert lines[2].kind == "add" and lines[2].text == "added"
+    assert lines[3].text == "after"

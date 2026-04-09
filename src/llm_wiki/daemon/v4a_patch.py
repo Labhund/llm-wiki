@@ -173,8 +173,17 @@ def parse_patch(text: str) -> Patch:
         if prefix == " ":
             current_hunk.lines.append(HunkLine(kind="context", text=rest))
         elif prefix == "+":
+            # Tolerate one optional separator space after '+' so that
+            # LLM-generated patches writing "+ added" parse the same as
+            # "+added". Symmetric for '-'. The cost is a literal added
+            # line beginning with a space loses one space — acceptable
+            # for a wiki where indented body lines are rare.
+            if rest.startswith(" "):
+                rest = rest[1:]
             current_hunk.lines.append(HunkLine(kind="add", text=rest))
         elif prefix == "-":
+            if rest.startswith(" "):
+                rest = rest[1:]
             current_hunk.lines.append(HunkLine(kind="remove", text=rest))
         else:
             raise PatchParseError(
