@@ -375,12 +375,12 @@ async def test_read_includes_empty_issues_and_talk_blocks(phase6a_daemon_server)
     assert resp["status"] == "ok"
     assert "issues" in resp
     assert "talk" in resp
-    assert resp["issues"]["open_count"] == 0
+    assert resp["issues"]["n"] == 0
     assert resp["issues"]["items"] == []
-    assert resp["talk"]["entry_count"] == 0
-    assert resp["talk"]["open_count"] == 0
-    assert resp["talk"]["recent_critical"] == []
-    assert resp["talk"]["recent_moderate"] == []
+    assert resp["talk"]["cnt"] == 0
+    assert resp["talk"]["open"] == 0
+    assert resp["talk"]["crit"] == []
+    assert resp["talk"]["mod"] == []
 
 
 @pytest.mark.asyncio
@@ -406,14 +406,14 @@ async def test_read_includes_open_issues(phase6a_daemon_server, sample_vault):
         "type": "read", "page_name": "srna-embeddings", "viewport": "top",
     })
     assert resp["status"] == "ok"
-    assert resp["issues"]["open_count"] == 1
-    assert resp["issues"]["by_severity"]["moderate"] == 1
+    assert resp["issues"]["n"] == 1
+    assert resp["issues"]["sev"]["moderate"] == 1
     assert resp["issues"]["items"][0]["title"] == "Fake broken link"
 
 
 @pytest.mark.asyncio
 async def test_read_inlines_critical_talk_entries(phase6a_daemon_server, sample_vault):
-    """Critical and moderate talk entries appear verbatim in `recent_*`."""
+    """Critical and moderate talk entries appear verbatim in `crit`/`mod`."""
     from llm_wiki.talk.page import TalkEntry, TalkPage
 
     server, sock_path = phase6a_daemon_server
@@ -436,17 +436,17 @@ async def test_read_inlines_critical_talk_entries(phase6a_daemon_server, sample_
         "type": "read", "page_name": "srna-embeddings", "viewport": "top",
     })
     assert resp["status"] == "ok"
-    assert resp["talk"]["entry_count"] == 3
-    assert resp["talk"]["open_count"] == 3
-    assert len(resp["talk"]["recent_critical"]) == 1
-    assert resp["talk"]["recent_critical"][0]["body"] == "A critical contradiction."
-    assert len(resp["talk"]["recent_moderate"]) == 1
-    assert resp["talk"]["recent_moderate"][0]["body"] == "A moderate concern."
+    assert resp["talk"]["cnt"] == 3
+    assert resp["talk"]["open"] == 3
+    assert len(resp["talk"]["crit"]) == 1
+    assert resp["talk"]["crit"][0]["body"] == "A critical contradiction."
+    assert len(resp["talk"]["mod"]) == 1
+    assert resp["talk"]["mod"][0]["body"] == "A moderate concern."
 
 
 @pytest.mark.asyncio
 async def test_read_excludes_resolved_talk_entries_from_counts(phase6a_daemon_server, sample_vault):
-    """Resolved entries don't count toward open_count or by_severity."""
+    """Resolved entries don't count toward open or sev."""
     from llm_wiki.talk.page import TalkEntry, TalkPage
 
     server, sock_path = phase6a_daemon_server
@@ -459,9 +459,9 @@ async def test_read_excludes_resolved_talk_entries_from_counts(phase6a_daemon_se
         "type": "read", "page_name": "srna-embeddings", "viewport": "top",
     })
     assert resp["status"] == "ok"
-    assert resp["talk"]["entry_count"] == 2
-    assert resp["talk"]["open_count"] == 1
-    assert resp["talk"]["recent_critical"] == []
+    assert resp["talk"]["cnt"] == 2
+    assert resp["talk"]["open"] == 1
+    assert resp["talk"]["crit"] == []
 
 
 @pytest.mark.asyncio

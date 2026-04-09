@@ -67,8 +67,10 @@ WIKI_SEARCH = ToolDefinition(
     name="wiki_search",
     description=(
         "Keyword-search the wiki and return ranked manifest entries with "
-        "line-numbered match snippets. Use this to find which pages might "
-        "be relevant before deciding which to read in full."
+        "line-numbered match snippets. Use this when you have a specific "
+        "term and want to find which pages cover it. Use wiki_manifest when "
+        "you don't have a term yet; use wiki_query when you have a question "
+        "and want a compiled answer without loading pages yourself."
     ),
     input_schema={
         "type": "object",
@@ -98,11 +100,14 @@ async def handle_wiki_read(ctx: ToolContext, args: dict) -> list[TextContent]:
 WIKI_READ = ToolDefinition(
     name="wiki_read",
     description=(
-        "Read a wiki page with viewport control. The response also folds "
-        "in any open issues for the page and a digest of unresolved talk "
-        "entries — you cannot read the page without seeing what background "
-        "workers and prior sessions have said about it."
-        " Use viewport='sections' with sections=[...] to read multiple named sections in one call."
+        "Read a wiki page. The response folds in open issues and a digest "
+        "of unresolved talk entries. Viewport options: 'top' to orient "
+        "(default, reads overview + first section), 'section' with section= "
+        "to read a named section, 'sections' with sections=[...] to read "
+        "multiple named sections in one call, 'grep' with grep= to find "
+        "specific content, 'full' when you need the whole page (writing a "
+        "patch, short page, structural analysis). Check manifest section "
+        "sizes before reading — that tells you what 'full' costs before you commit."
     ),
     input_schema={
         "type": "object",
@@ -223,9 +228,12 @@ async def handle_wiki_manifest(ctx: ToolContext, args: dict) -> list[TextContent
 WIKI_MANIFEST = ToolDefinition(
     name="wiki_manifest",
     description=(
-        "Return a hierarchical, budget-aware manifest of the whole vault. "
-        "Use this to get an overview of what the wiki contains before "
-        "diving into specific pages."
+        "Return a hierarchical manifest of the vault: all pages, clusters, "
+        "section names, and token counts. Call this first when you don't know "
+        "where to look — it costs nothing to read and tells you section sizes "
+        "before you commit to a wiki_read. Use wiki_search when you have a "
+        "specific term; use wiki_query when you have a question and want a "
+        "compiled answer."
     ),
     input_schema={
         "type": "object",
@@ -269,10 +277,12 @@ async def handle_wiki_query(ctx: ToolContext, args: dict) -> list[TextContent]:
 WIKI_QUERY = ToolDefinition(
     name="wiki_query",
     description=(
-        "Ask the wiki a question. The daemon performs multi-turn traversal "
-        "with budget management and returns a synthesized answer plus the "
-        "citations it relied on. Your context only sees the final answer — "
-        "the navigation log stays on the daemon side."
+        "Ask the wiki a question and get a synthesized answer. The daemon "
+        "traverses internally — your context only receives the final answer "
+        "and citations, not the navigation log. Use this when you have a "
+        "specific question and want an answer at near-zero context cost. "
+        "Use wiki_manifest to orient; use wiki_search to find pages by term; "
+        "use wiki_read when you need to reason over page content yourself."
     ),
     input_schema={
         "type": "object",
@@ -387,7 +397,9 @@ WIKI_CREATE = ToolDefinition(
         "Create a new wiki page. Requires citations — every claim in the "
         "main wiki must be traceable to a primary source. If you cannot "
         "cite a source, post your idea to the talk page via wiki_talk_post "
-        "instead. Pass force=true to override near-match warnings."
+        "instead. Pass force=true to override near-match warnings. "
+        "Opens a session on first call; close explicitly with "
+        "wiki_session_close when done — do not rely on the inactivity timer."
     ),
     input_schema={
         "type": "object",
@@ -425,10 +437,13 @@ async def handle_wiki_update(ctx: ToolContext, args: dict) -> list[TextContent]:
 WIKI_UPDATE = ToolDefinition(
     name="wiki_update",
     description=(
-        "Apply a V4A-format patch to an existing page. The patch envelope is "
+        "Apply a V4A-format patch to an existing page. Never rewrite the "
+        "whole page from scratch — always patch. The patch envelope is "
         "*** Begin Patch / *** Update File: <path> / @@ <context> @@ / "
-        "context+/-/space lines / *** End Patch. On context drift, you'll get "
-        "patch-conflict with the current file content so you can re-read and retry."
+        "context+/-/space lines / *** End Patch. On patch-conflict: re-read "
+        "the page and retry with a fresh patch. "
+        "Opens a session on first call; close explicitly with "
+        "wiki_session_close when done."
     ),
     input_schema={
         "type": "object",
@@ -465,7 +480,8 @@ WIKI_APPEND = ToolDefinition(
         "Append a new section to an existing page. Requires citations. "
         "Without after_heading, the section is appended at end of file. "
         "With after_heading, the section is inserted immediately after that "
-        "heading's section closes. Multiple matches → uses the first and warns."
+        "heading's section closes. Multiple matches → uses the first and warns. "
+        "Opens a session on first call; close explicitly with wiki_session_close when done."
     ),
     input_schema={
         "type": "object",

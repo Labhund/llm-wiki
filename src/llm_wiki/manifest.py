@@ -28,6 +28,8 @@ class ManifestEntry:
     usefulness: float = 0.0
     authority: float = 0.0
     last_corroborated: str | None = None
+    # Synthesis marker — set from page frontmatter at build time
+    is_synthesis: bool = False
 
     def to_manifest_text(self) -> str:
         """Compact text representation for agent consumption."""
@@ -36,10 +38,11 @@ class ManifestEntry:
         )
         tags_str = ", ".join(self.tags) if self.tags else "none"
         links_str = ", ".join(self.links_to) if self.links_to else "none"
+        synthesis_marker = " | synthesis" if self.is_synthesis else ""
         return (
             f"{self.name}: {self.summary}\n"
             f"  tags: [{tags_str}] | tokens: {self.tokens} | "
-            f"authority: {self.authority:.2f}\n"
+            f"authority: {self.authority:.2f}{synthesis_marker}\n"
             f"  sections: [{sec_info}]\n"
             f"  links: [{links_str}]"
         )
@@ -93,6 +96,7 @@ def build_entry(page: Page, cluster: str) -> ManifestEntry:
         sections=sections,
         links_to=page.wikilinks,
         links_from=[],  # Computed after all pages indexed
+        is_synthesis=page.frontmatter.get("status") == "synthesis",
     )
 
 

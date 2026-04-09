@@ -76,10 +76,10 @@ async def test_wiki_read_tool_passes_viewport(mock_client, mock_ctx):
     mock_client.arequest.return_value = {
         "status": "ok",
         "content": "page content",
-        "issues": {"open_count": 0, "by_severity": {}, "items": []},
+        "issues": {"n": 0, "sev": {}, "items": []},
         "talk": {
-            "entry_count": 0, "open_count": 0, "by_severity": {},
-            "summary": "", "recent_critical": [], "recent_moderate": [],
+            "cnt": 0, "open": 0, "sev": {},
+            "summary": "", "crit": [], "mod": [],
         },
     }
     await handle_wiki_read(mock_ctx, {

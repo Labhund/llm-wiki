@@ -6,6 +6,7 @@ from pathlib import Path
 from llm_wiki.audit.checks import (
     find_broken_citations,
     find_broken_wikilinks,
+    find_inbox_staleness,
     find_missing_markers,
     find_orphans,
     find_source_gaps,
@@ -64,6 +65,7 @@ class Auditor:
             find_source_gaps(self._vault_root, self._config),
             find_stale_resonance(self._vault_root, self._config),
             find_synthesis_without_resonance(self._vault_root, self._config),
+            find_inbox_staleness(self._vault_root),
         ]
 
         by_check: dict[str, int] = {}
