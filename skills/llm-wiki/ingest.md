@@ -13,13 +13,38 @@ The attended agent's unique value in ingest is what it knows about you: your con
 
 Copy the source into `raw/` before touching any wiki tool:
 
-- **PDFs:** store the original as `raw/YYYY-MM-DD-slug.pdf` (immutable). Extract text to `raw/YYYY-MM-DD-slug.md` for agent use.
-- **Markdown / text:** copy verbatim to `raw/YYYY-MM-DD-slug.md`. Body is immutable; frontmatter is metadata.
+- **PDFs:** store the original as `raw/YYYY-MM-DD-slug.pdf` (immutable). The daemon
+  creates `raw/YYYY-MM-DD-slug.md` alongside it automatically on `wiki_ingest`
+  with `reading_status: unread` and extracted text.
+- **Markdown / text:** copy verbatim to `raw/YYYY-MM-DD-slug.md`. Body is immutable;
+  frontmatter is metadata.
 - **Flat** — no subdirectories inside `raw/`.
 
 All `source_ref` values in wiki citations must point here. `wiki_lint` flags broken citations.
 
-**PDF extraction quality varies.** Check extracted text before writing — mangled output (captions bleeding into body, garbled tables, watermarks repeating) degrades everything written from it. The vault config's `pdf_extractor` controls which tool is used: `pdftotext` (default, poor layout), `local-ocr` (vision model via llama.cpp, handles tables/figures), `marker`/`nougat` (high quality, GPU required). Flag bad extraction to the user before proceeding.
+**PDF extraction quality varies.** Check extracted text before writing — mangled output
+(captions bleeding into body, garbled tables, watermarks repeating) degrades everything
+written from it. The vault config's `pdf_extractor` controls which tool is used:
+`pdftotext` (default, poor layout), `local-ocr` (vision model via llama.cpp, handles
+tables/figures), `marker`/`nougat` (high quality, GPU required). Flag bad extraction
+to the user before proceeding.
+
+## Reading Status Protocol
+
+`reading_status` in `raw/` frontmatter tracks whether the researcher has engaged
+with a source. The daemon sets it; you update it with `wiki_source_mark`. Never
+edit `raw/` frontmatter manually.
+
+| Moment | Call |
+|---|---|
+| Brief mode — start reading | `wiki_source_mark(source_path, "in_progress", author)` |
+| Brief mode — done, no deep session planned | `wiki_source_mark(source_path, "read", author)` |
+| Deep mode — session start | `wiki_source_mark(source_path, "in_progress", author)` |
+| Deep mode — plan file complete | `wiki_source_mark(source_path, "read", author)` |
+| Queue mode (autonomous ingest) | Do not call — daemon sets `unread` only |
+
+`source_path` is the path to either the binary (`raw/foo.pdf`) or its companion
+(`raw/foo.md`) — both accepted.
 
 ## Choose a Mode
 
@@ -42,7 +67,7 @@ Background extraction. No analysis.
 3. Report: pages created, pages updated, errors
 4. `wiki_session_close`
 
-The daemon sets `reading_status: unread` on ingest. It stays unread — only attended engagement promotes a source.
+The daemon sets `reading_status: unread` on ingest. Only attended engagement promotes a source.
 
 ---
 
@@ -53,7 +78,7 @@ Read with the user's full context loaded. The output is a briefing, not pages.
 1. Confirm source is in `raw/`
 2. Read the source — abstract and intro at minimum, full document if short
 3. `wiki_manifest` + `wiki_search` for key concepts — know what's already covered
-4. `wiki_source_mark(source, "in_progress")` — or update `reading_status` in raw/ frontmatter directly if the tool is unavailable
+4. `wiki_source_mark(source_path, "in_progress", author)`
 5. Produce the briefing:
 
 ```
@@ -65,7 +90,7 @@ Read with the user's full context loaded. The output is a briefing, not pages.
 ```
 
 6. Wait. User decides:
-   - "Queue it" → run Mode 1; `wiki_source_mark(source, "read")` if the brief is sufficient engagement
+   - "Queue it" → run Mode 1; `wiki_source_mark(source_path, "read", author)` if the brief is sufficient engagement
    - "Go deeper on X" → continue into Mode 3 for those claims
    - "I'll read it myself" → leave at `in_progress`, close session
    - "Nothing for now" → leave at `in_progress`, close session
@@ -83,31 +108,22 @@ Claim-by-claim iterative analysis. The compounding is a byproduct; the research 
 ### Setup
 
 1. Confirm source is in `raw/`
-2. `wiki_source_mark(source, "in_progress")`
-3. Create the inbox plan file **before any wiki write:** `inbox/YYYY-MM-DD-slug-plan.md`
+2. `wiki_source_mark(source_path, "in_progress", author)`
+3. Read the source fully — form a claim list before creating the plan
+4. Create the inbox plan file **before any wiki write:**
 
-```markdown
----
-source: raw/YYYY-MM-DD-slug.pdf
-started: YYYY-MM-DD
-status: in-progress
-sessions: 1
----
-
-# [Source Title] — Research Plan
-
-## Claims / Ideas
-- [ ] [Claim 1 — one-line scope]
-- [ ] [Claim 2]
-
-## Decisions
-
-## Session Notes
-### YYYY-MM-DD
-[First session opening notes]
+```
+wiki_inbox_create(
+  source_path="raw/YYYY-MM-DD-slug.pdf",
+  title="[Source Title]",
+  claims=["Claim 1 — one-line scope", "Claim 2", ...],
+  author=your_identifier
+)
 ```
 
-4. Present the claim list to the user. Get approval — merge, drop, reorder — before starting the loop.
+   Save the returned `plan_path` — you will need it for checkpoints and resuming.
+
+5. Present the claim list to the user. Get approval — merge, drop, reorder — before starting the loop.
 
 ### Per-Claim Loop
 
@@ -117,30 +133,36 @@ For each claim:
 2. **Human reacts** — push back, add their reading, redirect
 3. **Decide together:**
    - Write now → `wiki_create` / `wiki_update` / `wiki_append`; link aggressively
-   - Defer → note reason in plan file, move on
-   - Talk post only → `wiki_talk_post` on the relevant concept page; captures the analysis without committing to a main page
+   - Defer → note reason, move on
+   - Talk post only → `wiki_talk_post` on the relevant concept page
    - Skip → note in plan file
-4. Tick the claim in the plan file, record the decision in Decisions
+4. Tick the claim in the plan file (tracked locally — written at checkpoint, not after every claim)
 
 ### Session Checkpoint
 
 When `session-cap-approaching` fires or at a natural stopping point:
 
-1. Write checkpoint to plan file: claims covered, decisions made, where to resume
-2. Append to Session Notes
-3. Commit plan file to git
+1. Read the current plan file: `wiki_inbox_get(plan_path)`
+2. Update the content: tick completed claims, add decisions, append session notes section
+3. Commit: `wiki_inbox_write(plan_path, updated_content, author)`
 4. `wiki_session_close`
+
+The plan file is the full context. No prior session memory needed to resume.
 
 ### Resuming
 
-Read `inbox/YYYY-MM-DD-slug-plan.md`, reconstruct task list from unchecked items, continue. The plan file is the full context — no prior session memory needed.
+1. `wiki_inbox_list` — find the active plan if you don't have the path
+2. `wiki_inbox_get(plan_path)` — reconstruct task list from unchecked `- [ ]` items
+3. `wiki_source_mark(source_path, "in_progress", author)` — re-assert status
+4. Continue the per-claim loop from the first unchecked item
 
 ### Completion
 
-1. `wiki_source_mark(source, "read")`
-2. Mark plan file `status: completed`
-3. **Cascade:** scan same topic area for pages that should cross-reference new content, then adjacent clusters. Part of the work, not optional cleanup.
-4. `wiki_session_close`
+1. `wiki_source_mark(source_path, "read", author)`
+2. Read plan file, mark `status: completed`, increment `sessions` count
+3. `wiki_inbox_write(plan_path, updated_content, author)` — final commit
+4. **Cascade:** scan same topic area for pages that should cross-reference new content, then adjacent clusters. Part of the work, not optional cleanup.
+5. `wiki_session_close`
 
 ---
 
