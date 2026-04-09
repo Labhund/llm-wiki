@@ -251,6 +251,132 @@ WIKI_LINT = ToolDefinition(
 
 
 # ---------------------------------------------------------------------------
+# Write-side
+# ---------------------------------------------------------------------------
+
+async def handle_wiki_create(ctx: ToolContext, args: dict) -> list[TextContent]:
+    response = await ctx.client.arequest({
+        "type": "page-create",
+        "connection_id": ctx.connection_id,
+        "title": args["title"],
+        "body": args["body"],
+        "citations": args.get("citations", []),
+        "tags": args.get("tags", []),
+        "author": args["author"],
+        "intent": args.get("intent"),
+        "force": args.get("force", False),
+    })
+    return _ok(translate_daemon_response(response))
+
+
+WIKI_CREATE = ToolDefinition(
+    name="wiki_create",
+    description=(
+        "Create a new wiki page. Requires citations — every claim in the "
+        "main wiki must be traceable to a primary source. If you cannot "
+        "cite a source, post your idea to the talk page via wiki_talk_post "
+        "instead. Pass force=true to override near-match warnings."
+    ),
+    input_schema={
+        "type": "object",
+        "properties": {
+            "title": {"type": "string"},
+            "body": {"type": "string"},
+            "citations": {
+                "type": "array",
+                "items": {"type": "string"},
+                "minItems": 1,
+            },
+            "tags": {"type": "array", "items": {"type": "string"}},
+            "author": {"type": "string"},
+            "intent": {"type": "string"},
+            "force": {"type": "boolean", "default": False},
+        },
+        "required": ["title", "body", "citations", "author"],
+    },
+    handler=handle_wiki_create,
+)
+
+
+async def handle_wiki_update(ctx: ToolContext, args: dict) -> list[TextContent]:
+    response = await ctx.client.arequest({
+        "type": "page-update",
+        "connection_id": ctx.connection_id,
+        "page": args["page"],
+        "patch": args["patch"],
+        "author": args["author"],
+        "intent": args.get("intent"),
+    })
+    return _ok(translate_daemon_response(response))
+
+
+WIKI_UPDATE = ToolDefinition(
+    name="wiki_update",
+    description=(
+        "Apply a V4A-format patch to an existing page. The patch envelope is "
+        "*** Begin Patch / *** Update File: <path> / @@ <context> @@ / "
+        "context+/-/space lines / *** End Patch. On context drift, you'll get "
+        "patch-conflict with the current file content so you can re-read and retry."
+    ),
+    input_schema={
+        "type": "object",
+        "properties": {
+            "page": {"type": "string"},
+            "patch": {"type": "string", "description": "V4A patch text"},
+            "author": {"type": "string"},
+            "intent": {"type": "string"},
+        },
+        "required": ["page", "patch", "author"],
+    },
+    handler=handle_wiki_update,
+)
+
+
+async def handle_wiki_append(ctx: ToolContext, args: dict) -> list[TextContent]:
+    response = await ctx.client.arequest({
+        "type": "page-append",
+        "connection_id": ctx.connection_id,
+        "page": args["page"],
+        "section_heading": args["section_heading"],
+        "body": args["body"],
+        "citations": args.get("citations", []),
+        "after_heading": args.get("after_heading"),
+        "author": args["author"],
+        "intent": args.get("intent"),
+    })
+    return _ok(translate_daemon_response(response))
+
+
+WIKI_APPEND = ToolDefinition(
+    name="wiki_append",
+    description=(
+        "Append a new section to an existing page. Requires citations. "
+        "Without after_heading, the section is appended at end of file. "
+        "With after_heading, the section is inserted immediately after that "
+        "heading's section closes. Multiple matches → uses the first and warns."
+    ),
+    input_schema={
+        "type": "object",
+        "properties": {
+            "page": {"type": "string"},
+            "section_heading": {"type": "string"},
+            "body": {"type": "string"},
+            "citations": {
+                "type": "array",
+                "items": {"type": "string"},
+                "minItems": 1,
+            },
+            "after_heading": {"type": "string"},
+            "author": {"type": "string"},
+            "intent": {"type": "string"},
+        },
+        "required": ["page", "section_heading", "body", "citations", "author"],
+    },
+    handler=handle_wiki_append,
+)
+
+
+# ---------------------------------------------------------------------------
 # Registration list
 # ---------------------------------------------------------------------------
 
@@ -262,5 +388,8 @@ WIKI_TOOLS: list[ToolDefinition] = [
     WIKI_QUERY,
     WIKI_INGEST,
     WIKI_LINT,
-    # Tasks 5–6 append more tools here.
+    WIKI_CREATE,
+    WIKI_UPDATE,
+    WIKI_APPEND,
+    # Task 6 appends more tools here.
 ]

@@ -174,3 +174,113 @@ def test_wiki_tools_includes_query_side():
     assert "wiki_query" in names
     assert "wiki_ingest" in names
     assert "wiki_lint" in names
+
+
+@pytest.mark.asyncio
+async def test_wiki_create_tool_passes_all_fields(mock_client, mock_ctx):
+    from llm_wiki.mcp.tools import handle_wiki_create
+    mock_client.arequest.return_value = {
+        "status": "ok",
+        "page_path": "wiki/foo.md",
+        "journal_id": "1",
+        "session_id": "abc",
+        "content_hash": "sha256:x",
+    }
+    await handle_wiki_create(mock_ctx, {
+        "title": "Foo",
+        "body": "body [[raw/x.pdf]]",
+        "citations": ["raw/x.pdf"],
+        "author": "alice",
+        "intent": "test",
+        "tags": ["a", "b"],
+    })
+    sent = mock_client.arequest.call_args[0][0]
+    assert sent["type"] == "page-create"
+    assert sent["title"] == "Foo"
+    assert sent["citations"] == ["raw/x.pdf"]
+    assert sent["author"] == "alice"
+    assert sent["tags"] == ["a", "b"]
+    # Connection_id from ToolContext is threaded into the daemon request
+    assert sent["connection_id"] == "test-mcp-conn"
+
+
+@pytest.mark.asyncio
+async def test_wiki_create_tool_raises_missing_citations(mock_client, mock_ctx):
+    from llm_wiki.mcp.errors import McpToolError
+    from llm_wiki.mcp.tools import handle_wiki_create
+    mock_client.arequest.return_value = {
+        "status": "error",
+        "code": "missing-citations",
+        "message": "no citations",
+    }
+    with pytest.raises(McpToolError) as exc_info:
+        await handle_wiki_create(mock_ctx, {
+            "title": "Foo", "body": "body", "citations": [], "author": "alice",
+        })
+    assert exc_info.value.code == "missing-citations"
+
+
+@pytest.mark.asyncio
+async def test_wiki_update_tool_passes_patch(mock_client, mock_ctx):
+    from llm_wiki.mcp.tools import handle_wiki_update
+    mock_client.arequest.return_value = {
+        "status": "ok", "page_path": "wiki/foo.md",
+        "journal_id": "1", "session_id": "s", "content_hash": "h",
+        "diff_summary": "+1 -1",
+    }
+    await handle_wiki_update(mock_ctx, {
+        "page": "foo",
+        "patch": "*** Begin Patch\n*** Update File: wiki/foo.md\n@@ @@\n+x\n*** End Patch",
+        "author": "alice",
+    })
+    sent = mock_client.arequest.call_args[0][0]
+    assert sent["type"] == "page-update"
+    assert sent["page"] == "foo"
+    assert "Begin Patch" in sent["patch"]
+
+
+@pytest.mark.asyncio
+async def test_wiki_update_tool_raises_patch_conflict(mock_client, mock_ctx):
+    from llm_wiki.mcp.errors import McpToolError
+    from llm_wiki.mcp.tools import handle_wiki_update
+    mock_client.arequest.return_value = {
+        "status": "error",
+        "code": "patch-conflict",
+        "message": "context drift",
+        "current_excerpt": "actual content",
+    }
+    with pytest.raises(McpToolError) as exc_info:
+        await handle_wiki_update(mock_ctx, {
+            "page": "foo", "patch": "x", "author": "alice",
+        })
+    assert exc_info.value.code == "patch-conflict"
+    assert "actual content" in exc_info.value.details["current_excerpt"]
+
+
+@pytest.mark.asyncio
+async def test_wiki_append_tool(mock_client, mock_ctx):
+    from llm_wiki.mcp.tools import handle_wiki_append
+    mock_client.arequest.return_value = {
+        "status": "ok", "page_path": "wiki/foo.md",
+        "journal_id": "1", "session_id": "s", "content_hash": "h",
+    }
+    await handle_wiki_append(mock_ctx, {
+        "page": "foo",
+        "section_heading": "New",
+        "body": "content [[raw/x.pdf]]",
+        "citations": ["raw/x.pdf"],
+        "after_heading": "Methods",
+        "author": "alice",
+    })
+    sent = mock_client.arequest.call_args[0][0]
+    assert sent["type"] == "page-append"
+    assert sent["section_heading"] == "New"
+    assert sent["after_heading"] == "Methods"
+
+
+def test_wiki_tools_includes_write_side():
+    from llm_wiki.mcp.tools import WIKI_TOOLS
+    names = {t.name for t in WIKI_TOOLS}
+    assert "wiki_create" in names
+    assert "wiki_update" in names
+    assert "wiki_append" in names
