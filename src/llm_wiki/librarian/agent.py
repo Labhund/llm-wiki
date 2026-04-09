@@ -131,6 +131,102 @@ class LibrarianAgent:
 
         return len(scores)
 
+    async def refresh_talk_summaries(self) -> int:
+        """Refresh stale talk-page summaries.
+
+        For each `*.talk.md` in the wiki, load entries and compute the open
+        set. Summarize via the cheap maintenance LLM iff:
+          - the number of OPEN entries with `index > last_max_index` (the
+            high-water mark from the last summary) is at least
+            `config.maintenance.talk_summary_min_new_entries`. This counts
+            new arrivals that are still unresolved, so closures of older
+            entries between runs do not mask new arrivals.
+          - at least `config.maintenance.talk_summary_min_interval_seconds`
+            have passed since the last summary.
+
+        After summarizing, the store's `last_max_index` is set to the
+        highest entry index in the file (open or resolved) — that becomes
+        the high-water mark for the next run.
+
+        Returns the number of pages whose summary was refreshed.
+        """
+        import datetime as _dt
+        from llm_wiki.librarian.talk_summary import (
+            TalkSummaryStore,
+            summarize_open_entries,
+        )
+        from llm_wiki.talk.page import TalkPage, compute_open_set
+
+        wiki_dir = self._vault_root / self._config.vault.wiki_dir.rstrip("/")
+        if not wiki_dir.exists():
+            wiki_dir = self._vault_root
+        if not wiki_dir.exists():
+            return 0
+
+        store = TalkSummaryStore.load(self._state_dir / "talk_summaries.json")
+        threshold = self._config.maintenance.talk_summary_min_new_entries
+        min_interval = self._config.maintenance.talk_summary_min_interval_seconds
+        now = _dt.datetime.now(_dt.timezone.utc)
+        refreshed = 0
+
+        for talk_path in sorted(wiki_dir.rglob("*.talk.md")):
+            # Skip files inside hidden directories (e.g. .issues)
+            rel = talk_path.relative_to(wiki_dir)
+            if any(p.startswith(".") for p in rel.parts):
+                continue
+
+            talk = TalkPage(talk_path)
+            entries = talk.load()
+            if not entries:
+                continue
+            open_entries = compute_open_set(entries)
+
+            # Page slug derives from the talk file's stem
+            stem = talk_path.stem
+            page_name = stem[: -len(".talk")] if stem.endswith(".talk") else stem
+            current_max_index = max(e.index for e in entries)
+
+            existing = store.get(page_name)
+            high_water = existing.last_max_index if existing else 0
+
+            # Count NEW unresolved entries: open AND index > high_water.
+            # Resilient to closures: a closure between runs only removes
+            # entries from open_entries; new arrivals are still counted.
+            new_unresolved = sum(1 for e in open_entries if e.index > high_water)
+            if new_unresolved < threshold:
+                continue
+
+            # Rate limit: don't re-summarize a page within min_interval seconds
+            if existing is not None:
+                try:
+                    last_ts = _dt.datetime.fromisoformat(existing.last_summary_ts)
+                except ValueError:
+                    last_ts = None
+                if last_ts is not None:
+                    elapsed = (now - last_ts).total_seconds()
+                    if elapsed < min_interval:
+                        continue
+
+            try:
+                summary = await summarize_open_entries(open_entries, self._llm)
+            except Exception:
+                logger.exception("Failed to summarize talk page %s", page_name)
+                continue
+            if not summary:
+                continue
+
+            store.set(
+                page_name,
+                summary=summary,
+                last_max_index=current_max_index,
+                last_summary_ts=now.isoformat(),
+            )
+            refreshed += 1
+
+        if refreshed > 0:
+            store.save()
+        return refreshed
+
     async def refresh_page(self, page_name: str) -> bool:
         """Refine tags + summary for a single page via LLM.
 
