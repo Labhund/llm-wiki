@@ -130,6 +130,13 @@ class MaintenanceConfig:
     talk_summary_min_new_entries: int = 5
     talk_summary_min_interval_seconds: int = 3600
     failure_escalation_threshold: int = 3
+    # Cluster D — synthesis + resonance
+    synthesis_lint_enabled: bool = False
+    synthesis_lint_months: int = 6
+    resonance_matching: bool = False
+    resonance_candidates_per_claim: int = 3
+    resonance_weight_synthesis: float = 2.0
+    resonance_stale_weeks: int = 4
 
 
 @dataclass
