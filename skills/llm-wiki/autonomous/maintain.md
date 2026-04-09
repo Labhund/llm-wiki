@@ -8,7 +8,7 @@ description: Use for autonomous (cron, swarm, unattended) maintenance passes on 
 ## Protocol
 
 1. **`wiki_lint`** — get vault-wide attention map with issues by severity
-2. **Triage** — critical issues only unless cap allows moderate; skip minor entirely
+2. **Triage** — critical first; move to moderate only once all in-scope critical issues are handled, subject to the cap; skip minor entirely
 3. **For each issue (up to cap):**
    - `wiki_issues_get` — read the full issue
    - Unambiguously fixable → write tools + `wiki_issues_resolve`
