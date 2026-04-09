@@ -60,3 +60,33 @@ async def test_client_is_running(running_daemon, tmp_path: Path):
 
     dead_client = DaemonClient(tmp_path / "nonexistent.sock")
     assert not dead_client.is_running()
+
+
+@pytest.mark.asyncio
+async def test_arequest_round_trips_through_async_path(tmp_path):
+    """`arequest` is the async public entry point used by the MCP server.
+
+    It must NOT depend on the `_run_coroutine_in_running_loop` helper that
+    `request()` falls back to when called from inside an event loop. We
+    verify this indirectly by exercising the path against a real Unix
+    socket — if `arequest` is just a thin `await self._async_request(msg)`
+    wrapper, this round-trips cleanly.
+    """
+    sock_path = tmp_path / "echo.sock"
+
+    async def echo_server(reader, writer):
+        from llm_wiki.daemon.protocol import read_message, write_message
+        msg = await read_message(reader)
+        await write_message(writer, {"status": "ok", "echo": msg})
+        writer.close()
+        await writer.wait_closed()
+
+    server = await asyncio.start_unix_server(echo_server, path=str(sock_path))
+    try:
+        client = DaemonClient(sock_path)
+        resp = await client.arequest({"type": "ping", "n": 1})
+        assert resp["status"] == "ok"
+        assert resp["echo"] == {"type": "ping", "n": 1}
+    finally:
+        server.close()
+        await server.wait_closed()
