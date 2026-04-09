@@ -123,7 +123,9 @@ class MaintenanceConfig:
     librarian_interval: str = "6h"
     adversary_interval: str = "12h"
     adversary_claims_per_run: int = 5
+    adversary_unread_weight: float = 1.5
     auditor_interval: str = "24h"
+    auditor_unread_source_days: int = 30
     authority_recalc: str = "12h"
     compliance_debounce_secs: float = 30.0
     talk_pages_enabled: bool = True
