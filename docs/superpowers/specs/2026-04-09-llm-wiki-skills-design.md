@@ -91,7 +91,7 @@ Three traversal modes are available. The index advertises all three; `research.m
 | Mode | Mechanism | Context cost | Flexibility |
 |------|-----------|-------------|-------------|
 | **Daemon-delegated** | `wiki_query` | Near-zero | Fixed (daemon's LLM) |
-| **Sub-agent** | Spawn agent via `delegate_task` / Agent tool | Zero to parent | High — configurable model, injected context |
+| **Sub-agent** | Agent's native sub-agent mechanism (e.g., `delegate_task` in Hermes, `Agent` tool in Claude Code) | Zero to parent | High — configurable model, injected context |
 | **In-context manual** | `wiki_search` → `wiki_read` → follow links | Accumulates | Full visibility, user sees each hop |
 
 The mode choice is surfaced to the user at the start of any research task. It is not made silently.
@@ -106,7 +106,7 @@ The mode choice is surfaced to the user at the start of any research task. It is
 
 **Mode selection:** After stating intent, offer the three modes to the user with honest trade-offs. Wait for a response. Default recommendation: `wiki_query` for specific well-defined questions; sub-agent for broad exploratory research; in-context manual only when the user explicitly wants to see each hop.
 
-**Sub-agent prompt template:** When spawning a research agent, the prompt must include: the stated intent, the vault path, a token budget hint, and whether to return structured synthesis or raw findings.
+**Sub-agent prompt template:** When spawning a research agent using the agent's native sub-agent mechanism, the prompt must include: the stated intent, the vault path, a token budget hint, and whether to return structured synthesis or raw findings.
 
 **In-context traversal discipline:**
 1. `wiki_manifest` with a budget — orient before searching
@@ -124,14 +124,15 @@ The mode choice is surfaced to the user at the start of any research task. It is
 **Hard gate:** Before writing, state out loud: which page(s), what you are adding, and what source supports it. No source → talk page.
 
 **Session discipline:**
+- Sessions are opened implicitly on the first write call — no explicit open is needed. Close is always explicit.
 - One session per coherent work unit (a topic, a paper, a fix pass) — not one per page
-- Watch for `session-cap-approaching` — wrap up or plan to continue in a subsequent session
+- Watch for `session-cap-approaching` warnings (emitted at 60% of the 30-write cap, i.e. at write 18) — wrap up or plan to continue in a subsequent session
 - Always close with `wiki_session_close` when done
 
 **Tool selection:**
-- `wiki_create` — new pages; citations are required in the call or it is rejected by the daemon
+- `wiki_create` — new pages; citations are required in the call or it is rejected by the daemon. By default the daemon rejects creates that look like near-matches to existing pages — if you get a near-match rejection, either update the existing page (`wiki_update`) or set `force=true` after confirming the new page is genuinely distinct.
 - `wiki_update` — V4A patch; re-read the target section first, patch against what is actually there, handle `patch-conflict` by re-reading and retrying (never rewrite the whole page to avoid a conflict)
-- `wiki_append` — safest for additive knowledge; heading-anchored
+- `wiki_append` — safest for additive knowledge; heading-anchored; also requires citations
 
 **Uncitable content:** Use `wiki_talk_post`. Talk pages are for half-formed ideas, proposals, connections you cannot yet cite, and contradictions waiting on resolution. This is a first-class path, not a consolation.
 
@@ -153,7 +154,7 @@ State what you found: "This paper covers X, Y, Z. X already looks like it has wi
 
 Honest choices:
 - **Conversational path** — orient in the wiki together, discuss what to create vs. update, decide on hybrid strategy
-- **Automated path** — `wiki_ingest` directly (once `--dry-run` is available: run dry-run first for preview, confirm, then fire; until then: manifest + search as orientation substitute)
+- **Automated path** — `wiki_ingest --dry-run` for preview, confirm with user, then `wiki_ingest` to execute
 
 **Act 3 — Execute**
 
@@ -166,13 +167,13 @@ Honest choices:
 6. `wiki_session_close`
 
 *Automated path:*
-- Run `wiki_ingest` (with dry-run preview once available)
-- Report what was created and updated
-- `wiki_session_close`
+1. `wiki_ingest --dry-run` — show the user what concepts would be extracted and which pages would be created or updated
+2. Confirm with user
+3. `wiki_ingest` to execute
+4. Report what was created and updated
+5. `wiki_session_close`
 
 **Key synthesis principle:** Do not just extract claims into the wiki. For each concept: how does it connect to what is already there? Does it contradict, extend, or confirm existing pages? Contradictions go to talk pages; extensions go to page body; confirmations update the relevant claim's context.
-
-**Note — `wiki_ingest --dry-run`:** This flag is not yet implemented. When available, it will return concept extraction and proposed page targets without writing — making it the preferred fast-orientation step in both attended and automated paths. Tracked separately.
 
 ---
 
@@ -207,9 +208,20 @@ The `autonomous/` subskills are full independent documents. They are not the att
 - Scope is predefined by whoever scheduled the job — do not prompt for it
 - Ambiguity → `wiki_talk_post` and move on; never block waiting for input
 - Judgment calls that would normally go to the user → talk page with a clear note
-- Hard cap on writes per run — avoid runaway cascades; a configurable N issues per invocation
+- Hard cap on writes per run — avoid runaway cascades; cap is passed via the cron prompt or skill invocation parameter (e.g. `MAX_WRITES=10`); if unset, default conservatively to 10
 - Session close is mandatory at end of every run — no human will notice a drifting session
 - Exit with a structured report: what was found, what was fixed, what was escalated to talk, what was left open
+
+**Error recovery (autonomous):**
+Infrastructure failures are not ambiguity — they get a defined response:
+- `wiki_ingest` returns no concepts → abort, report "no concepts extracted", do not write
+- `wiki_update` returns `patch-conflict` twice → `wiki_talk_post` noting the conflict, move on
+- Daemon unreachable → abort entire run, emit error report, do not retry
+- Session expires mid-run → start a new session for remaining writes, note the split in the report
+No autonomous skill should silently swallow errors or retry indefinitely.
+
+**Autonomous research quality note:**
+`wiki_query` quality is gated by the daemon's configured query backend, not the calling agent's model. If the daemon uses a lightweight backend (e.g. Gemma), autonomous research will reflect that ceiling. For deep autonomous research, configure the daemon's query backend accordingly.
 
 ### `autonomous/research.md`
 
@@ -222,11 +234,12 @@ Only write what is clearly and directly supported by an explicit source already 
 ### `autonomous/ingest.md`
 
 1. Read the source (extract key concepts)
-2. Run `wiki_ingest` directly
-3. Report: what was created, what was updated, any errors
-4. `wiki_session_close`
+2. `wiki_ingest --dry-run` — inspect what the daemon would create/update; abort and report if the plan looks wrong (e.g. zero concepts extracted, or all targets are near-matches to pages with open critical issues)
+3. `wiki_ingest` to execute
+4. Report: what was created, what was updated, any errors
+5. `wiki_session_close`
 
-No conversational path. No mode choice. Automated pipeline only.
+No conversational path. No mode choice. The dry-run step is the autonomous safety gate — it replaces the human confirmation from the attended path.
 
 ### `autonomous/maintain.md`
 
@@ -244,7 +257,9 @@ Never escalate to a user. Never make judgment calls. When in doubt, talk post.
 
 ## Location and Distribution
 
-- **Canonical location:** `skills/llm-wiki/` in the llm-wiki repo, shipping with the package
+- **Canonical location:** `skills/llm-wiki/` at the repo root (sibling to `src/`, `docs/`, `wiki/`)
+- **Format:** Plain markdown files following the Superpowers skill convention — YAML frontmatter with `name`, `description`, `type` fields; content is the behavioural protocol. Compatible with any agent framework that can load a file path as a skill.
+- **Distribution:** Skills are plain files — users point their agent at the path after `pip install`. No Python packaging required; the `skills/` directory is not part of the pip package. The README's Quick Start section will document the path.
 - **How to use (attended):** Point agent at `skills/llm-wiki/` — agent loads index and routes to appropriate subskill
 - **How to use (autonomous/cron):** Point agent directly at `skills/llm-wiki/autonomous/<subskill>` — no routing needed
 - **Future:** Publish to Superpowers plugin registry as an official plugin once skills are validated in practice
@@ -253,7 +268,5 @@ Never escalate to a user. Never make judgment calls. When in doubt, talk post.
 
 ## Open Questions
 
-1. **Hard cap for autonomous/maintain:** What is the right default for issues-per-run? Needs empirical data once the system is in active use.
-2. **`wiki_ingest --dry-run`:** Being designed separately (tracked by Hermes agent). When implemented, update `ingest.md` and `autonomous/ingest.md` to use it as the primary orientation step.
-3. **Sub-agent prompt template for research:** Full template to be refined during implementation — needs to be tested against real traversal tasks.
-4. **Session cap default in autonomous/write:** What is an appropriate write cap per autonomous run? Likely mirrors the daemon's own session cap (30 writes) or lower.
+1. **Sub-agent prompt template for research:** Full template to be refined during implementation — needs to be tested against real traversal tasks.
+2. **Session cap default in autonomous/write:** What is an appropriate write cap per autonomous run? Likely mirrors the daemon's own session cap (30 writes) or lower. Configurable via invocation parameter; empirical data needed.
