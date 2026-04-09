@@ -12,6 +12,7 @@ This skill runs ONCE. After integration, wiki operations use the MCP tools direc
 
 ---
 
+%% section: prerequisites %%
 ## Prerequisites
 
 Before starting, verify ALL of these:
@@ -25,6 +26,7 @@ If any prerequisite is missing, tell the user what's needed and stop.
 
 ---
 
+%% section: the-skill-conflict %%
 ## The Skill Conflict
 
 If the agent framework (e.g., Hermes) ships with pre-MCP wiki skills that assume raw file operations (read_file/write_file/search_files), these will contradict the MCP tool surface. Agents get mixed signals — old skills say "use search_files" while MCP provides wiki_search with manifest metadata, session management, and compliance review.
@@ -33,8 +35,10 @@ If the agent framework (e.g., Hermes) ships with pre-MCP wiki skills that assume
 
 ---
 
+%% section: integration-procedure %%
 ## Integration Procedure
 
+%% section: step-1-create-vault %%
 ### Step 1: Create Vault
 
 ```bash
@@ -44,9 +48,11 @@ mkdir -p ~/wiki/{raw,wiki,schema}
 - `raw/` — immutable source copies. When ingesting a source, copy it verbatim to `raw/YYYY-MM-DD-slug.md` (flat — no subdirectories). This is a copy, not a transcription. All `source_ref` values in wiki citations must point here.
 - `wiki/` — compiled wiki pages (daemon-owned; do not edit directly)
 - `schema/` — configuration, prompts, agent definitions
+- `inbox/` — research scratchpad for attended deep ingests; mutable plan files created by `wiki_inbox_create` (created on demand, not part of initial scaffold)
 
 **Existing Obsidian vault:** If you already have an Obsidian vault, you can use it as the llm-wiki vault root instead of creating `~/wiki`. Set `LLM_WIKI_VAULT` to the vault root and create `raw/` and `schema/` inside it. The daemon writes compiled pages to `wiki/` (configurable via `wiki_dir`), which Obsidian will index alongside existing notes.
 
+%% section: step-2-write-vault-config %%
 ### Step 2: Write Vault Config
 
 Write `~/wiki/schema/config.yaml` with backend profiles and per-task routing:
@@ -76,6 +82,7 @@ vault:
   mode: "managed"
   raw_dir: "raw/"
   wiki_dir: "wiki/"
+  inbox_dir: "inbox/"
   watch: true
 
 maintenance:
@@ -104,6 +111,7 @@ maintenance:
 
 **Adjust model names and ports to match the user's actual inference setup.** The config above is a template.
 
+%% section: step-3-initialize-index %%
 ### Step 3: Initialize Index
 
 ```bash
@@ -112,7 +120,55 @@ llm-wiki init ~/wiki/
 
 Builds the tantivy search index and verifies vault structure. Must run after config is written but before the daemon starts.
 
-### Step 4: Register MCP Server
+%% section: step-4-run-the-daemon-as-a-persistent-service %%
+### Step 4: Run the Daemon as a Persistent Service
+
+The daemon hosts the maintenance agents (librarian, adversary, auditor) on 6–24h schedules. These need a long-running process — not one that only lives during MCP sessions. Run the daemon as a systemd user service so it survives reboots and stays up 24/7. MCP connections (Hermes, Claude Code, etc.) are just clients to the already-running daemon.
+
+```bash
+mkdir -p ~/.config/systemd/user
+```
+
+Write `~/.config/systemd/user/llm-wiki.service`:
+
+```ini
+[Unit]
+Description=llm-wiki daemon — persistent knowledge base maintenance
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+ExecStart=/usr/bin/python -m llm_wiki.daemon /home/<user>/wiki
+Restart=on-failure
+RestartSec=5
+Environment=LLM_WIKI_VAULT=/home/<user>/wiki
+WorkingDirectory=/home/<user>/wiki
+
+[Install]
+WantedBy=default.target
+```
+
+Enable and start:
+
+```bash
+systemctl --user daemon-reload
+systemctl --user enable --now llm-wiki.service
+systemctl --user status llm-wiki.service  # verify active (running)
+loginctl enable-linger $USER              # survive logout
+```
+
+Verify the daemon is reachable:
+
+```bash
+llm-wiki status --vault ~/wiki
+llm-wiki maintenance status --vault ~/wiki
+```
+
+**Note:** CLI commands that need the daemon (`status`, `search`, `read`, `lint`, `query`, `ingest`, `maintenance`, `talk`) default to `.` as the vault path. Run from inside the vault directory or always pass `--vault ~/wiki`. If the daemon is already running as a service, the auto-start path in the CLI will simply connect to it.
+
+%% section: step-5-register-mcp-server %%
+### Step 5: Register MCP Server
 
 **Hermes** — add to `~/.hermes/config.yaml` under `mcp_servers:`:
 
@@ -145,9 +201,10 @@ Builds the tantivy search index and verifies vault structure. Must run after con
 
 **Other frameworks** — register a stdio MCP server with command `llm-wiki mcp` and env `LLM_WIKI_VAULT` pointing at the vault.
 
-After registration, the agent gets 17 tools: `wiki_search`, `wiki_read`, `wiki_manifest`, `wiki_status`, `wiki_query`, `wiki_ingest`, `wiki_lint`, `wiki_create`, `wiki_update`, `wiki_append`, `wiki_issues_list`, `wiki_issues_get`, `wiki_issues_resolve`, `wiki_talk_read`, `wiki_talk_post`, `wiki_talk_list`, `wiki_session_close`.
+After registration, the agent gets 21 tools: `wiki_search`, `wiki_read`, `wiki_manifest`, `wiki_status`, `wiki_query`, `wiki_ingest`, `wiki_lint`, `wiki_create`, `wiki_update`, `wiki_append`, `wiki_issues_list`, `wiki_issues_get`, `wiki_issues_resolve`, `wiki_talk_read`, `wiki_talk_post`, `wiki_talk_list`, `wiki_session_close`, `wiki_inbox_create`, `wiki_inbox_get`, `wiki_inbox_write`, `wiki_inbox_list`.
 
-### Step 5: Patch Pre-MCP Skills
+%% section: step-6-patch-pre-mcp-skills %%
+### Step 6: Patch Pre-MCP Skills
 
 If the agent framework has existing wiki skills based on raw file operations, add a routing banner after the frontmatter of each:
 
@@ -172,7 +229,8 @@ If the agent framework has existing wiki skills based on raw file operations, ad
 
 **Do not delete old skills.** Patch them. They're useful as conceptual reference and fallback if the MCP server goes down.
 
-### Step 6: Verify
+%% section: step-7-verify %%
+### Step 7: Verify
 
 Run these checks in order:
 
@@ -186,7 +244,8 @@ If MCP connection fails, check:
 - `LLM_WIKI_VAULT` env var matches the actual vault path
 - Agent config YAML/JSON is syntactically valid
 
-### Step 7: Report
+%% section: step-8-report %%
+### Step 8: Report
 
 Tell the user:
 - Vault location and structure
@@ -197,6 +256,7 @@ Tell the user:
 
 ---
 
+%% section: pitfalls %%
 ## Pitfalls
 
 - **Config must exist before daemon starts.** The daemon loads `schema/config.yaml` on startup. Missing config → falls back to defaults which likely won't match the user's inference setup.
@@ -208,6 +268,7 @@ Tell the user:
 
 ---
 
+%% section: obsidian-integration %%
 ## Obsidian Integration
 
 Open the vault root as an Obsidian vault. Obsidian indexes both `wiki/` (compiled pages with `[[wikilinks]]`) and `raw/` (source copies). The wikilinks in compiled pages resolve within Obsidian's graph normally.

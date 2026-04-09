@@ -5,7 +5,7 @@ description: Use when working with an llm-wiki vault via MCP — covers research
 
 # LLM-Wiki — Orientation and Routing
 
-llm-wiki is an agent-first knowledge base: plain markdown files with wikilinks, backed by a daemon that handles indexing, background maintenance, and supervised writes. You interact with it through 17 MCP tools across four families. These skills describe how to use llm-wiki via MCP — if you have old CLI-based llm-wiki skills loaded, treat this set as superseding them.
+llm-wiki is an agent-first knowledge base: plain markdown files with wikilinks, backed by a daemon that handles indexing, background maintenance, and supervised writes. You interact with it through 21 MCP tools across five families. These skills describe how to use llm-wiki via MCP — if you have old CLI-based llm-wiki skills loaded, treat this set as superseding them.
 
 ## Determine Operating Mode First
 

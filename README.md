@@ -128,7 +128,7 @@ Register the MCP server in your agent framework after install:
 
 **Other frameworks** — any stdio MCP client: command `llm-wiki mcp`, env `LLM_WIKI_VAULT`.
 
-The daemon auto-starts on first connect (allow ~30s on first call). 17 tools across four families:
+The daemon auto-starts on first connect (allow ~30s on first call). 21 tools across five families:
 
 | Family | Tools |
 |--------|-------|
@@ -136,6 +136,7 @@ The daemon auto-starts on first connect (allow ~30s on first call). 17 tools acr
 | Query | `wiki_query`, `wiki_ingest`, `wiki_lint` |
 | Write | `wiki_create`, `wiki_update`, `wiki_append` |
 | Maintenance | `wiki_issues_list/get/resolve`, `wiki_talk_read/post/list`, `wiki_session_close` |
+| Inbox | `wiki_inbox_create`, `wiki_inbox_get`, `wiki_inbox_write`, `wiki_inbox_list` |
 
 Every supervised write produces a git commit attributed to the calling agent via the `Agent:` trailer.
 
