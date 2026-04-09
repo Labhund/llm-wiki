@@ -169,7 +169,8 @@ class IntervalScheduler:
             page=None,
             body=(
                 f"Last error type: {type(exc).__name__}\n"
-                f"Last error: {exc}\n\n"
+                f"Last error: {exc}\n"
+                f"Last attempt: {self._last_attempt.get(worker.name, 'unknown')}\n\n"
                 f"The worker will retry on its next interval. "
                 f"Check that the configured LLM backend is reachable."
             ),
