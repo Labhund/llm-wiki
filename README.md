@@ -80,6 +80,16 @@ Tools available: `wiki_search`, `wiki_read`, `wiki_manifest`, `wiki_status`,
 `wiki_append`, `wiki_issues_list`, `wiki_issues_get`, `wiki_issues_resolve`,
 `wiki_talk_read`, `wiki_talk_post`, `wiki_talk_list`, `wiki_session_close`.
 
+## Agent Skills
+
+`skills/llm-wiki/` contains Superpowers-format skill files that prime any agent to use llm-wiki correctly by default — research traversal modes, write discipline, conversational ingest, and maintenance hygiene.
+
+**Attended use** (user present): point your agent at `skills/llm-wiki/`
+
+**Autonomous use** (cron, swarm): point your agent at `skills/llm-wiki/autonomous/<subskill>` directly
+
+Compatible with Claude Code, Hermes, OpenClaw, and any agent framework that loads skill files by path.
+
 ## How It Works
 
 The core insight: RAG re-derives on every query. A compiled wiki accumulates knowledge, maintains cross-references, tracks provenance, and improves over time. The agent navigates the wiki like a human browses the web — search, scan snippets, click through, skim headings, Ctrl+F — but with token budgets instead of screen pixels.
