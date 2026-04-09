@@ -622,6 +622,143 @@ WIKI_SESSION_CLOSE = ToolDefinition(
 
 
 # ---------------------------------------------------------------------------
+# Inbox plan files
+# ---------------------------------------------------------------------------
+
+async def handle_wiki_inbox_create(ctx: ToolContext, args: dict) -> list[TextContent]:
+    response = await ctx.client.arequest({
+        "type": "inbox-create",
+        "source_path": args["source_path"],
+        "title": args["title"],
+        "claims": args.get("claims", []),
+        "author": args["author"],
+    })
+    return _ok(translate_daemon_response(response))
+
+
+WIKI_INBOX_CREATE = ToolDefinition(
+    name="wiki_inbox_create",
+    description=(
+        "Create a scaffolded inbox plan file for a Deep ingest session. "
+        "Call this before any wiki write in Mode 3 — the plan file is the "
+        "persistent cursor that lets you resume across sessions. Commits "
+        "the plan file directly to git (outside the write session). "
+        "Returns the plan_path to use with wiki_inbox_get, wiki_inbox_write."
+    ),
+    input_schema={
+        "type": "object",
+        "properties": {
+            "source_path": {
+                "type": "string",
+                "description": "Path to the source file (e.g. 'raw/2026-04-09-paper.pdf' or absolute path)",
+            },
+            "title": {
+                "type": "string",
+                "description": "Human-readable title for the research plan (usually the source title)",
+            },
+            "claims": {
+                "type": "array",
+                "items": {"type": "string"},
+                "description": "Initial claim list — one-line scope per claim. Presented to user for approval before the loop starts.",
+            },
+            "author": {
+                "type": "string",
+                "description": "Your agent identifier",
+            },
+        },
+        "required": ["source_path", "title", "author"],
+    },
+    handler=handle_wiki_inbox_create,
+)
+
+
+async def handle_wiki_inbox_get(ctx: ToolContext, args: dict) -> list[TextContent]:
+    response = await ctx.client.arequest({
+        "type": "inbox-get",
+        "plan_path": args["plan_path"],
+    })
+    return _ok(translate_daemon_response(response))
+
+
+WIKI_INBOX_GET = ToolDefinition(
+    name="wiki_inbox_get",
+    description=(
+        "Read the current content and frontmatter of an inbox plan file. "
+        "Use this when resuming a Deep ingest session to reconstruct the "
+        "task list from unchecked claims."
+    ),
+    input_schema={
+        "type": "object",
+        "properties": {
+            "plan_path": {
+                "type": "string",
+                "description": "Relative path to the plan file (e.g. 'inbox/2026-04-09-paper-plan.md')",
+            },
+        },
+        "required": ["plan_path"],
+    },
+    handler=handle_wiki_inbox_get,
+)
+
+
+async def handle_wiki_inbox_write(ctx: ToolContext, args: dict) -> list[TextContent]:
+    response = await ctx.client.arequest({
+        "type": "inbox-write",
+        "plan_path": args["plan_path"],
+        "content": args["content"],
+        "author": args["author"],
+    })
+    return _ok(translate_daemon_response(response))
+
+
+WIKI_INBOX_WRITE = ToolDefinition(
+    name="wiki_inbox_write",
+    description=(
+        "Write the full content of an inbox plan file and commit it to git. "
+        "Use this at session checkpoints: read the current content with "
+        "wiki_inbox_get, update checkboxes and append session notes, then "
+        "call this to persist and commit. Always call before wiki_session_close."
+    ),
+    input_schema={
+        "type": "object",
+        "properties": {
+            "plan_path": {
+                "type": "string",
+                "description": "Relative path to the plan file (from wiki_inbox_create response)",
+            },
+            "content": {
+                "type": "string",
+                "description": "Full file content (frontmatter + body). Preserve the frontmatter from wiki_inbox_get.",
+            },
+            "author": {
+                "type": "string",
+                "description": "Your agent identifier",
+            },
+        },
+        "required": ["plan_path", "content", "author"],
+    },
+    handler=handle_wiki_inbox_write,
+)
+
+
+async def handle_wiki_inbox_list(ctx: ToolContext, args: dict) -> list[TextContent]:
+    response = await ctx.client.arequest({"type": "inbox-list"})
+    return _ok(translate_daemon_response(response))
+
+
+WIKI_INBOX_LIST = ToolDefinition(
+    name="wiki_inbox_list",
+    description=(
+        "List all inbox plan files with their status and unchecked claim count. "
+        "Use this when resuming work to find the right plan file, or to "
+        "surface in-progress ingests for the researcher."
+    ),
+    input_schema={"type": "object", "properties": {}},
+    handler=handle_wiki_inbox_list,
+)
+
+
+# ---------------------------------------------------------------------------
 # Registration list
 # ---------------------------------------------------------------------------
 
@@ -644,4 +781,8 @@ WIKI_TOOLS: list[ToolDefinition] = [
     WIKI_TALK_LIST,
     WIKI_SOURCE_MARK,
     WIKI_SESSION_CLOSE,
+    WIKI_INBOX_CREATE,
+    WIKI_INBOX_GET,
+    WIKI_INBOX_WRITE,
+    WIKI_INBOX_LIST,
 ]

@@ -139,6 +139,7 @@ class VaultConfig:
     mode: str = "vault"
     raw_dir: str = "raw/"
     wiki_dir: str = "wiki/"
+    inbox_dir: str = "inbox/"    # ← new
     watch: bool = True
 
 
