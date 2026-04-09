@@ -65,6 +65,8 @@ class Vault:
         pages: dict[str, Page] = {}
         entries: list[ManifestEntry] = []
         for md_file in md_files:
+            if not md_file.is_file():
+                continue
             page = Page.parse(md_file)
             pages[page.path.stem] = page
 

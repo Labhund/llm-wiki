@@ -205,3 +205,21 @@ def test_vault_scan_excludes_talk_pages(sample_vault):
     # The talk page is NOT
     assert "srna-embeddings.talk" not in entries
     assert not any(name.endswith(".talk") for name in entries)
+
+
+def test_scan_skips_directory_named_dot_md(tmp_path):
+    """Vault.scan() must not crash when a directory is named something.md."""
+    # Create vault structure
+    wiki_dir = tmp_path / "wiki"
+    wiki_dir.mkdir()
+    (wiki_dir / "normal-page.md").write_text(
+        "---\ntitle: Normal\ntags: []\ncitations: []\n---\n\n# Normal\n"
+    )
+    # A directory named *.md — triggers IsADirectoryError without the fix
+    dir_md = wiki_dir / "weird-dir.md"
+    dir_md.mkdir()
+    (dir_md / "some_file.txt").write_text("inside the directory")
+
+    # Should not raise
+    vault = Vault.scan(tmp_path)
+    assert vault.page_count == 1
