@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 import logging
 from dataclasses import dataclass
 from typing import Any
@@ -9,6 +10,17 @@ import litellm
 from llm_wiki.daemon.llm_queue import LLMQueue
 
 logger = logging.getLogger(__name__)
+
+_TRANSIENT_HTTP_CODES = {408, 429, 500, 502, 503, 504}
+_RETRY_DELAYS = [5.0, 15.0, 45.0]
+
+
+def _should_retry(exc: Exception) -> bool:
+    """Return True for transient errors that should be retried."""
+    status = getattr(exc, "status_code", None)
+    if status is None:
+        return True  # Connection/timeout errors have no status_code
+    return status in _TRANSIENT_HTTP_CODES
 
 
 @dataclass
@@ -46,20 +58,35 @@ class LLMClient:
         """Send a completion request through the concurrency-limited queue."""
 
         async def _call() -> LLMResponse:
-            kwargs: dict[str, Any] = {
-                "model": self._model,
-                "messages": messages,
-                "temperature": temperature,
-            }
-            if self._api_base is not None:
-                kwargs["api_base"] = self._api_base
-            if self._api_key is not None:
-                kwargs["api_key"] = self._api_key
+            last_exc: Exception | None = None
+            for attempt, delay in enumerate([*_RETRY_DELAYS, None]):
+                try:
+                    kwargs: dict[str, Any] = {
+                        "model": self._model,
+                        "messages": messages,
+                        "temperature": temperature,
+                    }
+                    if self._api_base is not None:
+                        kwargs["api_base"] = self._api_base
+                    if self._api_key is not None:
+                        kwargs["api_key"] = self._api_key
 
-            response = await litellm.acompletion(**kwargs)
-            content = response.choices[0].message.content
-            tokens = response.usage.total_tokens if response.usage else 0
-            self._queue.record_tokens(tokens)
-            return LLMResponse(content=content, tokens_used=tokens)
+                    response = await litellm.acompletion(**kwargs)
+                    content = response.choices[0].message.content
+                    tokens = response.usage.total_tokens if response.usage else 0
+                    self._queue.record_tokens(tokens)
+                    return LLMResponse(content=content, tokens_used=tokens)
+                except asyncio.CancelledError:
+                    raise
+                except Exception as exc:
+                    if not _should_retry(exc) or delay is None:
+                        raise
+                    last_exc = exc
+                    logger.warning(
+                        "LLM call failed (attempt %d/%d, retrying in %.0fs): %s",
+                        attempt + 1, len(_RETRY_DELAYS) + 1, delay, exc,
+                    )
+                    await asyncio.sleep(delay)
+            raise last_exc  # type: ignore[misc]  # unreachable
 
         return await self._queue.submit(_call, priority=priority)
