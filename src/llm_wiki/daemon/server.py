@@ -825,9 +825,9 @@ class DaemonServer:
         """Build the per-page talk-page digest folded into wiki_read responses.
 
         Critical and moderate open entries are inlined verbatim under
-        `recent_critical` / `recent_moderate`. Everything else collapses
-        into counts + the librarian's stored 2-sentence summary.
-        Resolved entries are excluded from counts and `recent_*`.
+        `crit` / `mod`. Everything else collapses into counts + the
+        librarian's stored 2-sentence summary. Resolved entries are
+        excluded from counts and `crit`/`mod`.
         """
         from llm_wiki.librarian.talk_summary import TalkSummaryStore
         from llm_wiki.talk.page import TalkPage, compute_open_set

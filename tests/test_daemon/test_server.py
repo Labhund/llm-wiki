@@ -321,7 +321,7 @@ async def test_read_includes_open_issues(phase6a_daemon_server, sample_vault):
 
 @pytest.mark.asyncio
 async def test_read_inlines_critical_talk_entries(phase6a_daemon_server, sample_vault):
-    """Critical and moderate talk entries appear verbatim in `recent_*`."""
+    """Critical and moderate talk entries appear verbatim in `crit`/`mod`."""
     from llm_wiki.talk.page import TalkEntry, TalkPage
 
     server, sock_path = phase6a_daemon_server
