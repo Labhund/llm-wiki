@@ -431,3 +431,40 @@ async def test_issues_routes_include_severity(phase6a_daemon_server, sample_vaul
     assert get_resp["status"] == "ok"
     assert "severity" in get_resp["issue"]
     assert get_resp["issue"]["severity"] == "critical"
+
+
+@pytest.mark.asyncio
+async def test_attention_map_clamps_unknown_severity_to_minor(phase6a_daemon_server, sample_vault):
+    """An issue with a non-vocabulary severity is clamped to 'minor' in the totals."""
+    from llm_wiki.issues.queue import Issue, IssueQueue
+
+    server, sock_path = phase6a_daemon_server
+    queue = IssueQueue(sample_vault)
+    # Hand-craft an issue file bypassing the dataclass type-check, by writing
+    # the YAML directly with an out-of-vocabulary severity.
+    queue.add(Issue(
+        id=Issue.make_id("broken-citation", "srna-embeddings", "raw/x.pdf"),
+        type="broken-citation",
+        status="open",
+        severity="critical",  # legitimate value to satisfy the dataclass
+        title="Test",
+        page="srna-embeddings",
+        body="b",
+        created=Issue.now_iso(),
+        detected_by="auditor",
+    ))
+    # Then patch the on-disk file to have a typo, which is the realistic
+    # "human edited the YAML and made a typo" scenario.
+    issue_id = Issue.make_id("broken-citation", "srna-embeddings", "raw/x.pdf")
+    issue_file = sample_vault / ".issues" / f"{issue_id}.md"
+    text = issue_file.read_text(encoding="utf-8")
+    text = text.replace("severity: critical", "severity: bogus")
+    issue_file.write_text(text, encoding="utf-8")
+
+    resp = await _request(sock_path, {"type": "lint"})
+    assert resp["status"] == "ok"
+    am = resp["attention_map"]
+    # The bogus severity should NOT have created a new key in totals
+    assert set(am["totals"]["issues"].keys()) == {"critical", "moderate", "minor"}
+    # And the count should land in "minor" (the clamp default for issues)
+    assert am["totals"]["issues"]["minor"] >= 1

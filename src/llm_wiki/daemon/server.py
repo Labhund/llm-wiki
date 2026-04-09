@@ -359,9 +359,10 @@ class DaemonServer:
         all_issues = queue.list(status="open")
         page_issues = [i for i in all_issues if i.page == page_name]
 
-        by_severity: dict[str, int] = {"critical": 0, "moderate": 0, "minor": 0}
+        by_severity = _empty_severity_counts(_ISSUE_SEVERITIES)
         for issue in page_issues:
-            by_severity[issue.severity] = by_severity.get(issue.severity, 0) + 1
+            sev = _clamp_severity(issue.severity, _ISSUE_SEVERITIES, "minor")
+            by_severity[sev] += 1
 
         items = [
             {
@@ -402,10 +403,7 @@ class DaemonServer:
         empty = {
             "entry_count": 0,
             "open_count": 0,
-            "by_severity": {
-                "critical": 0, "moderate": 0, "minor": 0,
-                "suggestion": 0, "new_connection": 0,
-            },
+            "by_severity": _empty_severity_counts(_TALK_SEVERITIES),
             "summary": "",
             "recent_critical": [],
             "recent_moderate": [],
@@ -420,12 +418,10 @@ class DaemonServer:
         all_entries = talk.load()
         open_entries = compute_open_set(all_entries)
 
-        by_severity = {
-            "critical": 0, "moderate": 0, "minor": 0,
-            "suggestion": 0, "new_connection": 0,
-        }
+        by_severity = _empty_severity_counts(_TALK_SEVERITIES)
         for e in open_entries:
-            by_severity[e.severity] = by_severity.get(e.severity, 0) + 1
+            sev = _clamp_severity(e.severity, _TALK_SEVERITIES, "suggestion")
+            by_severity[sev] += 1
 
         recent_critical = [
             {"index": e.index, "ts": e.timestamp, "author": e.author, "body": e.body}
@@ -497,27 +493,25 @@ class DaemonServer:
 
         wiki_dir = self._vault_root / self._config.vault.wiki_dir.rstrip("/")
 
-        empty_issues = lambda: {"critical": 0, "moderate": 0, "minor": 0}
-        empty_talk = lambda: {
-            "critical": 0, "moderate": 0, "minor": 0,
-            "suggestion": 0, "new_connection": 0,
-        }
-
-        totals_issues = empty_issues()
-        totals_talk = empty_talk()
+        totals_issues = _empty_severity_counts(_ISSUE_SEVERITIES)
+        totals_talk = _empty_severity_counts(_TALK_SEVERITIES)
         by_page: dict[str, dict] = {}
 
         # Issues
         for issue in queue.list(status="open"):
-            sev = issue.severity if issue.severity in totals_issues else "minor"
+            sev = _clamp_severity(issue.severity, _ISSUE_SEVERITIES, "minor")
             totals_issues[sev] += 1
             page = issue.page or "<vault>"
             page_entry = by_page.setdefault(
-                page, {"issues": empty_issues(), "talk": empty_talk()},
+                page,
+                {
+                    "issues": _empty_severity_counts(_ISSUE_SEVERITIES),
+                    "talk": _empty_severity_counts(_TALK_SEVERITIES),
+                },
             )
             page_entry["issues"][sev] += 1
 
-        # Talk pages
+        # Talk pages — same shape, swap vocabularies
         if wiki_dir.exists():
             for talk_path in sorted(wiki_dir.rglob("*.talk.md")):
                 rel = talk_path.relative_to(wiki_dir)
@@ -528,10 +522,14 @@ class DaemonServer:
                 entries = TalkPage(talk_path).load()
                 open_entries = compute_open_set(entries)
                 for e in open_entries:
-                    sev = e.severity if e.severity in totals_talk else "suggestion"
+                    sev = _clamp_severity(e.severity, _TALK_SEVERITIES, "suggestion")
                     totals_talk[sev] += 1
                     page_entry = by_page.setdefault(
-                        page_name, {"issues": empty_issues(), "talk": empty_talk()},
+                        page_name,
+                        {
+                            "issues": _empty_severity_counts(_ISSUE_SEVERITIES),
+                            "talk": _empty_severity_counts(_TALK_SEVERITIES),
+                        },
                     )
                     page_entry["talk"][sev] += 1
 
@@ -747,3 +745,22 @@ def _serialize_issue(issue: "Issue", include_body: bool = False) -> dict:
     if include_body:
         data["body"] = issue.body
     return data
+
+
+# Severity vocabularies for the enriched routes. Issues use the strict
+# auditor subset; talk entries add suggestion + new_connection. Unknown
+# values are clamped to the safest in-vocabulary value rather than
+# silently growing the dict shape.
+_ISSUE_SEVERITIES: tuple[str, ...] = ("critical", "moderate", "minor")
+_TALK_SEVERITIES: tuple[str, ...] = (
+    "critical", "moderate", "minor", "suggestion", "new_connection",
+)
+
+
+def _empty_severity_counts(vocabulary: tuple[str, ...]) -> dict[str, int]:
+    return {sev: 0 for sev in vocabulary}
+
+
+def _clamp_severity(sev: str, vocabulary: tuple[str, ...], default: str) -> str:
+    """Return `sev` if in `vocabulary`, otherwise `default`."""
+    return sev if sev in vocabulary else default
