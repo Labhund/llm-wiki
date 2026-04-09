@@ -8,7 +8,7 @@ from llm_wiki.manifest import ManifestEntry, SectionInfo
 
 
 def _entry(name: str, links_to: list[str] | None = None, links_from: list[str] | None = None,
-           last_corroborated: str | None = None) -> ManifestEntry:
+           last_corroborated: str | None = None, is_synthesis: bool = False) -> ManifestEntry:
     return ManifestEntry(
         name=name,
         title=name.title(),
@@ -20,6 +20,7 @@ def _entry(name: str, links_to: list[str] | None = None, links_from: list[str] |
         links_to=links_to or [],
         links_from=links_from or [],
         last_corroborated=last_corroborated,
+        is_synthesis=is_synthesis,
     )
 
 
@@ -130,35 +131,31 @@ def test_compute_authority_full_formula():
 
 def test_synthesis_boost_raises_score():
     """A synthesis page with synthesis_boost=2.0 gets a higher score than without."""
-    entries = {
-        "synth": ManifestEntry(
-            name="synth", title="Synth", summary="", tags=[],
-            cluster="default", tokens=100,
-            sections=[SectionInfo(name="content", tokens=100)],
-            links_to=[], links_from=[],
-            is_synthesis=True,
-        ),
-    }
+    entries = {"synth": _entry("synth", is_synthesis=True)}
     baseline = compute_authority(entries, {}, synthesis_boost=1.0)
     boosted = compute_authority(entries, {}, synthesis_boost=2.0)
     assert boosted["synth"] > baseline["synth"]
 
 
 def test_synthesis_boost_caps_at_one():
-    """A synthesis page score never exceeds 1.0 regardless of boost."""
+    """A synthesis page score never exceeds 1.0 regardless of boost magnitude."""
     entries = {
-        "synth": ManifestEntry(
-            name="synth", title="Synth", summary="", tags=[],
-            cluster="default", tokens=100,
-            sections=[SectionInfo(name="content", tokens=100)],
-            links_to=[], links_from=["a", "b", "c"],
-            is_synthesis=True,
-        ),
+        "synth": _entry("synth", links_from=["a", "b", "c"], is_synthesis=True),
         "a": _entry("a"), "b": _entry("b"), "c": _entry("c"),
     }
     usage = {"synth": PageUsage(name="synth", read_count=5, turn_appearances=5, total_relevance=5.0)}
     result = compute_authority(entries, usage, synthesis_boost=10.0)
     assert result["synth"] <= 1.0
+
+
+def test_synthesis_boost_below_one_penalises():
+    """synthesis_boost < 1.0 reduces the synthesis page score (penalty case)."""
+    entries = {
+        "synth": _entry("synth", is_synthesis=True),
+    }
+    baseline = compute_authority(entries, {})
+    penalised = compute_authority(entries, {}, synthesis_boost=0.5)
+    assert penalised["synth"] < baseline["synth"]
 
 
 def test_synthesis_boost_does_not_affect_non_synthesis():

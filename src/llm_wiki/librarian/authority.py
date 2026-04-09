@@ -64,7 +64,7 @@ def compute_authority(
     - usefulness: avg_relevance from usage, capped at 1.0
     - freshness: per freshness_score()
     - outlink_quality: fraction of links_to that resolve to known pages
-    - synthesis_boost: multiplier applied to synthesis pages (capped at 1.0)
+    - synthesis_boost: multiplier applied to synthesis pages (>1.0 boosts, <1.0 penalises; result capped at 1.0)
     """
     if not entries:
         return {}
@@ -95,7 +95,7 @@ def compute_authority(
             + _W_OUTLINK * outlink
         )
 
-        if getattr(entry, "is_synthesis", False) and synthesis_boost != 1.0:
+        if entry.is_synthesis:
             score = min(1.0, score * synthesis_boost)
 
         result[name] = score
