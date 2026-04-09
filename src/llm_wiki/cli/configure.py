@@ -275,58 +275,28 @@ def _setup_custom() -> tuple[str, dict[str, Any]]:
 _PROVIDER_SETUP = [_setup_local, _setup_openai, _setup_anthropic, _setup_openrouter, _setup_custom]
 
 
-# ── Task role overrides ───────────────────────────────────────────────────────
+# ── Two-tier model setup ──────────────────────────────────────────────────────
 
-_ROLES = [
-    ("query",       "Answering user questions (your main interactive model)"),
-    ("ingest",      "Extracting concepts from documents"),
-    ("librarian",   "Background maintenance (linking, clustering)"),
-    ("adversary",   "Fact-checking claims in the wiki"),
-    ("compliance",  "Checking write quality and citations"),
-    ("commit",      "Summarising session commits"),
-]
+# Roles that warrant a smart (expensive) model
+_SMART_ROLES = ["query", "ingest"]
+# Roles routed to the fast (cheap) model
+_FAST_ROLES  = ["librarian", "adversary", "compliance", "commit", "talk_summary"]
 
 
-def _setup_role_overrides(backends: dict[str, dict], default_backend: str) -> dict[str, str]:
-    """Optionally assign different backends to specific roles."""
-    _info("By default, all tasks use the same backend you just configured.")
-    _info("You can optionally route specific tasks to a different backend")
-    _info("(e.g. a cheaper/faster model for background maintenance).")
+def _setup_fast_backend(smart_name: str, smart_cfg: dict) -> tuple[str, dict] | None:
+    """Prompt for a second, cheaper backend. Returns (name, cfg) or None to skip."""
+    _info("Background tasks (librarian, adversary, compliance, commit, talk_summary)")
+    _info("don't need your most powerful model. A cheaper/faster one saves cost.")
     print()
-    if not _yes_no("Configure per-task model overrides?", default=False):
-        return {}
+    if not _yes_no("Configure a separate fast/cheap model for background tasks?", default=True):
+        return None
 
-    overrides: dict[str, str] = {}
-    backend_names = list(backends.keys())
-
-    for role, description in _ROLES:
-        print()
-        _info(f"  {role}: {description}")
-        choices = [f"{n}  (current default)" if n == default_backend else n for n in backend_names]
-        choices += ["Add a new backend for this role", "Skip (use default)"]
-
-        idx = _choice(f"  Backend for '{role}':", choices, default=len(backend_names))
-        if idx < len(backend_names):
-            overrides[role] = backend_names[idx]
-        elif idx == len(backend_names):
-            # Add new backend
-            print()
-            _header("New Backend")
-            provider_idx = _choice("Provider:", _PROVIDERS, default=0)
-            name, backend_cfg = _PROVIDER_SETUP[provider_idx]()
-            # Pick a unique name
-            base_name = _PROVIDER_NAMES[provider_idx]
-            new_name = base_name
-            suffix = 2
-            while new_name in backends:
-                new_name = f"{base_name}{suffix}"
-                suffix += 1
-            backends[new_name] = backend_cfg
-            overrides[role] = new_name
-            _ok(f"Added backend '{new_name}' and assigned to '{role}'")
-        # else: skip — use default
-
-    return overrides
+    print()
+    _header("Fast / Cheap Model")
+    provider_idx = _choice("Provider:", _PROVIDERS, default=0)
+    _header(_PROVIDERS[provider_idx].split("  ")[0].strip())
+    _, backend_cfg = _PROVIDER_SETUP[provider_idx]()
+    return "fast", backend_cfg
 
 
 # ── Embeddings ────────────────────────────────────────────────────────────────
@@ -416,20 +386,27 @@ def run_wizard(vault_path: Path) -> None:
     _header(_PROVIDERS[provider_idx].split("  ")[0].strip())
 
     backend_name, backend_cfg = _PROVIDER_SETUP[provider_idx]()
-    backends: dict[str, dict] = {backend_name: backend_cfg}
-    default_backend = backend_name
+    backends: dict[str, dict] = {"smart": backend_cfg}
+    default_backend = "smart"
 
-    _ok(f"Backend '{backend_name}' configured")
+    _ok(f"Smart model configured  ({backend_cfg['model']})")
 
     # Capture OpenAI key for embeddings reuse
     openai_key = ""
     if backend_name == "openai":
         openai_key = backend_cfg.get("api_key", "")
 
-    # ── Per-task overrides ───────────────────────────────────────────────────
+    # ── Fast / cheap model ────────────────────────────────────────────────────
     print()
-    _header("Per-task Model Overrides  (optional)")
-    role_overrides = _setup_role_overrides(backends, default_backend)
+    _header("Fast / Cheap Model  (optional)")
+    fast_result = _setup_fast_backend("smart", backend_cfg)
+    role_overrides: dict[str, str] = {}
+    if fast_result:
+        fast_name, fast_cfg = fast_result
+        backends[fast_name] = fast_cfg
+        role_overrides = {role: "smart" for role in _SMART_ROLES}
+        role_overrides.update({role: fast_name for role in _FAST_ROLES})
+        _ok(f"Fast model configured  ({fast_cfg['model']})")
 
     # ── Embeddings ────────────────────────────────────────────────────────────
     print()
@@ -468,11 +445,14 @@ def run_wizard(vault_path: Path) -> None:
     # ── Summary ───────────────────────────────────────────────────────────────
     _header("Setup Complete")
 
+    has_fast = "fast" in backends
     features = [
-        (f"LLM backend ({backend_name})", True, None),
-        ("Embeddings / semantic search", embed_enabled, "disable with search.embeddings_enabled: false"),
-        ("Per-task model overrides", bool(role_overrides),
-         "run wizard again to configure"),
+        (f"Smart model  ({backend_cfg['model']})", True, None),
+        (f"Fast model  ({backends['fast']['model']})" if has_fast
+         else "Fast model  (using smart model for all tasks)",
+         has_fast, "run wizard again to configure"),
+        ("Embeddings / semantic search", embed_enabled,
+         "disable with search.embeddings_enabled: false"),
     ]
 
     enabled = sum(1 for _, ok, _ in features if ok)
