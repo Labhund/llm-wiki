@@ -388,6 +388,88 @@ This pass is hard to validate without empirical feedback. Suggested gates:
 
 ---
 
+## Bulk Read Tools — Minimise Tool Round-Trips
+
+**Origin:** The current single-page `wiki_read` forces large-context models into repeated decode→tool→prefill cycles. Every tool call is a full CoT cycle plus daemon latency. Prefill is 10-100x cheaper per token than decode — the optimal pattern for a frontier model with a large context window is to orient cheaply (manifest), then load everything relevant in one prefill pass, then reason across it all in a single decode pass. The current tool surface makes that impossible.
+
+**The economics:**
+
+Current implicit pattern:
+```
+manifest → wiki_read(top) → [decode + round-trip] → wiki_read(section) → [decode + round-trip]
+         → wiki_read(top, page2) → [decode + round-trip] → wiki_read(section, page2) → ...
+```
+
+Better pattern for large-context models:
+```
+manifest → wiki_read_many([page1, page2, page3]) → [one prefill, 15k tokens] → reason → write
+```
+
+The manifest already gives the agent the routing information it needs. The missing piece is a bulk loading tool to act on it in one shot.
+
+**The skill philosophy also needs updating.** The careful sip-at-a-time posture in the current skills was designed for 8-32k context windows. For large-context models, it actively penalises efficiency. Skills should acknowledge that the right behaviour is model/context-dependent: if context is abundant, load relevant content generously; tool round-trips are the bottleneck, not tokens.
+
+---
+
+### 1. `wiki_read_many` — Batch Page Load
+
+**What:** Read multiple pages in a single tool call, each with its own viewport specification.
+
+**Proposed interface:**
+```python
+wiki_read_many(pages=[
+    {"name": "rfdiffusion", "viewport": "full"},
+    {"name": "bindcraft", "viewport": "full"},
+    {"name": "protein-mpnn", "viewport": "section", "section": "training"},
+])
+```
+
+**Response:** Array of page results, each with the same structure as a single `wiki_read` response (content + inline issue/talk digest). Issues and talk digests are per-page.
+
+**What needs to change:**
+1. New tool definition in `src/llm_wiki/mcp/tools.py`
+2. New daemon handler — fan out to existing page-read logic, collect results
+3. Tool description should make the efficiency rationale explicit: "use this when you need multiple pages — one tool call instead of N"
+4. Update skill files to recommend batch reads when loading a cluster or multiple related pages
+
+---
+
+### 2. `wiki_read_cluster` — Load an Entire Cluster
+
+**What:** Load all pages in a named cluster in one call. The manifest already organises pages into clusters; this makes bulk cluster loading a first-class operation.
+
+**Proposed interface:**
+```python
+wiki_read_cluster("protein-design", viewport="full")
+# or with per-page viewport:
+wiki_read_cluster("protein-design", viewport="top")  # just overviews of all pages
+```
+
+**Response:** Same as `wiki_read_many` — array of page results.
+
+**Note:** For very large clusters, the agent should check total token count from the manifest before calling this. The tool should include the token total in the response envelope so the agent can reason about what it loaded. This is information, not enforcement.
+
+**What needs to change:**
+1. New tool definition (can delegate to `wiki_read_many` internally once cluster members are resolved from manifest)
+2. Daemon handler resolves cluster name to page list, fans out
+3. Response includes `cluster_tokens: N` in the envelope
+
+---
+
+### 3. Skill Philosophy Update
+
+**What:** Add an explicit note to `index.md` and `research.md` acknowledging that tool round-trips have real cost (decode cycle + latency) and that bulk loading is preferred for large-context models.
+
+**Suggested framing:**
+> "Each tool call is a round-trip — a decode cycle plus daemon latency. Prefill is cheap; decode is expensive. If you need multiple pages, `wiki_read_many` in one call is strictly better than N sequential `wiki_read` calls. Orient with the manifest, then load what you need in bulk."
+
+**What needs to change:**
+1. Add inference economics note to `index.md` universal principles
+2. Update Mode 3 in `research.md` to recommend `wiki_read_many` once it exists
+3. Add to gallery examples once tools are implemented
+
+---
+
 ## Future Ideas
 
 - **Vault → Managed migration tool**: Pre-packaged workflow that lets 4-8 local LLMs loose on an unstructured Obsidian vault over days/weeks to reorganize it into managed structure (raw sources separated, index built, cross-references added, provenance established). Automated "get it ship shape" pipeline.
