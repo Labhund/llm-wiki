@@ -162,6 +162,37 @@ class Vault:
         # Default: "top"
         return self._viewport_top(page, budget)
 
+    def read_multi_sections(
+        self,
+        name: str,
+        section_names: list[str],
+        budget: int | None = None,
+    ) -> dict | None:
+        """Read multiple named sections from one page in a single call."""
+        page = self._pages.get(name)
+        if page is None:
+            return None
+
+        found = []
+        missing = []
+        for sn in section_names:
+            text = self._viewport_section(page, sn)
+            if text is None:
+                missing.append(sn)
+            else:
+                found.append(text)
+
+        content = "\n\n---\n\n".join(found)
+        if budget and count_tokens(content) > budget:
+            content = content[: budget * 4].rsplit("\n", 1)[0] + "\n... (truncated)"
+
+        return {"content": content, "missing_sections": missing}
+
+    def pages_in_cluster(self, cluster_name: str) -> list[str]:
+        """Return the page names belonging to a named cluster."""
+        entries = self._store._clusters.get(cluster_name, [])
+        return [e.name for e in entries]
+
     def manifest_text(self, budget: int = 16000) -> str:
         return self._store.manifest_text(budget=budget)
 
