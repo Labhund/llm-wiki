@@ -87,7 +87,27 @@ class AdversaryAgent:
         # 2. Sample
         n = self._config.maintenance.adversary_claims_per_run
         now = datetime.datetime.now(datetime.timezone.utc)
-        sampled = sample_claims(all_claims, entries, n=n, rng=self._rng, now=now)
+
+        # Build unread sources set for adversary upweighting
+        unread_sources: set[str] = set()
+        raw_dir = self._vault_root / "raw"
+        if raw_dir.is_dir():
+            from llm_wiki.ingest.source_meta import read_frontmatter
+            for md_file in raw_dir.glob("*.md"):
+                fm = read_frontmatter(md_file)
+                if fm.get("reading_status") == "unread":
+                    # Add both the companion path and the likely binary path
+                    unread_sources.add(f"raw/{md_file.name}")
+                    for ext in (".pdf", ".docx", ".png", ".jpg", ".jpeg", ".gif", ".bmp", ".tiff"):
+                        binary = md_file.with_suffix(ext)
+                        if binary.exists():
+                            unread_sources.add(f"raw/{binary.name}")
+
+        sampled = sample_claims(
+            all_claims, entries, n=n, rng=self._rng, now=now,
+            unread_sources=unread_sources,
+            unread_weight=self._config.maintenance.adversary_unread_weight,
+        )
 
         # 3. Verify each
         for claim in sampled:

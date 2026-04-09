@@ -120,3 +120,40 @@ def test_sample_claims_handles_unknown_page_in_entries():
     now = datetime.datetime(2026, 4, 8, tzinfo=datetime.timezone.utc)
     result = sample_claims(claims, {}, n=1, rng=Random(0), now=now)
     assert len(result) == 1
+
+
+def test_sample_claims_unread_source_weight():
+    """Claims from unread sources are picked more often when unread_weight > 1."""
+    now = datetime.datetime(2026, 4, 10, tzinfo=datetime.timezone.utc)
+    unread = [_claim(f"u{i}", i) for i in range(10)]
+    read_claims = [_claim(f"r{i}", i) for i in range(10)]
+
+    # Give all entries equal authority and freshness so only unread_weight differs
+    entries = {
+        **{f"u{i}": _entry(f"u{i}", authority=0.5) for i in range(10)},
+        **{f"r{i}": _entry(f"r{i}", authority=0.5) for i in range(10)},
+    }
+    # Unread source paths match claim citations: "raw/u0.pdf" etc.
+    unread_sources = {f"raw/u{i}.pdf" for i in range(10)}
+
+    unread_picked = 0
+    for seed in range(50):
+        sample = sample_claims(
+            unread + read_claims, entries, n=2,
+            rng=Random(seed), now=now,
+            unread_sources=unread_sources,
+            unread_weight=3.0,
+        )
+        unread_picked += sum(1 for c in sample if c.page.startswith("u"))
+
+    assert unread_picked > 60, f"unread claims should be favored, got {unread_picked}/100"
+
+
+def test_sample_claims_unread_weight_none_has_no_effect():
+    """Passing unread_sources=None must not change sampling behavior."""
+    now = datetime.datetime(2026, 4, 10, tzinfo=datetime.timezone.utc)
+    claims = [_claim(f"p{i}", i) for i in range(10)]
+    entries = {f"p{i}": _entry(f"p{i}") for i in range(10)}
+    a = sample_claims(claims, entries, n=5, rng=Random(7), now=now, unread_sources=None)
+    b = sample_claims(claims, entries, n=5, rng=Random(7), now=now)
+    assert [c.id for c in a] == [c.id for c in b]
