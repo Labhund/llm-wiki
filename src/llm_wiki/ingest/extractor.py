@@ -3,11 +3,14 @@ from __future__ import annotations
 import asyncio
 import base64
 import json
+import logging
 import tempfile
 import urllib.request
 from dataclasses import dataclass, replace
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
+
+_log = logging.getLogger(__name__)
 
 from llm_wiki.tokens import count_tokens
 
@@ -149,7 +152,8 @@ async def _extract_pdf(
     elif extractor == "nougat":
         result = await _extract_pdf_nougat(path)
     else:
-        # Unknown value — fall back to pdftotext
+        # Unknown value — fall back to pdftotext and warn so misconfiguration is visible
+        _log.warning("Unknown pdf_extractor %r — falling back to pdftotext", extractor)
         result = await _extract_pdf_pdftotext(path)
 
     if result.success:
@@ -193,7 +197,7 @@ async def _extract_pdf_local_ocr(
     Renders each PDF page to a PNG via pdftoppm, then sends all page images
     in a single vision API call.
     """
-    loop = asyncio.get_event_loop()
+    loop = asyncio.get_running_loop()
     try:
         page_images = await loop.run_in_executor(None, _render_pdf_pages_to_base64, path)
     except Exception as exc:
