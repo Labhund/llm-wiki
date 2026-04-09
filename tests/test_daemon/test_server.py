@@ -60,6 +60,98 @@ async def test_read_section(daemon_server):
 
 
 @pytest.mark.asyncio
+async def test_read_sections_viewport(daemon_server):
+    server, sock_path = daemon_server
+    resp = await _request(sock_path, {
+        "type": "read",
+        "page_name": "srna-embeddings",
+        "viewport": "sections",
+        "sections": ["method", "clustering"],
+    })
+    assert resp["status"] == "ok"
+    assert "PCA" in resp["content"]
+    assert "missing_sections" in resp
+    assert resp["missing_sections"] == []
+
+
+@pytest.mark.asyncio
+async def test_read_sections_viewport_missing(daemon_server):
+    server, sock_path = daemon_server
+    resp = await _request(sock_path, {
+        "type": "read",
+        "page_name": "srna-embeddings",
+        "viewport": "sections",
+        "sections": ["method", "bogus-section"],
+    })
+    assert resp["status"] == "ok"
+    assert "bogus-section" in resp["missing_sections"]
+
+
+@pytest.mark.asyncio
+async def test_read_many(daemon_server):
+    server, sock_path = daemon_server
+    resp = await _request(sock_path, {
+        "type": "read-many",
+        "pages": [
+            {"name": "srna-embeddings", "viewport": "top"},
+            {"name": "clustering-metrics", "viewport": "top"},
+        ],
+    })
+    assert resp["status"] == "ok"
+    assert len(resp["pages"]) == 2
+    names = {p["name"] for p in resp["pages"]}
+    assert "srna-embeddings" in names
+    assert "clustering-metrics" in names
+    for page in resp["pages"]:
+        assert page["status"] == "ok"
+        assert "content" in page
+
+
+@pytest.mark.asyncio
+async def test_read_many_missing_page(daemon_server):
+    server, sock_path = daemon_server
+    resp = await _request(sock_path, {
+        "type": "read-many",
+        "pages": [
+            {"name": "srna-embeddings", "viewport": "top"},
+            {"name": "nonexistent-page", "viewport": "top"},
+        ],
+    })
+    assert resp["status"] == "ok"
+    results = {p["name"]: p for p in resp["pages"]}
+    assert results["srna-embeddings"]["status"] == "ok"
+    assert results["nonexistent-page"]["status"] == "error"
+
+
+@pytest.mark.asyncio
+async def test_read_cluster(daemon_server):
+    server, sock_path = daemon_server
+    resp = await _request(sock_path, {
+        "type": "read-cluster",
+        "cluster": "bioinformatics",
+        "viewport": "top",
+    })
+    assert resp["status"] == "ok"
+    assert resp["cluster"] == "bioinformatics"
+    assert "cluster_tokens" in resp
+    assert isinstance(resp["cluster_tokens"], int)
+    names = {p["name"] for p in resp["pages"]}
+    assert "srna-embeddings" in names
+    assert "inter-rep-variant-analysis" in names
+
+
+@pytest.mark.asyncio
+async def test_read_cluster_unknown(daemon_server):
+    server, sock_path = daemon_server
+    resp = await _request(sock_path, {
+        "type": "read-cluster",
+        "cluster": "no-such-cluster",
+    })
+    assert resp["status"] == "error"
+    assert "no-such-cluster" in resp["message"]
+
+
+@pytest.mark.asyncio
 async def test_read_missing(daemon_server):
     server, sock_path = daemon_server
     resp = await _request(sock_path, {

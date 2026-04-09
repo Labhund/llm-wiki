@@ -267,3 +267,54 @@ def test_vault_scan_ignores_raw_companion_files(tmp_path: Path):
     assert "real-page" in vault.manifest_entries()
     assert "2026-04-10-paper" not in vault.manifest_entries()
     assert vault.page_count == 1
+
+
+def test_read_multi_sections_returns_found_sections(sample_vault):
+    vault = Vault.scan(sample_vault)
+    result = vault.read_multi_sections("srna-embeddings", ["method", "clustering"])
+    assert result is not None
+    assert "PCA" in result["content"]  # from method section
+    assert "k-means" in result["content"]  # from clustering section
+    assert result["missing_sections"] == []
+
+
+def test_read_multi_sections_tracks_missing(sample_vault):
+    vault = Vault.scan(sample_vault)
+    result = vault.read_multi_sections("srna-embeddings", ["method", "nonexistent"])
+    assert result is not None
+    assert "PCA" in result["content"]
+    assert "nonexistent" in result["missing_sections"]
+
+
+def test_read_multi_sections_all_missing(sample_vault):
+    vault = Vault.scan(sample_vault)
+    result = vault.read_multi_sections("srna-embeddings", ["nope", "also-nope"])
+    assert result is not None
+    assert result["content"] == ""
+    assert set(result["missing_sections"]) == {"nope", "also-nope"}
+
+
+def test_read_multi_sections_page_not_found(sample_vault):
+    vault = Vault.scan(sample_vault)
+    result = vault.read_multi_sections("nonexistent-page", ["overview"])
+    assert result is None
+
+
+def test_read_multi_sections_empty_list(sample_vault):
+    vault = Vault.scan(sample_vault)
+    result = vault.read_multi_sections("srna-embeddings", [])
+    assert result is not None
+    assert result["content"] == ""
+    assert result["missing_sections"] == []
+
+
+def test_pages_in_cluster_returns_pages(sample_vault):
+    vault = Vault.scan(sample_vault)
+    pages = vault.pages_in_cluster("bioinformatics")
+    assert "srna-embeddings" in pages
+    assert "inter-rep-variant-analysis" in pages
+
+
+def test_pages_in_cluster_unknown_returns_empty(sample_vault):
+    vault = Vault.scan(sample_vault)
+    assert vault.pages_in_cluster("no-such-cluster") == []
