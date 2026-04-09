@@ -487,6 +487,14 @@ class DaemonServer:
                 return await self._handle_page_append(request)
             case "session-close":
                 return await self._handle_session_close(request)
+            case "inbox-create":
+                return await self._handle_inbox_create(request)
+            case "inbox-get":
+                return await self._handle_inbox_get(request)
+            case "inbox-write":
+                return await self._handle_inbox_write(request)
+            case "inbox-list":
+                return await self._handle_inbox_list(request)
             case _:
                 return {"status": "error", "message": f"Unknown request type: {req_type}"}
 
@@ -517,6 +525,125 @@ class DaemonServer:
             "settled": True,
             "commit_sha": result.commit_sha,
         }
+
+    async def _handle_inbox_create(self, request: dict) -> dict:
+        source_path_str = request.get("source_path", "")
+        title = request.get("title", "")
+        claims = request.get("claims", [])
+        author = request.get("author", "cli")
+
+        if not title:
+            return {"status": "error", "message": "Missing required field: title"}
+        if not source_path_str:
+            return {"status": "error", "message": "Missing required field: source_path"}
+
+        # Normalize to relative raw/<filename>
+        source_path = Path(source_path_str)
+        if source_path.is_absolute():
+            try:
+                source_path_str = str(source_path.relative_to(self._vault_root))
+            except ValueError:
+                return {"status": "error", "message": "source_path must be under the vault root"}
+        if not source_path_str.startswith("raw/"):
+            return {"status": "error", "message": "source_path must be under raw/"}
+
+        from llm_wiki.ingest.plan import create_plan_file
+        try:
+            plan_path = create_plan_file(
+                self._vault_root, source_path_str, title, claims,
+                inbox_dir=self._config.vault.inbox_dir.rstrip("/"),
+            )
+        except FileExistsError as e:
+            return {"status": "error", "message": str(e)}
+
+        rel_path = str(plan_path.relative_to(self._vault_root))
+        commit_msg = (
+            f"plan: create inbox plan for {Path(source_path_str).name}\n\n"
+            f"Agent: {author}"
+        )
+        import subprocess as _sp
+        async with self._commit_lock:
+            _sp.run(["git", "add", rel_path], cwd=self._vault_root, check=True, capture_output=True)
+            _sp.run(["git", "commit", "-m", commit_msg], cwd=self._vault_root, check=True, capture_output=True)
+
+        return {
+            "status": "ok",
+            "plan_path": rel_path,
+            "source": source_path_str,
+        }
+
+    async def _handle_inbox_get(self, request: dict) -> dict:
+        plan_path_str = request.get("plan_path", "")
+        if not plan_path_str:
+            return {"status": "error", "message": "Missing required field: plan_path"}
+
+        inbox_dir = self._vault_root / self._config.vault.inbox_dir.rstrip("/")
+        plan_path = (self._vault_root / plan_path_str).resolve()
+        try:
+            plan_path.relative_to(inbox_dir.resolve())
+        except ValueError:
+            return {"status": "error", "message": "plan_path must be under inbox/"}
+
+        if not plan_path.exists():
+            return {"status": "error", "message": f"Plan file not found: {plan_path_str}"}
+
+        content = plan_path.read_text(encoding="utf-8")
+        from llm_wiki.ingest.plan import read_plan_frontmatter
+        fm = read_plan_frontmatter(plan_path)
+        return {"status": "ok", "content": content, "frontmatter": fm}
+
+    async def _handle_inbox_write(self, request: dict) -> dict:
+        plan_path_str = request.get("plan_path", "")
+        content = request.get("content", "")
+        author = request.get("author", "cli")
+
+        if not plan_path_str:
+            return {"status": "error", "message": "Missing required field: plan_path"}
+        if not content:
+            return {"status": "error", "message": "content must not be empty"}
+
+        inbox_dir = self._vault_root / self._config.vault.inbox_dir.rstrip("/")
+        plan_path = (self._vault_root / plan_path_str).resolve()
+        try:
+            plan_path.relative_to(inbox_dir.resolve())
+        except ValueError:
+            return {"status": "error", "message": "plan_path must be under inbox/"}
+
+        plan_path.write_text(content, encoding="utf-8")
+
+        rel_path = str(plan_path.relative_to(self._vault_root))
+        commit_msg = (
+            f"plan: checkpoint {plan_path.name}\n\n"
+            f"Agent: {author}"
+        )
+        import subprocess as _sp
+        async with self._commit_lock:
+            _sp.run(["git", "add", rel_path], cwd=self._vault_root, check=True, capture_output=True)
+            _sp.run(["git", "commit", "-m", commit_msg], cwd=self._vault_root, check=True, capture_output=True)
+
+        return {"status": "ok", "plan_path": rel_path}
+
+    async def _handle_inbox_list(self, request: dict) -> dict:
+        inbox_dir = self._vault_root / self._config.vault.inbox_dir.rstrip("/")
+        if not inbox_dir.is_dir():
+            return {"status": "ok", "plans": []}
+
+        from llm_wiki.ingest.plan import read_plan_frontmatter, count_unchecked_claims
+        plans = []
+        for f in sorted(inbox_dir.iterdir()):
+            if not f.is_file() or f.suffix.lower() not in (".md", ".markdown"):
+                continue
+            fm = read_plan_frontmatter(f)
+            content = f.read_text(encoding="utf-8")
+            plans.append({
+                "path": f"inbox/{f.name}",
+                "source": fm.get("source", ""),
+                "started": fm.get("started", ""),
+                "status": fm.get("status", ""),
+                "sessions": fm.get("sessions", 0),
+                "unchecked_claims": count_unchecked_claims(content),
+            })
+        return {"status": "ok", "plans": plans}
 
     async def _handle_page_create(self, request: dict) -> dict:
         if self._page_write_service is None:
