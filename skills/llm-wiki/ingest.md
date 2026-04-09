@@ -1,0 +1,53 @@
+---
+name: llm-wiki/ingest
+description: Use when incorporating an external source (paper, PDF, document) into an llm-wiki vault. Three-act conversational protocol with hybrid manual+automated synthesis. Attended mode.
+---
+
+# LLM-Wiki Ingest — Attended Source Synthesis
+
+Ingestion is inherently conversational and multi-turn. It touches multiple pages in one session.
+
+## Act 1 — Read the Source First
+
+Before touching any wiki tool, read the source:
+- Abstract and intro at minimum
+- Full document if short
+
+Form a view: what are the key concepts, what claims does it make, what is genuinely novel vs. already-known territory. This calibrates all subsequent wiki interactions — you cannot search for the right things until you know what the source is about.
+
+## Act 2 — Ask the User How to Handle It
+
+State what you found, then offer the choice:
+
+> "This [paper/document] covers [X, Y, Z]. [X] looks like it may already have wiki coverage; [Y and Z] appear to be new territory.
+>
+> **Conversational** — we orient in the wiki together, discuss what to create vs. update, I can write key pages manually and use `wiki_ingest` to catch connections and fill gaps
+> **Automated** — I run `wiki_ingest --dry-run` to preview what would be created, you confirm, then I execute"
+
+Wait for the user's response; if none comes, use the automated path.
+
+## Act 3 — Execute
+
+### Conversational Path
+
+1. `wiki_manifest` + `wiki_search` for each key concept identified in Act 1
+2. Discuss findings with user: what is already covered, what is new, what contradicts existing pages
+3. Decide together: manual pages for important synthesis, `wiki_ingest` to catch connections and fill gaps — this hybrid is explicitly endorsed
+4. Write in one session — do not close mid-ingest
+5. After writing, ensure wikilinks exist between new/updated pages and their neighbours
+6. `wiki_session_close`
+
+### Automated Path
+
+1. `wiki_ingest --dry-run` — show the user what concepts would be extracted and which pages would be created or updated
+2. Confirm with user
+3. `wiki_ingest` to execute
+4. Report what was created and updated
+5. `wiki_session_close`
+
+## Key Synthesis Principle
+
+Do not just extract claims into the wiki. For each concept: how does it connect to what is already there? Does it contradict, extend, or confirm existing pages?
+- Contradictions → `wiki_talk_post`
+- Extensions → page body with citation
+- Confirmations → note in relevant claim's context
