@@ -198,4 +198,112 @@ def parse_patch(text: str) -> Patch:
     return Patch(op="update", target_path=target_path, hunks=hunks)
 
 
-# Applier follows in Tasks 5–6 below.
+def apply_patch(patch: Patch, current_content: str) -> tuple[str, ApplyResult]:
+    """Apply a parsed Patch to file content. Returns (new_content, result).
+
+    Exact-match path only in this revision: every context line and every
+    remove line must appear in the file at the position indicated by the
+    hunk. Fuzzy fallback is added in Task 6.
+
+    Raises:
+        PatchConflict: if a hunk's context cannot be located exactly.
+    """
+    if patch.op != "update":
+        raise PatchConflict(
+            f"apply_patch only supports op='update', got {patch.op!r}"
+        )
+
+    lines = current_content.splitlines(keepends=True)
+    cursor = 0  # Index into `lines` — we walk forward as we apply hunks.
+    additions = 0
+    removals = 0
+
+    for hunk in patch.hunks:
+        new_cursor, new_lines, h_adds, h_rems = _apply_hunk_exact(
+            hunk, lines, start=cursor,
+        )
+        lines = new_lines
+        cursor = new_cursor
+        additions += h_adds
+        removals += h_rems
+
+    return "".join(lines), ApplyResult(
+        additions=additions,
+        removals=removals,
+        applied_via="exact",
+    )
+
+
+def _apply_hunk_exact(
+    hunk: Hunk,
+    lines: list[str],
+    start: int,
+) -> tuple[int, list[str], int, int]:
+    """Apply one hunk to `lines` starting at index `start`.
+
+    Returns (cursor_after_hunk, new_lines, additions, removals).
+    Raises PatchConflict if the hunk cannot be matched exactly.
+    """
+    # Build the sequence of "expected file lines" — context + remove, in order.
+    expected: list[str] = [
+        l.text for l in hunk.lines if l.kind in ("context", "remove")
+    ]
+
+    # Search forward from `start` for a window of `lines` that matches `expected`.
+    match_start = _find_window(lines, expected, search_from=start)
+    if match_start is None:
+        excerpt = _excerpt_around(lines, start, hunk.context_hint)
+        raise PatchConflict(
+            f"Could not locate hunk context: {hunk.context_hint or '<no hint>'}",
+            current_excerpt=excerpt,
+        )
+
+    # Build the replacement: walk hunk.lines, emit context+add, drop remove.
+    replacement: list[str] = []
+    for hl in hunk.lines:
+        if hl.kind == "remove":
+            continue
+        replacement.append(hl.text + "\n")
+
+    additions = sum(1 for l in hunk.lines if l.kind == "add")
+    removals = sum(1 for l in hunk.lines if l.kind == "remove")
+
+    new_lines = (
+        lines[:match_start]
+        + replacement
+        + lines[match_start + len(expected) :]
+    )
+    new_cursor = match_start + len(replacement)
+    return new_cursor, new_lines, additions, removals
+
+
+def _find_window(
+    lines: list[str],
+    expected: list[str],
+    search_from: int = 0,
+) -> int | None:
+    """Find the index in `lines` where `expected` appears verbatim.
+
+    Compares stripped trailing newlines so the patch's "context line text"
+    matches the file's "line including trailing newline."
+    """
+    if not expected:
+        return None
+    n = len(expected)
+    for i in range(search_from, len(lines) - n + 1):
+        match = True
+        for j in range(n):
+            file_line = lines[i + j].rstrip("\n").rstrip("\r")
+            if file_line != expected[j]:
+                match = False
+                break
+        if match:
+            return i
+    return None
+
+
+def _excerpt_around(lines: list[str], start: int, hint: str) -> str:
+    """Return ~6 lines of context around the failed match site."""
+    lo = max(0, start - 2)
+    hi = min(len(lines), start + 6)
+    return "".join(lines[lo:hi])

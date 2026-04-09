@@ -189,6 +189,79 @@ def test_parse_patch_addition_only_hunk():
     assert sum(1 for l in lines if l.kind == "remove") == 0
 
 
+SIMPLE_PAGE = """\
+---
+title: T
+---
+
+## Methods
+
+We trained on 50k sequences using k-means
+with cosine similarity, learning rate 1e-4.
+The clustering converged in 12 epochs.
+
+## Results
+
+Accuracy: 0.93.
+"""
+
+
+def test_apply_patch_exact_match_single_hunk():
+    from llm_wiki.daemon.v4a_patch import apply_patch, parse_patch
+    patch = parse_patch(SIMPLE_PATCH)
+    new_content, result = apply_patch(patch, SIMPLE_PAGE)
+    assert "learning rate 3e-4" in new_content
+    assert "learning rate 1e-4" not in new_content
+    assert result.applied_via == "exact"
+    assert result.additions == 1
+    assert result.removals == 1
+
+
+def test_apply_patch_preserves_unrelated_content():
+    """Lines outside the hunk's context are unchanged."""
+    from llm_wiki.daemon.v4a_patch import apply_patch, parse_patch
+    patch = parse_patch(SIMPLE_PATCH)
+    new_content, _ = apply_patch(patch, SIMPLE_PAGE)
+    assert "## Results" in new_content
+    assert "Accuracy: 0.93." in new_content
+
+
+def test_apply_patch_addition_only_inserts_after_context():
+    from llm_wiki.daemon.v4a_patch import apply_patch, parse_patch
+    page = (
+        "## End\n\n"
+        "last existing line\n"
+    )
+    patch = parse_patch(ADDITION_ONLY_PATCH)
+    new_content, result = apply_patch(patch, page)
+    assert "brand new line one" in new_content
+    assert "brand new line two" in new_content
+    # Original line preserved
+    assert "last existing line" in new_content
+    assert result.removals == 0
+    assert result.additions == 2
+
+
+def test_apply_patch_multi_hunk():
+    from llm_wiki.daemon.v4a_patch import apply_patch, parse_patch
+    page = (
+        "## Section A\n\n"
+        "first context\n"
+        "old text\n"
+        "\n"
+        "## Section B\n\n"
+        "second context\n"
+        "trailing context\n"
+    )
+    patch = parse_patch(MULTI_HUNK_PATCH)
+    new_content, result = apply_patch(patch, page)
+    assert "new text" in new_content
+    assert "old text" not in new_content
+    assert "entirely new line" in new_content
+    assert result.additions == 2
+    assert result.removals == 1
+
+
 def test_parse_patch_blank_context_line_inside_hunk():
     """A blank line in the middle of a hunk is treated as an empty context line.
 
