@@ -1,11 +1,113 @@
 from __future__ import annotations
 
+import asyncio
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
 from llm_wiki.daemon.llm_queue import LLMQueue
-from llm_wiki.traverse.llm_client import LLMClient, LLMResponse
+from llm_wiki.traverse.llm_client import LLMClient, LLMResponse, _should_retry
+
+
+def _make_client():
+    """Create an LLMClient with a simple pass-through mock queue."""
+    queue = MagicMock()
+    # queue.submit(fn, priority=...) should call fn() directly
+    async def submit(fn, priority="query"):
+        return await fn()
+    queue.submit = submit
+    queue.record_tokens = MagicMock()
+    return LLMClient(queue=queue, model="openai/test", api_base="http://localhost:4000/v1")
+
+
+def test_should_retry_connection_error():
+    assert _should_retry(ConnectionError("refused")) is True
+
+
+def test_should_retry_503():
+    exc = Exception("service unavailable")
+    exc.status_code = 503
+    assert _should_retry(exc) is True
+
+
+def test_should_not_retry_401():
+    exc = Exception("unauthorized")
+    exc.status_code = 401
+    assert _should_retry(exc) is False
+
+
+def test_should_not_retry_400():
+    exc = Exception("bad request")
+    exc.status_code = 400
+    assert _should_retry(exc) is False
+
+
+def test_should_not_retry_litellm_auth_error_even_when_status_500():
+    """litellm.AuthenticationError is permanent even if it reports status_code=500."""
+    import litellm as _litellm
+    exc = _litellm.AuthenticationError("no key", llm_provider="openai", model="gpt-4")
+    exc.status_code = 500  # simulate litellm's unexpected status mapping
+    assert _should_retry(exc) is False
+
+
+@pytest.mark.asyncio
+async def test_complete_retries_on_transient_error():
+    """complete() retries up to 3 times on transient failures then succeeds."""
+    call_count = {"n": 0}
+
+    async def fake_completion(**kwargs):
+        call_count["n"] += 1
+        if call_count["n"] < 3:
+            raise ConnectionError("connection refused")
+        resp = MagicMock()
+        resp.choices[0].message.content = "answer"
+        resp.usage.total_tokens = 10
+        return resp
+
+    client = _make_client()
+    with patch("litellm.acompletion", side_effect=fake_completion):
+        with patch("asyncio.sleep", new_callable=AsyncMock):  # skip real delays
+            result = await client.complete([{"role": "user", "content": "hi"}])
+
+    assert result.content == "answer"
+    assert call_count["n"] == 3
+
+
+@pytest.mark.asyncio
+async def test_complete_does_not_retry_permanent_error():
+    """complete() raises immediately on a permanent error (401)."""
+    call_count = {"n": 0}
+
+    async def fake_completion(**kwargs):
+        call_count["n"] += 1
+        exc = Exception("unauthorized")
+        exc.status_code = 401
+        raise exc
+
+    client = _make_client()
+    with patch("litellm.acompletion", side_effect=fake_completion):
+        with pytest.raises(Exception, match="unauthorized"):
+            await client.complete([{"role": "user", "content": "hi"}])
+
+    assert call_count["n"] == 1  # no retries
+
+
+@pytest.mark.asyncio
+async def test_complete_raises_after_max_retries():
+    """complete() raises after exhausting all 3 retries."""
+    call_count = {"n": 0}
+
+    async def fake_completion(**kwargs):
+        call_count["n"] += 1
+        raise ConnectionError("always fails")
+
+    client = _make_client()
+    with patch("litellm.acompletion", side_effect=fake_completion):
+        with patch("asyncio.sleep", new_callable=AsyncMock):
+            with pytest.raises(ConnectionError):
+                await client.complete([{"role": "user", "content": "hi"}])
+
+    assert call_count["n"] == 4  # 1 initial + 3 retries
 
 
 def _make_mock_response(content: str, total_tokens: int) -> MagicMock:

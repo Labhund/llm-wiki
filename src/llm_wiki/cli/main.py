@@ -1,7 +1,9 @@
 from __future__ import annotations
 
+import os
 import subprocess
 import sys
+import tempfile
 import time
 from pathlib import Path
 
@@ -15,6 +17,17 @@ from llm_wiki.daemon.lifecycle import (
     socket_path_for,
 )
 from llm_wiki.vault import Vault
+
+
+def _default_vault_path() -> str:
+    """Resolve vault path: LLM_WIKI_VAULT env → ~/wiki → '.'"""
+    env = os.environ.get("LLM_WIKI_VAULT", "").strip()
+    if env:
+        return env
+    home_wiki = Path.home() / "wiki"
+    if home_wiki.is_dir():
+        return str(home_wiki)
+    return "."
 
 
 def _get_client(vault_path: Path, auto_start: bool = True) -> DaemonClient:
@@ -31,19 +44,36 @@ def _get_client(vault_path: Path, auto_start: bool = True) -> DaemonClient:
         )
 
     click.echo("Starting daemon...", err=True)
-    subprocess.Popen(
-        [sys.executable, "-m", "llm_wiki.daemon", str(vault_path.resolve())],
-        start_new_session=True,
-        stdout=subprocess.DEVNULL,
-        stderr=subprocess.DEVNULL,
-    )
 
-    for _ in range(60):
-        time.sleep(0.5)
-        if client.is_running():
-            return client
+    # Capture stderr so startup errors are visible immediately instead of after 30s.
+    stderr_fd, stderr_path_str = tempfile.mkstemp(suffix=".log", prefix="llm-wiki-start-")
+    stderr_path = Path(stderr_path_str)
+    try:
+        proc = subprocess.Popen(
+            [sys.executable, "-m", "llm_wiki.daemon", str(vault_path.resolve())],
+            start_new_session=True,
+            stdout=subprocess.DEVNULL,
+            stderr=stderr_fd,
+        )
+        os.close(stderr_fd)
+        stderr_fd = -1
 
-    raise click.ClickException("Daemon failed to start within 30 seconds")
+        for _ in range(60):
+            time.sleep(0.5)
+            if client.is_running():
+                return client
+            if proc.poll() is not None:
+                err_text = stderr_path.read_text().strip()
+                raise click.ClickException(
+                    f"Daemon failed to start.\n{err_text}" if err_text
+                    else "Daemon failed to start (no error output captured)."
+                )
+
+        raise click.ClickException("Daemon failed to start within 30 seconds")
+    finally:
+        if stderr_fd >= 0:
+            os.close(stderr_fd)
+        stderr_path.unlink(missing_ok=True)
 
 
 @click.group()
@@ -75,7 +105,7 @@ def serve(vault_path: Path) -> None:
 @cli.command()
 @click.option(
     "--vault", "vault_path", type=click.Path(exists=True, path_type=Path),
-    default=".", help="Path to vault",
+    default=_default_vault_path, help="Path to vault",
 )
 def stop(vault_path: Path) -> None:
     """Stop the daemon for a vault."""
@@ -84,7 +114,6 @@ def stop(vault_path: Path) -> None:
     if not client.is_running():
         click.echo("Daemon is not running.")
         return
-    import os
     import signal
     pid = read_pidfile(pidfile_path_for(vault_path))
     if pid:
@@ -97,7 +126,7 @@ def stop(vault_path: Path) -> None:
 @cli.command()
 @click.option(
     "--vault", "vault_path", type=click.Path(exists=True, path_type=Path),
-    default=".", help="Path to vault",
+    default=_default_vault_path, help="Path to vault",
 )
 def status(vault_path: Path) -> None:
     """Show vault status."""
@@ -117,7 +146,7 @@ def status(vault_path: Path) -> None:
 @click.argument("query")
 @click.option(
     "--vault", "vault_path", type=click.Path(exists=True, path_type=Path),
-    default=".", help="Path to vault",
+    default=_default_vault_path, help="Path to vault",
 )
 @click.option("--limit", default=10, help="Max results")
 def search(query: str, vault_path: Path, limit: int) -> None:
@@ -143,7 +172,7 @@ def search(query: str, vault_path: Path, limit: int) -> None:
 @click.argument("page_name")
 @click.option(
     "--vault", "vault_path", type=click.Path(exists=True, path_type=Path),
-    default=".", help="Path to vault",
+    default=_default_vault_path, help="Path to vault",
 )
 @click.option("--viewport", default="top", type=click.Choice(["top", "full"]))
 @click.option("--section", default=None, help="Read specific section by name")
@@ -178,7 +207,7 @@ def read(
 @cli.command()
 @click.option(
     "--vault", "vault_path", type=click.Path(exists=True, path_type=Path),
-    default=".", help="Path to vault",
+    default=_default_vault_path, help="Path to vault",
 )
 @click.option("--budget", default=16000, help="Token budget for manifest output")
 def manifest(vault_path: Path, budget: int) -> None:
@@ -194,7 +223,7 @@ def manifest(vault_path: Path, budget: int) -> None:
 @click.argument("question")
 @click.option(
     "--vault", "vault_path", type=click.Path(exists=True, path_type=Path),
-    default=".", help="Path to vault",
+    default=_default_vault_path, help="Path to vault",
 )
 @click.option("--budget", default=None, type=int, help="Token budget for traversal")
 def query(question: str, vault_path: Path, budget: int | None) -> None:
@@ -222,7 +251,7 @@ def query(question: str, vault_path: Path, budget: int | None) -> None:
 @cli.command()
 @click.option(
     "--vault", "vault_path", type=click.Path(exists=True, path_type=Path),
-    default=".", help="Path to vault",
+    default=_default_vault_path, help="Path to vault",
 )
 def lint(vault_path: Path) -> None:
     """Run structural integrity checks on the vault and file issues."""
@@ -254,7 +283,7 @@ def lint(vault_path: Path) -> None:
 @click.argument("source_path", type=click.Path(exists=True, path_type=Path))
 @click.option(
     "--vault", "vault_path", type=click.Path(exists=True, path_type=Path),
-    default=".", help="Path to vault",
+    default=_default_vault_path, help="Path to vault",
 )
 @click.option(
     "--dry-run", "dry_run", is_flag=True, default=False,
@@ -313,7 +342,7 @@ def issues() -> None:
 @issues.command("list")
 @click.option(
     "--vault", "vault_path", type=click.Path(exists=True, path_type=Path),
-    default=".", help="Path to vault",
+    default=_default_vault_path, help="Path to vault",
 )
 @click.option("--status", default=None, help="Filter by status (open|resolved|wontfix)")
 @click.option("--type", "type_filter", default=None, help="Filter by issue type")
@@ -344,7 +373,7 @@ def issues_list(vault_path: Path, status: str | None, type_filter: str | None) -
 @click.argument("issue_id")
 @click.option(
     "--vault", "vault_path", type=click.Path(exists=True, path_type=Path),
-    default=".", help="Path to vault",
+    default=_default_vault_path, help="Path to vault",
 )
 def issues_show(issue_id: str, vault_path: Path) -> None:
     """Show full details of a single issue."""
@@ -378,7 +407,7 @@ def _set_status(issue_id: str, vault_path: Path, status: str) -> None:
 @click.argument("issue_id")
 @click.option(
     "--vault", "vault_path", type=click.Path(exists=True, path_type=Path),
-    default=".", help="Path to vault",
+    default=_default_vault_path, help="Path to vault",
 )
 def issues_resolve(issue_id: str, vault_path: Path) -> None:
     """Mark an issue as resolved."""
@@ -389,7 +418,7 @@ def issues_resolve(issue_id: str, vault_path: Path) -> None:
 @click.argument("issue_id")
 @click.option(
     "--vault", "vault_path", type=click.Path(exists=True, path_type=Path),
-    default=".", help="Path to vault",
+    default=_default_vault_path, help="Path to vault",
 )
 def issues_wontfix(issue_id: str, vault_path: Path) -> None:
     """Mark an issue as wontfix."""
@@ -405,7 +434,7 @@ def maintenance() -> None:
 @maintenance.command("status")
 @click.option(
     "--vault", "vault_path", type=click.Path(exists=True, path_type=Path),
-    default=".", help="Path to vault",
+    default=_default_vault_path, help="Path to vault",
 )
 def maintenance_status(vault_path: Path) -> None:
     """Show registered maintenance workers and their last-run times."""
@@ -419,12 +448,17 @@ def maintenance_status(vault_path: Path) -> None:
         click.echo("No maintenance workers registered.")
         return
 
-    click.echo(f"{'name':<14} {'interval':<12} last_run")
-    click.echo("-" * 60)
+    click.echo(f"{'name':<16} {'interval':<10} {'failures':<10} last_run")
+    click.echo("-" * 70)
     for worker in workers:
         interval = f"{worker['interval_seconds']:.0f}s"
+        failures = worker.get("consecutive_failures", 0)
         last = worker["last_run"] or "never"
-        click.echo(f"{worker['name']:<14} {interval:<12} {last}")
+        reachable = worker.get("backend_reachable")
+        reachable_str = "" if reachable is None else (" [backend DOWN]" if not reachable else "")
+        click.echo(
+            f"{worker['name']:<16} {interval:<10} {failures:<10} {last}{reachable_str}"
+        )
 
 
 @cli.group()
@@ -437,7 +471,7 @@ def talk() -> None:
 @click.argument("page")
 @click.option(
     "--vault", "vault_path", type=click.Path(exists=True, path_type=Path),
-    default=".", help="Path to vault",
+    default=_default_vault_path, help="Path to vault",
 )
 def talk_read(page: str, vault_path: Path) -> None:
     """Show all talk entries for a page."""
@@ -464,7 +498,7 @@ def talk_read(page: str, vault_path: Path) -> None:
 @click.option("--author", default="@human", help="Author tag (defaults to @human)")
 @click.option(
     "--vault", "vault_path", type=click.Path(exists=True, path_type=Path),
-    default=".", help="Path to vault",
+    default=_default_vault_path, help="Path to vault",
 )
 def talk_post(page: str, message: str, author: str, vault_path: Path) -> None:
     """Append a talk-page entry."""
@@ -483,7 +517,7 @@ def talk_post(page: str, message: str, author: str, vault_path: Path) -> None:
 @talk.command("list")
 @click.option(
     "--vault", "vault_path", type=click.Path(exists=True, path_type=Path),
-    default=".", help="Path to vault",
+    default=_default_vault_path, help="Path to vault",
 )
 def talk_list(vault_path: Path) -> None:
     """List all pages that have a talk sidecar."""

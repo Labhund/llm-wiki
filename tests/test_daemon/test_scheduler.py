@@ -163,6 +163,60 @@ async def test_scheduler_isolates_worker_errors():
 
 
 @pytest.mark.asyncio
+async def test_scheduler_tracks_last_attempt_on_failure():
+    """last_attempt is set even when the worker fails; last_run is not."""
+    async def failing():
+        raise RuntimeError("oops")
+
+    scheduler = IntervalScheduler()
+    scheduler.register(ScheduledWorker("fail", 100.0, failing))
+    await scheduler.start()
+    await asyncio.sleep(0.05)
+    await scheduler.stop()
+
+    assert scheduler.last_attempt_iso("fail") is not None
+    assert scheduler.last_run_iso("fail") is None  # never succeeded
+
+
+@pytest.mark.asyncio
+async def test_scheduler_increments_consecutive_failures():
+    """consecutive_failures increments on each failed run."""
+    call_count = {"n": 0}
+
+    async def failing():
+        call_count["n"] += 1
+        raise RuntimeError("oops")
+
+    scheduler = IntervalScheduler()
+    scheduler.register(ScheduledWorker("fail", 0.05, failing))
+    await scheduler.start()
+    await asyncio.sleep(0.2)
+    await scheduler.stop()
+
+    assert scheduler.consecutive_failures("fail") >= 2
+
+
+@pytest.mark.asyncio
+async def test_scheduler_resets_consecutive_failures_on_success():
+    """consecutive_failures resets to 0 after a successful run."""
+    fail_until = {"n": 2}
+
+    async def sometimes_fails():
+        if fail_until["n"] > 0:
+            fail_until["n"] -= 1
+            raise RuntimeError("not yet")
+
+    scheduler = IntervalScheduler()
+    scheduler.register(ScheduledWorker("maybe", 0.05, sometimes_fails))
+    await scheduler.start()
+    await asyncio.sleep(0.4)
+    await scheduler.stop()
+
+    assert scheduler.consecutive_failures("maybe") == 0
+    assert scheduler.last_run_iso("maybe") is not None
+
+
+@pytest.mark.asyncio
 async def test_scheduler_register_duplicate_name_raises():
     scheduler = IntervalScheduler()
     async def noop() -> None:
@@ -170,6 +224,55 @@ async def test_scheduler_register_duplicate_name_raises():
     scheduler.register(ScheduledWorker("dup", 1.0, noop))
     with pytest.raises(ValueError):
         scheduler.register(ScheduledWorker("dup", 2.0, noop))
+
+
+@pytest.mark.asyncio
+async def test_scheduler_skips_worker_when_backend_unreachable():
+    """Worker is skipped (not failed) when health probe fails."""
+    call_count = {"n": 0}
+
+    async def worker_fn():
+        call_count["n"] += 1
+
+    scheduler = IntervalScheduler()
+    scheduler.register(ScheduledWorker(
+        name="probe-test",
+        interval_seconds=100.0,
+        coro_factory=worker_fn,
+        health_probe_url="http://127.0.0.1:19999/v1",  # nothing listening here
+    ))
+    await scheduler.start()
+    await asyncio.sleep(0.15)  # enough for the initial run attempt
+    await scheduler.stop()
+
+    # Worker should NOT have been called — backend unreachable
+    assert call_count["n"] == 0
+    # Not a failure — consecutive_failures stays 0
+    assert scheduler.consecutive_failures("probe-test") == 0
+    # last_attempt NOT set for a skipped run
+    assert scheduler.last_attempt_iso("probe-test") is None
+
+
+@pytest.mark.asyncio
+async def test_scheduler_runs_worker_when_no_probe_url():
+    """Worker without a health_probe_url runs normally."""
+    call_count = {"n": 0}
+
+    async def worker_fn():
+        call_count["n"] += 1
+
+    scheduler = IntervalScheduler()
+    scheduler.register(ScheduledWorker(
+        name="no-probe",
+        interval_seconds=100.0,
+        coro_factory=worker_fn,
+        health_probe_url=None,
+    ))
+    await scheduler.start()
+    await asyncio.sleep(0.05)
+    await scheduler.stop()
+
+    assert call_count["n"] == 1
 
 
 @pytest.mark.asyncio
@@ -239,6 +342,64 @@ async def test_daemon_server_registers_adversary_worker(sample_vault, tmp_path):
 
 
 @pytest.mark.asyncio
+async def test_scheduler_files_issue_on_threshold_crossing(tmp_path):
+    """After N consecutive failures, an issue is filed in the wiki issue queue."""
+    from llm_wiki.issues.queue import IssueQueue
+
+    wiki_dir = tmp_path / "wiki"
+    wiki_dir.mkdir()
+    issue_queue = IssueQueue(wiki_dir)
+
+    async def always_fails():
+        raise RuntimeError("backend down")
+
+    scheduler = IntervalScheduler(
+        issue_queue=issue_queue,
+        escalation_threshold=2,
+    )
+    scheduler.register(ScheduledWorker("bad-worker", 0.05, always_fails))
+    await scheduler.start()
+    await asyncio.sleep(0.3)  # enough for >= 2 failures
+    await scheduler.stop()
+
+    issues = issue_queue.list(status="open", type="worker-failure")
+    assert len(issues) == 1
+    assert "bad-worker" in issues[0].title
+    assert issues[0].severity == "moderate"
+
+
+@pytest.mark.asyncio
+async def test_scheduler_resolves_issue_on_recovery(tmp_path):
+    """Issue is auto-resolved when the worker recovers after threshold crossing."""
+    from llm_wiki.issues.queue import IssueQueue
+
+    wiki_dir = tmp_path / "wiki"
+    wiki_dir.mkdir()
+    issue_queue = IssueQueue(wiki_dir)
+
+    fail_count = {"n": 0}
+
+    async def fails_then_recovers():
+        if fail_count["n"] < 2:
+            fail_count["n"] += 1
+            raise RuntimeError("temporary failure")
+
+    scheduler = IntervalScheduler(
+        issue_queue=issue_queue,
+        escalation_threshold=2,
+    )
+    scheduler.register(ScheduledWorker("recover-worker", 0.05, fails_then_recovers))
+    await scheduler.start()
+    await asyncio.sleep(0.5)
+    await scheduler.stop()
+
+    issues_open = issue_queue.list(status="open", type="worker-failure")
+    issues_resolved = issue_queue.list(status="resolved", type="worker-failure")
+    assert len(issues_open) == 0
+    assert len(issues_resolved) == 1
+
+
+@pytest.mark.asyncio
 async def test_scheduler_status_route(sample_vault, tmp_path):
     """The scheduler-status route returns workers + last-run timestamps."""
     from llm_wiki.config import MaintenanceConfig, WikiConfig
@@ -268,6 +429,68 @@ async def test_scheduler_status_route(sample_vault, tmp_path):
         assert "interval_seconds" in auditor
         assert auditor["interval_seconds"] == 1.0
         assert auditor["last_run"] is not None
+    finally:
+        server._server.close()
+        serve_task.cancel()
+        try:
+            await serve_task
+        except asyncio.CancelledError:
+            pass
+        await server.stop()
+
+
+def test_scheduler_health_info_structure():
+    """health_info() returns per-worker dict with expected keys."""
+    scheduler = IntervalScheduler()
+
+    async def noop():
+        pass
+
+    scheduler.register(ScheduledWorker("worker-a", 1.0, noop))
+    scheduler.register(ScheduledWorker("worker-b", 2.0, noop, health_probe_url="http://x/v1"))
+
+    info = scheduler.health_info()
+    assert "worker-a" in info
+    assert "worker-b" in info
+
+    for name in ("worker-a", "worker-b"):
+        entry = info[name]
+        assert "last_run" in entry
+        assert "last_attempt" in entry
+        assert "consecutive_failures" in entry
+        assert "backend_reachable" in entry
+
+    assert info["worker-a"]["last_run"] is None  # never ran
+    assert info["worker-a"]["last_attempt"] is None
+    assert info["worker-a"]["consecutive_failures"] == 0
+    # backend_reachable is None before any probe fires (for both probe-less and probed workers)
+    assert info["worker-a"]["backend_reachable"] is None
+    assert info["worker-b"]["backend_reachable"] is None
+
+
+@pytest.mark.asyncio
+async def test_scheduler_status_route_includes_health(sample_vault, tmp_path):
+    """The scheduler-status daemon route includes health fields per worker."""
+    from llm_wiki.config import MaintenanceConfig, WikiConfig
+    from llm_wiki.daemon.client import DaemonClient
+    from llm_wiki.daemon.server import DaemonServer
+
+    sock_path = tmp_path / "health-test.sock"
+    config = WikiConfig(maintenance=MaintenanceConfig(auditor_interval="1s"))
+    server = DaemonServer(sample_vault, sock_path, config=config)
+    await server.start()
+    serve_task = asyncio.create_task(server.serve_forever())
+
+    try:
+        await asyncio.sleep(0.2)
+        client = DaemonClient(sock_path)
+        resp = client.request({"type": "scheduler-status"})
+
+        assert resp["status"] == "ok"
+        auditor = next(w for w in resp["workers"] if w["name"] == "auditor")
+        assert "last_attempt" in auditor
+        assert "consecutive_failures" in auditor
+        assert "backend_reachable" in auditor
     finally:
         server._server.close()
         serve_task.cancel()

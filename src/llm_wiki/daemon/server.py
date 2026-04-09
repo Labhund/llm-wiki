@@ -67,7 +67,10 @@ class DaemonServer:
             on_settled=self._handle_settled_change,
         )
 
-        self._scheduler = IntervalScheduler()
+        self._scheduler = IntervalScheduler(
+            issue_queue=IssueQueue(wiki_dir),
+            escalation_threshold=self._config.maintenance.failure_escalation_threshold,
+        )
         self._register_maintenance_workers()
         await self._scheduler.start()
 
@@ -322,31 +325,43 @@ class DaemonServer:
             count = await agent.refresh_talk_summaries()
             logger.info("Talk summary: refreshed=%d", count)
 
+        def _get_probe_url(role: str) -> str | None:
+            try:
+                backend = self._config.llm.resolve(role)
+                return backend.api_base
+            except Exception:
+                return None
+
         all_workers = [
             ScheduledWorker(
                 name="auditor",
                 interval_seconds=parse_interval(self._config.maintenance.auditor_interval),
                 coro_factory=run_auditor,
+                health_probe_url=None,
             ),
             ScheduledWorker(
                 name="librarian",
                 interval_seconds=parse_interval(self._config.maintenance.librarian_interval),
                 coro_factory=run_librarian,
+                health_probe_url=_get_probe_url("librarian"),
             ),
             ScheduledWorker(
                 name="authority_recalc",
                 interval_seconds=parse_interval(self._config.maintenance.authority_recalc),
                 coro_factory=run_authority_recalc,
+                health_probe_url=None,
             ),
             ScheduledWorker(
                 name="adversary",
                 interval_seconds=parse_interval(self._config.maintenance.adversary_interval),
                 coro_factory=run_adversary,
+                health_probe_url=_get_probe_url("adversary"),
             ),
             ScheduledWorker(
                 name="talk_summary",
                 interval_seconds=parse_interval(self._config.maintenance.librarian_interval),
                 coro_factory=run_talk_summary,
+                health_probe_url=_get_probe_url("talk_summary"),
             ),
         ]
         # `enabled_workers=None` → register all. Otherwise filter, and
@@ -689,11 +704,15 @@ class DaemonServer:
     def _handle_scheduler_status(self) -> dict:
         if self._scheduler is None:
             return {"status": "ok", "workers": []}
+        health = self._scheduler.health_info()
         workers = [
             {
                 "name": name,
                 "interval_seconds": interval_seconds,
                 "last_run": last_run,
+                "last_attempt": health.get(name, {}).get("last_attempt"),
+                "consecutive_failures": health.get(name, {}).get("consecutive_failures", 0),
+                "backend_reachable": health.get(name, {}).get("backend_reachable"),
             }
             for name, interval_seconds, last_run in self._scheduler.workers_info()
         ]

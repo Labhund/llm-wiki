@@ -11,7 +11,9 @@ from pathlib import Path
 from llm_wiki.config import WikiConfig
 from llm_wiki.daemon.lifecycle import (
     cleanup_stale,
+    is_process_alive,
     pidfile_path_for,
+    read_pidfile,
     socket_path_for,
     write_pidfile,
 )
@@ -25,6 +27,14 @@ logger = logging.getLogger("llm-wiki-daemon")
 async def run(vault_root: Path) -> None:
     sock_path = socket_path_for(vault_root)
     pid_path = pidfile_path_for(vault_root)
+
+    # Mutual exclusion: refuse to start if a live daemon already holds the pidfile
+    existing_pid = read_pidfile(pid_path)
+    if existing_pid is not None and is_process_alive(existing_pid):
+        raise SystemExit(
+            f"Daemon already running for this vault (PID {existing_pid}). "
+            "Use 'llm-wiki stop' or kill the process first."
+        )
 
     cleanup_stale(sock_path, pid_path)
 

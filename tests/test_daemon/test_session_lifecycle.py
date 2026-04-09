@@ -42,6 +42,7 @@ async def _request(
 async def test_inactivity_timer_settles_quiet_session(tmp_path):
     """A session with no writes for inactivity_timeout_seconds is settled automatically."""
     _init_git_repo(tmp_path)
+    (tmp_path / "wiki").mkdir()
     sock_path = tmp_path / "ina.sock"
     config = WikiConfig(
         sessions=SessionsConfig(inactivity_timeout_seconds=1),
@@ -82,6 +83,7 @@ async def test_inactivity_timer_settles_quiet_session(tmp_path):
 async def test_write_count_cap_force_settles(tmp_path):
     """When write_count_cap is reached, the session settles immediately."""
     _init_git_repo(tmp_path)
+    (tmp_path / "wiki").mkdir()
     sock_path = tmp_path / "cap.sock"
     config = WikiConfig(
         sessions=SessionsConfig(write_count_cap=2, inactivity_timeout_seconds=300),
@@ -121,6 +123,7 @@ async def test_write_count_cap_force_settles(tmp_path):
 async def test_session_cap_warning_emitted(tmp_path):
     """At floor(cap * cap_warn_ratio), the response carries a warning."""
     _init_git_repo(tmp_path)
+    (tmp_path / "wiki").mkdir()
     sock_path = tmp_path / "warn.sock"
     config = WikiConfig(
         sessions=SessionsConfig(

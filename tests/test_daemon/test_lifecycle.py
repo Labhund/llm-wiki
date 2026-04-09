@@ -51,3 +51,26 @@ def test_cleanup_stale(tmp_path: Path):
 
 def test_cleanup_missing_files(tmp_path: Path):
     cleanup_stale(tmp_path / "nope.sock", tmp_path / "nope.pid")
+
+
+@pytest.mark.asyncio
+async def test_run_refuses_to_start_when_daemon_already_running(tmp_path):
+    """daemon.__main__.run() exits with a clear error if a live daemon holds the pidfile."""
+    (tmp_path / "wiki").mkdir()
+    (tmp_path / "schema").mkdir()
+    (tmp_path / "schema" / "config.yaml").write_text("")
+
+    from llm_wiki.daemon.lifecycle import pidfile_path_for, write_pidfile
+    import os
+
+    pid_path = pidfile_path_for(tmp_path)
+    # Write our own PID — we are definitely alive
+    write_pidfile(pid_path, os.getpid())
+
+    try:
+        from llm_wiki.daemon.__main__ import run
+        with pytest.raises(SystemExit) as exc_info:
+            await run(tmp_path)
+        assert exc_info.value.code != 0
+    finally:
+        pid_path.unlink(missing_ok=True)

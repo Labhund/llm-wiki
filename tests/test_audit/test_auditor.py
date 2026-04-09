@@ -51,6 +51,7 @@ def test_audit_writes_files_to_issues_dir(sample_vault: Path):
 
 def test_audit_empty_vault(tmp_path: Path):
     """An empty vault produces an empty report without raising."""
+    (tmp_path / "wiki").mkdir()
     queue = IssueQueue(tmp_path)
     auditor = Auditor(Vault.scan(tmp_path), queue, tmp_path)
     report = auditor.audit()

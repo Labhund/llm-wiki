@@ -25,6 +25,7 @@ def _init_git_repo(path: Path) -> None:
 
 def _make_write_service(tmp_path: Path):
     config = WikiConfig()
+    (tmp_path / "wiki").mkdir(exist_ok=True)
     vault = Vault.scan(tmp_path)
     return PageWriteService(
         vault=vault,

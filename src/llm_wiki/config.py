@@ -129,6 +129,7 @@ class MaintenanceConfig:
     talk_pages_enabled: bool = True
     talk_summary_min_new_entries: int = 5
     talk_summary_min_interval_seconds: int = 3600
+    failure_escalation_threshold: int = 3
 
 
 @dataclass

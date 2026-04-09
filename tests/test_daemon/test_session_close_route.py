@@ -41,6 +41,7 @@ async def _request(
 @pytest_asyncio.fixture
 async def write_daemon(tmp_path):
     _init_git_repo(tmp_path)
+    (tmp_path / "wiki").mkdir()
     sock_path = tmp_path / "sc.sock"
     config = WikiConfig()
     server = DaemonServer(tmp_path, sock_path, config=config)
@@ -173,6 +174,7 @@ async def test_session_close_only_settles_matching_connection(write_daemon):
 async def test_daemon_shutdown_settles_open_sessions(tmp_path):
     """When DaemonServer.stop() is called, every open session is settled into git."""
     _init_git_repo(tmp_path)
+    (tmp_path / "wiki").mkdir()
     sock_path = tmp_path / "shutdown.sock"
     config = WikiConfig()
     server = DaemonServer(tmp_path, sock_path, config=config)

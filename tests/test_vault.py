@@ -205,3 +205,48 @@ def test_vault_scan_excludes_talk_pages(sample_vault):
     # The talk page is NOT
     assert "srna-embeddings.talk" not in entries
     assert not any(name.endswith(".talk") for name in entries)
+
+
+def test_scan_skips_directory_named_dot_md(tmp_path):
+    """Vault.scan() must not crash when a directory is named something.md."""
+    # Create vault structure
+    wiki_dir = tmp_path / "wiki"
+    wiki_dir.mkdir()
+    (wiki_dir / "normal-page.md").write_text(
+        "---\ntitle: Normal\ntags: []\ncitations: []\n---\n\n# Normal\n"
+    )
+    # A directory named *.md — triggers IsADirectoryError without the fix
+    dir_md = wiki_dir / "weird-dir.md"
+    dir_md.mkdir()
+    (dir_md / "some_file.txt").write_text("inside the directory")
+
+    # Should not raise
+    vault = Vault.scan(tmp_path)
+    assert vault.page_count == 1
+
+
+def test_scan_rejects_non_vault_directory(tmp_path):
+    """Vault.scan() raises ValueError with a clear message for non-vault paths."""
+    import pytest
+    (tmp_path / "downloads").mkdir()
+    (tmp_path / "documents").mkdir()
+
+    with pytest.raises(ValueError, match="does not appear to be an llm-wiki vault"):
+        Vault.scan(tmp_path)
+
+
+def test_scan_accepts_directory_with_schema_config(tmp_path):
+    """Vault.scan() accepts a directory that has schema/config.yaml."""
+    (tmp_path / "schema").mkdir()
+    (tmp_path / "schema" / "config.yaml").write_text("vault:\n  mode: managed\n")
+
+    vault = Vault.scan(tmp_path)
+    assert vault.page_count == 0
+
+
+def test_scan_accepts_directory_with_wiki_dir(tmp_path):
+    """Vault.scan() accepts a directory that has a wiki/ subdirectory."""
+    (tmp_path / "wiki").mkdir()
+
+    vault = Vault.scan(tmp_path)
+    assert vault.page_count == 0
