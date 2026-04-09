@@ -556,12 +556,15 @@ class DaemonServer:
         except FileExistsError as e:
             return {"status": "error", "message": str(e)}
 
+        import subprocess as _sp  # noqa: PLC0415
+
         rel_path = str(plan_path.relative_to(self._vault_root))
         commit_msg = (
             f"plan: create inbox plan for {Path(source_path_str).name}\n\n"
             f"Agent: {author}"
         )
-        import subprocess as _sp
+        # TODO(async): subprocess.run blocks the event loop; migrate to
+        # asyncio.create_subprocess_exec when CommitService is also migrated.
         async with self._commit_lock:
             _sp.run(["git", "add", rel_path], cwd=self._vault_root, check=True, capture_output=True)
             _sp.run(["git", "commit", "-m", commit_msg], cwd=self._vault_root, check=True, capture_output=True)
@@ -609,8 +612,13 @@ class DaemonServer:
         except ValueError:
             return {"status": "error", "message": "plan_path must be under inbox/"}
 
+        import subprocess as _sp  # noqa: PLC0415
+
         if not plan_path.exists():
             return {"status": "error", "message": f"Plan file not found: {plan_path_str}"}
+        # Caller is responsible for not having uncommitted local edits to this
+        # file — no dirty-check is performed. The attended workflow assumes the
+        # agent is the sole writer between wiki_inbox_get and wiki_inbox_write.
         plan_path.write_text(content, encoding="utf-8")
 
         rel_path = str(plan_path.relative_to(self._vault_root))
@@ -618,7 +626,8 @@ class DaemonServer:
             f"plan: checkpoint {plan_path.name}\n\n"
             f"Agent: {author}"
         )
-        import subprocess as _sp
+        # TODO(async): subprocess.run blocks the event loop; migrate to
+        # asyncio.create_subprocess_exec when CommitService is also migrated.
         async with self._commit_lock:
             _sp.run(["git", "add", rel_path], cwd=self._vault_root, check=True, capture_output=True)
             _sp.run(["git", "commit", "-m", commit_msg], cwd=self._vault_root, check=True, capture_output=True)
@@ -638,7 +647,7 @@ class DaemonServer:
             fm = read_plan_frontmatter(f)
             content = f.read_text(encoding="utf-8")
             plans.append({
-                "path": f"inbox/{f.name}",
+                "path": str(f.relative_to(self._vault_root)),
                 "source": fm.get("source", ""),
                 "started": fm.get("started", ""),
                 "status": fm.get("status", ""),
