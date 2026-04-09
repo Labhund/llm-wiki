@@ -21,7 +21,7 @@ These apply to every operation.
 
 **Traversal, not RAG.** One search → done is wrong. Enter via manifest or search, follow wikilinks with purpose, build understanding across pages. The wiki is a compiled knowledge graph, not a retrieval index.
 
-**Tool calls have real cost.** Each tool call is a decode cycle plus daemon round-trip. Prefill is 10-100× cheaper than decode per token. If you need multiple pages, load them in bulk when possible — fewer calls, one prefill. Orient with the manifest first, then load what you need in one pass.
+**Tool calls have real cost.** Each tool call is a decode cycle plus daemon round-trip. Prefill is 10-100× cheaper than decode per token. If you need multiple pages, use `wiki_read_many` — one call instead of N. To load an entire cluster, use `wiki_read_cluster`. To read multiple sections of one page, use `wiki_read` with `viewport="sections"`. Orient with the manifest first, then load what you need in one pass.
 
 **Minimum traversal depth.** For any non-trivial research question, at least 3 hops before synthesis: manifest or search → at least one page read → follow at least one wikilink. One search result → done is wrong. The wiki is a graph, not a retrieval index.
 

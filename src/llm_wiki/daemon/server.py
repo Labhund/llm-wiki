@@ -452,6 +452,10 @@ class DaemonServer:
                 return self._handle_search(request)
             case "read":
                 return self._handle_read(request)
+            case "read-many":
+                return self._handle_read_many(request)
+            case "read-cluster":
+                return self._handle_read_cluster(request)
             case "manifest":
                 return self._handle_manifest(request)
             case "status":
@@ -777,23 +781,81 @@ class DaemonServer:
         }
 
     def _handle_read(self, request: dict) -> dict:
+        page_name = request["page_name"]
+        viewport = request.get("viewport", "top")
+
+        if viewport == "sections":
+            sections = request.get("sections") or []
+            result = self._vault.read_multi_sections(
+                page_name, sections, request.get("budget")
+            )
+            if result is None:
+                return {"status": "error", "message": f"Page not found: {page_name}"}
+            return {
+                "status": "ok",
+                "content": result["content"],
+                "missing_sections": result["missing_sections"],
+                "issues": self._read_issues_block(page_name),
+                "talk": self._read_talk_block(page_name),
+            }
+
         content = self._vault.read_viewport(
-            request["page_name"],
-            viewport=request.get("viewport", "top"),
+            page_name,
+            viewport=viewport,
             section=request.get("section"),
             grep=request.get("grep"),
             budget=request.get("budget"),
         )
         if content is None:
-            return {"status": "error", "message": f"Page not found: {request['page_name']}"}
-
-        page_name = request["page_name"]
+            return {"status": "error", "message": f"Page not found: {page_name}"}
         return {
             "status": "ok",
             "content": content,
             "issues": self._read_issues_block(page_name),
             "talk": self._read_talk_block(page_name),
         }
+
+    def _handle_read_many(self, request: dict) -> dict:
+        specs = request.get("pages", [])
+        results = []
+        for spec in specs:
+            name = spec.get("name")
+            if not name:
+                results.append({"name": None, "status": "error", "message": "Missing page name"})
+                continue
+            r = self._handle_read({
+                "type": "read",
+                "page_name": name,
+                "viewport": spec.get("viewport", "top"),
+                "section": spec.get("section"),
+                "sections": spec.get("sections"),
+                "grep": spec.get("grep"),
+                "budget": spec.get("budget"),
+            })
+            r["name"] = name
+            results.append(r)
+        return {"status": "ok", "pages": results}
+
+    def _handle_read_cluster(self, request: dict) -> dict:
+        cluster_name = request.get("cluster")
+        if not cluster_name:
+            return {"status": "error", "message": "Missing required field: cluster"}
+        page_names = self._vault.pages_in_cluster(cluster_name)
+        if not page_names:
+            return {"status": "error", "message": f"No cluster found: {cluster_name}"}
+        viewport = request.get("viewport", "top")
+        result = self._handle_read_many({
+            "pages": [{"name": n, "viewport": viewport} for n in page_names]
+        })
+        # Sum token counts from content lengths (rough, avoids import overhead)
+        cluster_tokens = sum(
+            len(r.get("content", "")) // 4
+            for r in result["pages"]
+            if r.get("status") == "ok"
+        )
+        result["cluster"] = cluster_name
+        result["cluster_tokens"] = cluster_tokens
+        return result
 
     def _read_issues_block(self, page_name: str) -> dict:
         """Build the per-page issues digest folded into wiki_read responses."""
