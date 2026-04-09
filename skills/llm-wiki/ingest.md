@@ -1,78 +1,160 @@
 ---
 name: llm-wiki/ingest
-description: Use when incorporating an external source (paper, PDF, document) into an llm-wiki vault. Three-act conversational protocol with hybrid manual+automated synthesis. Attended mode.
+description: Use when incorporating an external source (paper, PDF, document) into
+  an llm-wiki vault. Three modes — queue (background extraction), brief (briefing
+  with your context), deep (claim-by-claim research). Attended mode.
 ---
 
-# LLM-Wiki Ingest — Attended Source Synthesis
+# LLM-Wiki Ingest — Attended Source Intake
 
-Ingestion is inherently conversational and multi-turn. It touches multiple pages in one session.
+The attended agent's unique value in ingest is what it knows about you: your context, your memory, your prior work, your entire wiki. These three modes let you decide how much of that to use.
 
-## Act 1 — Read the Source First
+## Before Any Mode — Copy the Source
 
-Before touching any wiki tool, read the source:
-- Abstract and intro at minimum
-- Full document if short
+Copy the source into `raw/` before touching any wiki tool:
 
-Form a view: what are the key concepts, what claims does it make, what is genuinely novel vs. already-known territory. This calibrates all subsequent wiki interactions — you cannot search for the right things until you know what the source is about.
+- **PDFs:** store the original as `raw/YYYY-MM-DD-slug.pdf` (immutable). Extract text to `raw/YYYY-MM-DD-slug.md` for agent use.
+- **Markdown / text:** copy verbatim to `raw/YYYY-MM-DD-slug.md`. Body is immutable; frontmatter is metadata.
+- **Flat** — no subdirectories inside `raw/`.
 
-**COPY the source into `raw/` first.** Before any wiki tool call, copy the source into `raw/` (flat — no subdirectories). For PDFs: store the original file as `raw/YYYY-MM-DD-slug.pdf` (canonical ground truth), then extract text separately for agent use. For plain text/markdown: copy verbatim to `raw/YYYY-MM-DD-slug.md`. This is a copy, not a transcription. All `source_ref` values must point to this vault-internal path; `wiki_lint` will flag broken citations otherwise.
+All `source_ref` values in wiki citations must point here. `wiki_lint` flags broken citations.
 
-**PDF extraction quality varies.** The vault config's `pdf_extractor` controls the tool used:
-- `pdftotext` (default) — fast, zero deps, poor layout awareness; fine for text-heavy papers with no tables
-- `local-ocr` — vision-language model (e.g. Qianfan-OCR via llama.cpp) running locally; handles tables, figures, equations
-- `marker` / `nougat` — high quality but GPU or API required
+**PDF extraction quality varies.** Check extracted text before writing — mangled output (captions bleeding into body, garbled tables, watermarks repeating) degrades everything written from it. The vault config's `pdf_extractor` controls which tool is used: `pdftotext` (default, poor layout), `local-ocr` (vision model via llama.cpp, handles tables/figures), `marker`/`nougat` (high quality, GPU required). Flag bad extraction to the user before proceeding.
 
-If the extracted text looks mangled (captions bleeding into body, garbled tables, watermarks repeating), flag it to the user before proceeding — bad extraction degrades every page written from it. When in doubt, note the extraction quality in the raw/ file's header.
+## Choose a Mode
 
-## Act 2 — Ask the User How to Handle It
-
-State what you found, then offer the choice:
-
-> "This [paper/document] covers [X, Y, Z]. [X] looks like it may already have wiki coverage; [Y and Z] appear to be new territory. A typical ingest creates 5–15 pages.
+> "I have [source]. How do you want to handle it?
 >
-> **Conversational** — we orient in the wiki together, discuss what to create vs. update, I can write key pages manually and use `wiki_ingest` to catch connections and fill gaps
-> **Automated** — I run `wiki_ingest --dry-run` to preview what would be created, you confirm, then I execute"
+> **Queue** — background extraction, I'll report what was created
+> **Brief** — I read it with your full context and wiki loaded, tell you what matters, you decide what to do next
+> **Deep** — claim-by-claim analysis together; builds a persistent plan we can resume across sessions"
 
-Wait for the user's response; if none comes, use the automated path.
+If no response: default to **Brief**. One conversation turn, always produces something useful, even if the user queues everything afterward.
 
-If the dry-run or your Act 1 estimate suggests 10+ pages, flag this scope to the user before committing — large ingests benefit from conversational mode so important synthesis doesn't get buried in bulk creation.
+---
 
-**For 4+ pages: create a task list before writing anything.** Once the page list is agreed, capture each proposed page as a task (using your framework's native task tool) before touching any wiki tool:
+## Mode 1: Queue
+
+Background extraction. No analysis.
+
+1. Confirm source is in `raw/`
+2. `wiki_ingest` — daemon handles concept extraction and page creation
+3. Report: pages created, pages updated, errors
+4. `wiki_session_close`
+
+The daemon sets `reading_status: unread` on ingest. It stays unread — only attended engagement promotes a source.
+
+---
+
+## Mode 2: Brief
+
+Read with the user's full context loaded. The output is a briefing, not pages.
+
+1. Confirm source is in `raw/`
+2. Read the source — abstract and intro at minimum, full document if short
+3. `wiki_manifest` + `wiki_search` for key concepts — know what's already covered
+4. `wiki_source_mark(source, "in_progress")` — or update `reading_status` in raw/ frontmatter directly if the tool is unavailable
+5. Produce the briefing:
 
 ```
-[ ] protein-dj — pipeline architecture, 4 stages, benchmarks
-[ ] rfdiffusion — diffusion fold generation, design modes
-[ ] bindcraft — hallucination-based binder design
-[ ] ...
-[ ] cascade — cross-links and index update
+**New to your work:** [what this adds not already in your wiki or prior work — be specific]
+**Already covered:** [concepts with existing pages — link them]
+**Contradictions:** [specific claims conflicting with existing pages — name both sides]
+**Worth reading yourself:** [sections needing your judgment, not just extraction]
+**Scope if queued:** ~N pages
 ```
 
-Mark each task `in_progress` as you start it, `completed` when done. This keeps the session navigable across many turns without losing track of what's pending. For <4 pages, skip the task list and write directly.
+6. Wait. User decides:
+   - "Queue it" → run Mode 1; `wiki_source_mark(source, "read")` if the brief is sufficient engagement
+   - "Go deeper on X" → continue into Mode 3 for those claims
+   - "I'll read it myself" → leave at `in_progress`, close session
+   - "Nothing for now" → leave at `in_progress`, close session
 
-## Act 3 — Execute
+7. `wiki_session_close`
 
-### Conversational Path
+The briefing is the value. Page creation is optional and user-directed.
 
-1. `wiki_manifest` + `wiki_search` for each key concept identified in Act 1
-2. Discuss findings with user: what is already covered, what is new, what contradicts existing pages
-3. Decide together: manual pages for important synthesis, `wiki_ingest` to catch connections and fill gaps — this hybrid is explicitly endorsed
-   - **Page creation threshold:** create a page when a concept appears in 2+ sources OR is central to this source. Passing mentions → link to an existing page if it exists, or leave as prose; do not create stubs.
-4. Write in one session — do not close mid-ingest
-   - Link aggressively as you write: every salient noun, technical term, and named entity on its first mention. Writing habit, not a checklist.
-5. **Cascade updates:** after writing primary pages, scan the same topic area for pages that should cross-reference the new content. Then check adjacent clusters: are there pages in neighbouring topic areas that gain meaningful links? This is part of the ingest, not optional cleanup.
-6. `wiki_session_close`
+---
 
-### Automated Path
+## Mode 3: Deep
 
-1. `wiki_ingest --dry-run` — show the user what concepts would be extracted and which pages would be created or updated
-2. Confirm with user
-3. `wiki_ingest` to execute
-4. Report what was created and updated
-5. `wiki_session_close`
+Claim-by-claim iterative analysis. The compounding is a byproduct; the research is the point.
+
+### Setup
+
+1. Confirm source is in `raw/`
+2. `wiki_source_mark(source, "in_progress")`
+3. Create the inbox plan file **before any wiki write:** `inbox/YYYY-MM-DD-slug-plan.md`
+
+```markdown
+---
+source: raw/YYYY-MM-DD-slug.pdf
+started: YYYY-MM-DD
+status: in-progress
+sessions: 1
+---
+
+# [Source Title] — Research Plan
+
+## Claims / Ideas
+- [ ] [Claim 1 — one-line scope]
+- [ ] [Claim 2]
+
+## Decisions
+
+## Session Notes
+### YYYY-MM-DD
+[First session opening notes]
+```
+
+4. Present the claim list to the user. Get approval — merge, drop, reorder — before starting the loop.
+
+### Per-Claim Loop
+
+For each claim:
+
+1. **Agent presents:** what the claim is, what's genuinely new vs already covered, any contradiction with existing wiki pages, what it would write and why
+2. **Human reacts** — push back, add their reading, redirect
+3. **Decide together:**
+   - Write now → `wiki_create` / `wiki_update` / `wiki_append`; link aggressively
+   - Defer → note reason in plan file, move on
+   - Talk post only → `wiki_talk_post` on the relevant concept page; captures the analysis without committing to a main page
+   - Skip → note in plan file
+4. Tick the claim in the plan file, record the decision in Decisions
+
+### Session Checkpoint
+
+When `session-cap-approaching` fires or at a natural stopping point:
+
+1. Write checkpoint to plan file: claims covered, decisions made, where to resume
+2. Append to Session Notes
+3. Commit plan file to git
+4. `wiki_session_close`
+
+### Resuming
+
+Read `inbox/YYYY-MM-DD-slug-plan.md`, reconstruct task list from unchecked items, continue. The plan file is the full context — no prior session memory needed.
+
+### Completion
+
+1. `wiki_source_mark(source, "read")`
+2. Mark plan file `status: completed`
+3. **Cascade:** scan same topic area for pages that should cross-reference new content, then adjacent clusters. Part of the work, not optional cleanup.
+4. `wiki_session_close`
+
+---
 
 ## Key Synthesis Principle
 
-Do not just extract claims into the wiki. For each concept: how does it connect to what is already there? Does it contradict, extend, or confirm existing pages?
-- Contradictions → `wiki_talk_post`
+For any mode that writes pages:
+
+Situate claims, don't extract them. For each concept, how does it connect to what is already there?
+- Contradictions → `wiki_talk_post` on the relevant page
 - Extensions → page body with citation
 - Confirmations → note in relevant claim's context
+
+**Page threshold:** create a page when a concept is central to this source OR appears in 2+ sources. Passing mentions → link to an existing page; do not create stubs.
+
+**Wikilinks:** every salient noun, technical term, and named entity on first mention. Writing habit, not a checklist.
+
+**Scope:** if 10+ pages estimated, flag before committing — large ingests benefit from Deep mode so synthesis doesn't get buried in bulk creation.

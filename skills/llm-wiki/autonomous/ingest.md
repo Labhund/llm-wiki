@@ -19,6 +19,8 @@ description: Use for autonomous (cron, swarm, unattended) ingestion of external 
 
 No conversational path. No mode choice. The dry-run step is the autonomous safety gate — it replaces the human confirmation from the attended path.
 
+**Reading status:** the daemon sets `reading_status: unread` on source copy. Autonomous ingest never calls `wiki_source_mark` — it cannot promote a source past unread. Only attended engagement does that.
+
 ## Error Recovery
 
 - Daemon unreachable → abort, report
