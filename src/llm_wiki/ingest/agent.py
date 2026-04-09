@@ -184,6 +184,22 @@ class IngestAgent:
                 else:
                     result.pages_created.append(concept.name)
 
+        # Resonance matching post-step (gated by config)
+        if self._config.maintenance.resonance_matching and result.pages_created:
+            try:
+                from llm_wiki.resonance.agent import ResonanceAgent
+                from llm_wiki.vault import Vault
+                vault = Vault.scan(vault_root, self._config)
+                resonance_agent = ResonanceAgent(
+                    vault=vault,
+                    vault_root=vault_root,
+                    llm=self._llm,
+                    config=self._config,
+                )
+                await resonance_agent.run_for_pages(result.pages_created)
+            except Exception:
+                logger.exception("Resonance post-step failed — ingest result unaffected")
+
         return result
 
     async def _write_via_service(
