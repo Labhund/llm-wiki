@@ -75,3 +75,16 @@ def test_build_entry_is_synthesis_false_for_extracted_page(tmp_path: Path):
     page = Page.parse(p)
     entry = build_entry(page, cluster="bio")
     assert entry.is_synthesis is False
+
+
+def test_manifest_text_includes_synthesis_marker(tmp_path: Path):
+    """to_manifest_text() includes '| synthesis' for synthesis pages and omits it otherwise."""
+    synth_path = tmp_path / "synth.md"
+    synth_path.write_text("---\ntitle: Synth\nstatus: synthesis\n---\nContent.\n")
+    synth_entry = build_entry(Page.parse(synth_path), cluster="analysis")
+    assert "| synthesis" in synth_entry.to_manifest_text()
+
+    ordinary_path = tmp_path / "ordinary.md"
+    ordinary_path.write_text("---\ntitle: Ordinary\n---\nContent.\n")
+    ordinary_entry = build_entry(Page.parse(ordinary_path), cluster="bio")
+    assert "| synthesis" not in ordinary_entry.to_manifest_text()

@@ -113,7 +113,11 @@ class LibrarianAgent:
 
         if usage is None:
             usage = aggregate_logs(self._log_path)
-        scores = compute_authority(entries, usage)
+        scores = compute_authority(
+            entries,
+            usage,
+            synthesis_boost=self._config.maintenance.synthesis_authority_boost,
+        )
 
         overrides = ManifestOverrides.load(self._overrides_path)
         for name, score in scores.items():

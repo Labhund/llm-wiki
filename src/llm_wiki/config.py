@@ -138,6 +138,9 @@ class MaintenanceConfig:
     resonance_matching: bool = False
     resonance_candidates_per_claim: int = 3
     resonance_stale_weeks: int = 4
+    # Synthesis authority boost — multiplier applied to synthesis pages in
+    # compute_authority(). >1.0 boosts, <1.0 penalises. 1.0 = no effect.
+    synthesis_authority_boost: float = 1.5
 
 
 @dataclass
