@@ -25,11 +25,11 @@ After stating intent, offer the three modes to the user:
 >
 > Which do you prefer?"
 
-Wait for a response. If the user has no preference: recommend `wiki_query` for specific well-defined questions, sub-agent for broad exploratory research, in-context manual only when the user explicitly wants to see each hop.
+Wait for a response; if none comes, apply the default recommendation: `wiki_query` for specific well-defined questions, sub-agent for broad exploratory research, in-context manual only when the user explicitly wants to see each hop.
 
 ## Mode 1: Daemon-Delegated (`wiki_query`)
 
-Call `wiki_query` with a clear, specific query string derived from your stated intent. Return the synthesis to the user.
+Call `wiki_query` with a clear, specific query string derived from your stated intent. Return the synthesis to the user. If the result is empty or insufficient to answer the stated intent, fall back to sub-agent or in-context manual mode.
 
 ## Mode 2: Sub-Agent
 
