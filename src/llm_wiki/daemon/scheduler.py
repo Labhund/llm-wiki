@@ -147,7 +147,7 @@ class IntervalScheduler:
         except asyncio.CancelledError:
             return
 
-    async def _maybe_escalate(
+    def _maybe_escalate(
         self, worker: ScheduledWorker, failures: int, exc: Exception
     ) -> None:
         """File a wiki issue when consecutive_failures first crosses the threshold."""
@@ -157,10 +157,9 @@ class IntervalScheduler:
             return  # Only act at exactly the threshold crossing
 
         from llm_wiki.issues.queue import Issue
-        import datetime as _dt
 
         # Use a timestamp-based key so each threshold crossing creates a fresh issue
-        key = f"{worker.name}-{_dt.datetime.now(_dt.timezone.utc).strftime('%Y%m%dT%H%M%S')}"
+        key = f"{worker.name}-{datetime.datetime.now(datetime.timezone.utc).strftime('%Y%m%dT%H%M%S')}"
         issue = Issue(
             id=Issue.make_id("worker-failure", None, key),
             type="worker-failure",
@@ -222,4 +221,7 @@ class IntervalScheduler:
                 "Worker %r raised (consecutive_failures=%d); will retry on next interval",
                 worker.name, failures,
             )
-            await self._maybe_escalate(worker, failures, exc)
+            try:
+                self._maybe_escalate(worker, failures, exc)
+            except Exception:
+                logger.exception("Worker %r: escalation filing failed", worker.name)
