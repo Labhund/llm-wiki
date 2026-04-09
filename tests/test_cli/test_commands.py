@@ -199,3 +199,46 @@ def test_default_vault_falls_back_to_dot(tmp_path, monkeypatch):
     from llm_wiki.cli.main import _default_vault_path
     result = _default_vault_path()
     assert result == "."
+
+
+def test_get_client_reports_daemon_exit_immediately(tmp_path, monkeypatch):
+    """_get_client() reports the daemon's stderr immediately when it exits, not after 30s."""
+    import sys
+    from subprocess import Popen as RealPopen, DEVNULL
+    import pytest
+
+    # Create a minimal vault
+    (tmp_path / "wiki").mkdir()
+    (tmp_path / "schema").mkdir()
+
+    # Script that exits immediately with an error message on stderr
+    exit_script = tmp_path / "bad_daemon.py"
+    exit_script.write_text('import sys; print("vault config missing", file=sys.stderr); sys.exit(1)')
+
+    from llm_wiki.daemon.client import DaemonClient
+
+    class FakePopenFast:
+        """Subprocess that exits immediately, writing error to the provided stderr."""
+        def __init__(self, cmd, *, start_new_session, stdout, stderr, **kwargs):
+            # Run the bad_daemon script, writing to the provided stderr fd
+            self._proc = RealPopen(
+                [sys.executable, str(exit_script)],
+                stderr=stderr,
+                stdout=DEVNULL,
+                start_new_session=False,
+            )
+
+        def poll(self):
+            return self._proc.poll()
+
+    monkeypatch.setattr("llm_wiki.cli.main.subprocess.Popen", FakePopenFast)
+    monkeypatch.setattr(DaemonClient, "is_running", lambda self: False)
+
+    from llm_wiki.cli.main import _get_client
+    import click
+
+    with pytest.raises(click.ClickException) as exc_info:
+        _get_client(tmp_path)
+
+    error_msg = exc_info.value.format_message()
+    assert "vault config missing" in error_msg

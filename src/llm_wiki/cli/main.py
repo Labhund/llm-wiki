@@ -3,6 +3,7 @@ from __future__ import annotations
 import os
 import subprocess
 import sys
+import tempfile
 import time
 from pathlib import Path
 
@@ -43,19 +44,36 @@ def _get_client(vault_path: Path, auto_start: bool = True) -> DaemonClient:
         )
 
     click.echo("Starting daemon...", err=True)
-    subprocess.Popen(
-        [sys.executable, "-m", "llm_wiki.daemon", str(vault_path.resolve())],
-        start_new_session=True,
-        stdout=subprocess.DEVNULL,
-        stderr=subprocess.DEVNULL,
-    )
 
-    for _ in range(60):
-        time.sleep(0.5)
-        if client.is_running():
-            return client
+    # Capture stderr so startup errors are visible immediately instead of after 30s.
+    stderr_fd, stderr_path_str = tempfile.mkstemp(suffix=".log", prefix="llm-wiki-start-")
+    stderr_path = Path(stderr_path_str)
+    try:
+        proc = subprocess.Popen(
+            [sys.executable, "-m", "llm_wiki.daemon", str(vault_path.resolve())],
+            start_new_session=True,
+            stdout=subprocess.DEVNULL,
+            stderr=stderr_fd,
+        )
+        os.close(stderr_fd)
+        stderr_fd = -1
 
-    raise click.ClickException("Daemon failed to start within 30 seconds")
+        for _ in range(60):
+            time.sleep(0.5)
+            if client.is_running():
+                return client
+            if proc.poll() is not None:
+                err_text = stderr_path.read_text().strip()
+                raise click.ClickException(
+                    f"Daemon failed to start.\n{err_text}" if err_text
+                    else "Daemon failed to start (no error output captured)."
+                )
+
+        raise click.ClickException("Daemon failed to start within 30 seconds")
+    finally:
+        if stderr_fd >= 0:
+            os.close(stderr_fd)
+        stderr_path.unlink(missing_ok=True)
 
 
 @click.group()
