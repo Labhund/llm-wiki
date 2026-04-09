@@ -178,6 +178,89 @@ class PageWriteService:
             content_hash=content_hash,
         )
 
+    async def update(
+        self,
+        *,
+        page: str,
+        patch: str,
+        author: str,
+        connection_id: str,
+        intent: str | None = None,
+    ) -> WriteResult:
+        """Apply a V4A patch to an existing page."""
+        if not author:
+            return WriteResult(status="error", code="missing-author")
+
+        page_path = self._wiki_dir / f"{page}.md"
+        if not page_path.exists():
+            return WriteResult(
+                status="error",
+                code="page-not-found",
+                details={"page": page},
+            )
+        journal_path_rel = str(page_path.relative_to(self._vault_root))
+
+        from llm_wiki.daemon.v4a_patch import (
+            PatchConflict,
+            PatchParseError,
+            apply_patch,
+            parse_patch,
+        )
+
+        try:
+            parsed = parse_patch(patch)
+        except PatchParseError as exc:
+            return WriteResult(
+                status="error",
+                code="patch-parse-error",
+                details={"message": str(exc)},
+            )
+
+        async with self._coordinator.lock_for(page):
+            current = page_path.read_text(encoding="utf-8")
+            try:
+                new_content, apply_result = apply_patch(
+                    parsed,
+                    current,
+                    fuzzy_threshold=self._config.write.patch_fuzzy_match_threshold,
+                )
+            except PatchConflict as exc:
+                return WriteResult(
+                    status="error",
+                    code="patch-conflict",
+                    details={
+                        "message": str(exc),
+                        "current_excerpt": exc.current_excerpt,
+                    },
+                )
+
+            page_path.write_text(new_content, encoding="utf-8")
+            content_hash = _content_hash(new_content)
+            diff_summary = f"+{apply_result.additions} -{apply_result.removals}"
+
+            session = self._registry.get_or_open(
+                author, connection_id, state_dir=self._state_dir,
+            )
+            entry = JournalEntry(
+                ts=_now_iso(),
+                tool="wiki_update",
+                path=journal_path_rel,
+                author=author,
+                intent=intent,
+                summary=diff_summary,
+                content_hash_after=content_hash,
+            )
+            append_journal_entry(session, entry)
+
+        return WriteResult(
+            status="ok",
+            page_path=journal_path_rel,
+            journal_id=str(session.write_count),
+            session_id=session.id,
+            content_hash=content_hash,
+            details={"diff_summary": diff_summary},
+        )
+
     def _build_page_content(
         self,
         title: str,

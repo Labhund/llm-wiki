@@ -171,3 +171,120 @@ async def test_create_requires_author(tmp_path):
     )
     assert result.status == "error"
     assert result.code == "missing-author"
+
+
+@pytest.mark.asyncio
+async def test_update_applies_v4a_patch(tmp_path):
+    service, _ = _make_service(tmp_path)
+    await service.create(
+        title="Foo", body="line one\nline two\nline three\n",
+        citations=["raw/a.pdf"],
+        author="alice", connection_id="conn-1",
+    )
+    service._vault = Vault.scan(tmp_path)
+
+    patch_text = (
+        "*** Begin Patch\n"
+        "*** Update File: wiki/foo.md\n"
+        "@@ @@\n"
+        " line one\n"
+        "-line two\n"
+        "+line two REVISED\n"
+        " line three\n"
+        "*** End Patch\n"
+    )
+    result = await service.update(
+        page="foo",
+        patch=patch_text,
+        author="alice",
+        connection_id="conn-1",
+        intent="revise line two",
+    )
+    assert result.status == "ok"
+    content = (tmp_path / "wiki" / "foo.md").read_text()
+    assert "line two REVISED" in content
+    assert "line two\n" not in content
+
+
+@pytest.mark.asyncio
+async def test_update_returns_patch_conflict(tmp_path):
+    service, _ = _make_service(tmp_path)
+    await service.create(
+        title="Foo", body="alpha\nbeta\ngamma\n",
+        citations=["raw/a.pdf"],
+        author="alice", connection_id="conn-1",
+    )
+    service._vault = Vault.scan(tmp_path)
+
+    patch_text = (
+        "*** Begin Patch\n"
+        "*** Update File: wiki/foo.md\n"
+        "@@ @@\n"
+        " nonexistent context\n"
+        "-old\n"
+        "+new\n"
+        "*** End Patch\n"
+    )
+    result = await service.update(
+        page="foo",
+        patch=patch_text,
+        author="alice",
+        connection_id="conn-1",
+    )
+    assert result.status == "error"
+    assert result.code == "patch-conflict"
+    assert "current_excerpt" in result.details
+
+
+@pytest.mark.asyncio
+async def test_update_journal_entry_carries_diff_summary(tmp_path):
+    from llm_wiki.daemon.sessions import load_journal
+
+    service, registry = _make_service(tmp_path)
+    await service.create(
+        title="Foo", body="a\nb\nc\n",
+        citations=["raw/a.pdf"],
+        author="alice", connection_id="conn-1",
+    )
+    service._vault = Vault.scan(tmp_path)
+
+    patch_text = (
+        "*** Begin Patch\n"
+        "*** Update File: wiki/foo.md\n"
+        "@@ @@\n"
+        " a\n"
+        "-b\n"
+        "+B\n"
+        " c\n"
+        "*** End Patch\n"
+    )
+    await service.update(
+        page="foo", patch=patch_text,
+        author="alice", connection_id="conn-1",
+    )
+
+    sess = registry.lookup_by_author("alice")
+    entries = load_journal(sess.journal_path)
+    update_entries = [e for e in entries if e.tool == "wiki_update"]
+    assert len(update_entries) == 1
+    assert "+1" in update_entries[0].summary
+    assert "-1" in update_entries[0].summary
+
+
+@pytest.mark.asyncio
+async def test_update_missing_page_returns_error(tmp_path):
+    service, _ = _make_service(tmp_path)
+    patch_text = (
+        "*** Begin Patch\n"
+        "*** Update File: wiki/missing.md\n"
+        "@@ @@\n"
+        " x\n"
+        "+y\n"
+        "*** End Patch\n"
+    )
+    result = await service.update(
+        page="missing", patch=patch_text,
+        author="alice", connection_id="conn-1",
+    )
+    assert result.status == "error"
+    assert result.code == "page-not-found"
