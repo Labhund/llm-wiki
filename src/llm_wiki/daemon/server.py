@@ -609,6 +609,8 @@ class DaemonServer:
         except ValueError:
             return {"status": "error", "message": "plan_path must be under inbox/"}
 
+        if not plan_path.exists():
+            return {"status": "error", "message": f"Plan file not found: {plan_path_str}"}
         plan_path.write_text(content, encoding="utf-8")
 
         rel_path = str(plan_path.relative_to(self._vault_root))
