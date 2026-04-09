@@ -11,6 +11,7 @@ description: Use for autonomous (cron, swarm, unattended) ingestion of external 
 2. **`wiki_ingest --dry-run`** — inspect what the daemon would create/update:
    - Zero concepts extracted → abort; report "no concepts extracted"; do not proceed to live ingest
    - All targets have open critical issues → `wiki_talk_post` flagging the conflict; abort
+   - All extracted concepts are below creation threshold (none are central to the source — only passing mentions) → `wiki_talk_post` flagging the source for attended review; abort
    - Otherwise → proceed
 3. **`wiki_ingest`** — execute
 4. **`wiki_session_close`** — mandatory
