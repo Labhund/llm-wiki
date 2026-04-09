@@ -41,6 +41,12 @@ class DaemonServer:
         self._snapshot_store: PageSnapshotStore | None = None
         self._compliance_reviewer = None  # type: ignore[assignment]  # set in start()
         self._dispatcher: ChangeDispatcher | None = None
+        # Phase 6b write surface — populated in start()
+        self._commit_lock = asyncio.Lock()
+        self._commit_service = None  # type: ignore[assignment]
+        self._session_registry = None  # type: ignore[assignment]
+        self._page_write_service = None  # type: ignore[assignment]
+        self._write_coordinator = None  # type: ignore[assignment]
 
     async def start(self) -> None:
         """Scan vault, construct maintenance substrate, start listening."""
@@ -63,6 +69,39 @@ class DaemonServer:
         self._scheduler = IntervalScheduler()
         self._register_maintenance_workers()
         await self._scheduler.start()
+
+        # Phase 6b: write surface (commit pipeline + page writes)
+        from llm_wiki.daemon.commit import CommitService
+        from llm_wiki.daemon.sessions import SessionRegistry, recover_sessions
+        from llm_wiki.daemon.writer import WriteCoordinator
+        from llm_wiki.daemon.writes import PageWriteService
+        from llm_wiki.traverse.llm_client import LLMClient
+
+        self._write_coordinator = WriteCoordinator()
+        self._session_registry = SessionRegistry(self._config.sessions)
+
+        commit_llm = LLMClient(
+            self._llm_queue,
+            model=self._config.llm.default,
+            api_base=self._config.llm.api_base,
+            api_key=self._config.llm.api_key,
+        )
+        self._commit_service = CommitService(
+            vault_root=self._vault_root,
+            llm=commit_llm,
+            lock=self._commit_lock,
+        )
+        self._page_write_service = PageWriteService(
+            vault=self._vault,
+            vault_root=self._vault_root,
+            config=self._config,
+            write_coordinator=self._write_coordinator,
+            registry=self._session_registry,
+            commit_service=self._commit_service,
+        )
+
+        # Recovery: settle any orphaned journals from a prior crash
+        await recover_sessions(state_dir=state_dir, commit_service=self._commit_service)
 
         if self._socket_path.exists():
             self._socket_path.unlink()
@@ -335,8 +374,65 @@ class DaemonServer:
                 return self._handle_talk_append(request)
             case "talk-list":
                 return self._handle_talk_list()
+            case "page-create":
+                return await self._handle_page_create(request)
+            case "page-update":
+                return await self._handle_page_update(request)
+            case "page-append":
+                return await self._handle_page_append(request)
             case _:
                 return {"status": "error", "message": f"Unknown request type: {req_type}"}
+
+    async def _handle_page_create(self, request: dict) -> dict:
+        if self._page_write_service is None:
+            return {"status": "error", "message": "Page write service not initialized"}
+        for f in ("title", "body", "citations", "author", "connection_id"):
+            if f not in request:
+                return {"status": "error", "message": f"Missing required field: {f}"}
+        result = await self._page_write_service.create(
+            title=request["title"],
+            body=request["body"],
+            citations=list(request["citations"]),
+            tags=list(request.get("tags", [])),
+            author=request["author"],
+            connection_id=request["connection_id"],
+            intent=request.get("intent"),
+            force=bool(request.get("force", False)),
+        )
+        return _serialize_write_result(result)
+
+    async def _handle_page_update(self, request: dict) -> dict:
+        if self._page_write_service is None:
+            return {"status": "error", "message": "Page write service not initialized"}
+        for f in ("page", "patch", "author", "connection_id"):
+            if f not in request:
+                return {"status": "error", "message": f"Missing required field: {f}"}
+        result = await self._page_write_service.update(
+            page=request["page"],
+            patch=request["patch"],
+            author=request["author"],
+            connection_id=request["connection_id"],
+            intent=request.get("intent"),
+        )
+        return _serialize_write_result(result)
+
+    async def _handle_page_append(self, request: dict) -> dict:
+        if self._page_write_service is None:
+            return {"status": "error", "message": "Page write service not initialized"}
+        for f in ("page", "section_heading", "body", "citations", "author", "connection_id"):
+            if f not in request:
+                return {"status": "error", "message": f"Missing required field: {f}"}
+        result = await self._page_write_service.append(
+            page=request["page"],
+            section_heading=request["section_heading"],
+            body=request["body"],
+            citations=list(request["citations"]),
+            author=request["author"],
+            connection_id=request["connection_id"],
+            after_heading=request.get("after_heading"),
+            intent=request.get("intent"),
+        )
+        return _serialize_write_result(result)
 
     def _handle_search(self, request: dict) -> dict:
         results = self._vault.search_with_snippets(
@@ -711,6 +807,23 @@ def _serialize_result(r: SearchResult) -> dict:
         "score": r.score,
         "manifest": r.entry.to_manifest_text(),
     }
+
+
+def _serialize_write_result(result) -> dict:
+    out = {
+        "status": result.status,
+        "page_path": result.page_path,
+        "journal_id": result.journal_id,
+        "session_id": result.session_id,
+        "content_hash": result.content_hash,
+    }
+    if result.warnings:
+        out["warnings"] = result.warnings
+    if result.code is not None:
+        out["code"] = result.code
+    if result.details:
+        out.update(result.details)
+    return out
 
 
 def _serialize_snippet_result(r) -> dict:
