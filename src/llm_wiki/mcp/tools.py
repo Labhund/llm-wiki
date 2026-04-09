@@ -88,6 +88,7 @@ async def handle_wiki_read(ctx: ToolContext, args: dict) -> list[TextContent]:
         "page_name": args["page_name"],
         "viewport": args.get("viewport", "top"),
         "section": args.get("section"),
+        "sections": args.get("sections"),
         "grep": args.get("grep"),
         "budget": args.get("budget"),
     })
@@ -101,6 +102,7 @@ WIKI_READ = ToolDefinition(
         "in any open issues for the page and a digest of unresolved talk "
         "entries — you cannot read the page without seeing what background "
         "workers and prior sessions have said about it."
+        " Use viewport='sections' with sections=[...] to read multiple named sections in one call."
     ),
     input_schema={
         "type": "object",
@@ -108,16 +110,105 @@ WIKI_READ = ToolDefinition(
             "page_name": {"type": "string"},
             "viewport": {
                 "type": "string",
-                "enum": ["top", "section", "grep", "full"],
+                "enum": ["top", "section", "sections", "grep", "full"],
                 "default": "top",
             },
             "section": {"type": "string"},
+            "sections": {
+                "type": "array",
+                "items": {"type": "string"},
+                "description": "Section names to read (only with viewport='sections'). Returns sections concatenated with headers preserved. Missing sections listed in missing_sections response field.",
+            },
             "grep": {"type": "string"},
             "budget": {"type": "integer"},
         },
         "required": ["page_name"],
     },
     handler=handle_wiki_read,
+)
+
+
+async def handle_wiki_read_many(ctx: ToolContext, args: dict) -> list[TextContent]:
+    response = await ctx.client.arequest({
+        "type": "read-many",
+        "pages": args["pages"],
+    })
+    return _ok(translate_daemon_response(response))
+
+
+WIKI_READ_MANY = ToolDefinition(
+    name="wiki_read_many",
+    description=(
+        "Read multiple pages in one call. Use this instead of N sequential wiki_read "
+        "calls — one tool call, one decode cycle, one prefill pass. Each page spec "
+        "accepts name, viewport, section, sections, grep, and budget. Each result has "
+        "the same structure as wiki_read (content + issues + talk digest)."
+    ),
+    input_schema={
+        "type": "object",
+        "properties": {
+            "pages": {
+                "type": "array",
+                "description": "List of pages to read, each with their own viewport spec",
+                "items": {
+                    "type": "object",
+                    "properties": {
+                        "name": {"type": "string"},
+                        "viewport": {
+                            "type": "string",
+                            "enum": ["top", "section", "sections", "grep", "full"],
+                            "default": "top",
+                        },
+                        "section": {"type": "string"},
+                        "sections": {"type": "array", "items": {"type": "string"}},
+                        "grep": {"type": "string"},
+                        "budget": {"type": "integer"},
+                    },
+                    "required": ["name"],
+                },
+                "minItems": 1,
+            },
+        },
+        "required": ["pages"],
+    },
+    handler=handle_wiki_read_many,
+)
+
+
+async def handle_wiki_read_cluster(ctx: ToolContext, args: dict) -> list[TextContent]:
+    response = await ctx.client.arequest({
+        "type": "read-cluster",
+        "cluster": args["cluster"],
+        "viewport": args.get("viewport", "top"),
+    })
+    return _ok(translate_daemon_response(response))
+
+
+WIKI_READ_CLUSTER = ToolDefinition(
+    name="wiki_read_cluster",
+    description=(
+        "Load all pages in a named cluster in one call. The manifest shows cluster "
+        "names and their page counts — check total tokens before calling on large "
+        "clusters. Response includes cluster_tokens so you know how much you loaded. "
+        "viewport applies to every page: top for overviews, full for complete pages."
+    ),
+    input_schema={
+        "type": "object",
+        "properties": {
+            "cluster": {
+                "type": "string",
+                "description": "Cluster name as shown in wiki_manifest output",
+            },
+            "viewport": {
+                "type": "string",
+                "enum": ["top", "full"],
+                "default": "top",
+                "description": "top=first section + TOC for each page; full=complete page content",
+            },
+        },
+        "required": ["cluster"],
+    },
+    handler=handle_wiki_read_cluster,
 )
 
 
@@ -765,6 +856,8 @@ WIKI_INBOX_LIST = ToolDefinition(
 WIKI_TOOLS: list[ToolDefinition] = [
     WIKI_SEARCH,
     WIKI_READ,
+    WIKI_READ_MANY,
+    WIKI_READ_CLUSTER,
     WIKI_MANIFEST,
     WIKI_STATUS,
     WIKI_QUERY,
