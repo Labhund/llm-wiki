@@ -128,8 +128,11 @@ class IngestAgent:
 
         result.source_chars = len(extraction.content)
 
-        if companion and extraction.success:
-            write_companion_body(companion, extraction.content)
+        if companion:
+            try:
+                write_companion_body(companion, extraction.content)
+            except Exception as e:  # noqa: BLE001
+                logger.warning("Failed to write companion body for %s: %s", source_path, e)
 
         budget = self._config.budgets.default_ingest
         messages = compose_concept_extraction_messages(
