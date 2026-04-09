@@ -22,7 +22,7 @@ async def test_lint_route_returns_audit_report(sample_vault: Path, tmp_path: Pat
         resp = client.request({"type": "lint"})
 
         assert resp["status"] == "ok"
-        assert resp["total_checks_run"] == 7
+        assert resp["total_checks_run"] == 8
         assert resp["total_issues"] >= 4
         assert "orphans" in resp["by_check"]
         assert "broken-wikilinks" in resp["by_check"]

@@ -8,6 +8,7 @@ from pathlib import Path
 import yaml
 
 from llm_wiki.config import WikiConfig
+from llm_wiki.ingest.plan import read_plan_frontmatter
 from llm_wiki.ingest.source_meta import _SUPPORTED_BINARY, read_frontmatter
 from llm_wiki.issues.queue import Issue
 from llm_wiki.talk.page import TalkPage, iter_talk_pages, compute_open_set
@@ -481,3 +482,40 @@ def find_synthesis_without_resonance(vault_root: Path, config: WikiConfig) -> Ch
             )
         )
     return CheckResult(check="synthesis-without-resonance", issues=issues)
+
+
+def find_inbox_staleness(vault_root: Path) -> CheckResult:
+    """Surface any inbox/ plan file with status: in-progress as a minor issue.
+
+    Skips gracefully if inbox/ does not exist. Ignores files with no
+    frontmatter or any status other than 'in-progress'.
+    """
+    inbox_dir = vault_root / "inbox"
+    if not inbox_dir.is_dir():
+        return CheckResult(check="inbox-staleness", issues=[])
+
+    issues: list[Issue] = []
+    for file in sorted(inbox_dir.iterdir()):
+        if not file.is_file() or file.suffix.lower() not in (".md", ".markdown"):
+            continue
+        fm = read_plan_frontmatter(file)
+        if fm.get("status") != "in-progress":
+            continue
+        started = fm.get("started", "unknown")
+        source = fm.get("source", "unknown source")
+        issues.append(Issue(
+            id=Issue.make_id("inbox-in-progress", _file_slug(file), ""),
+            type="inbox-in-progress",
+            status="open",
+            severity="minor",
+            title=f"Active ingest plan: inbox/{file.name}",
+            page=f"inbox/{file.name}",
+            body=(
+                f"`inbox/{file.name}` is `status: in-progress` (started {started}, "
+                f"source: {source}). Complete the ingest or mark the plan as completed."
+            ),
+            created=Issue.now_iso(),
+            detected_by="auditor",
+            metadata={"path": f"inbox/{file.name}", "started": started, "source": source},
+        ))
+    return CheckResult(check="inbox-staleness", issues=issues)

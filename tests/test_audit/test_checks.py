@@ -358,3 +358,80 @@ def test_find_source_gaps_severity(tmp_path: Path):
     assert by_type["bare-source"] == "minor"
     assert by_type["unread-source"] == "minor"
     assert by_type["in-progress-no-plan"] == "moderate"
+
+
+# ---------------------------------------------------------------------------
+# find_inbox_staleness
+# ---------------------------------------------------------------------------
+
+from llm_wiki.audit.checks import find_inbox_staleness
+
+
+def _write_plan(path, status: str, started: str = "2026-04-10") -> None:
+    path.write_text(
+        f"---\nsource: raw/paper.pdf\nstarted: {started}\nstatus: {status}\nsessions: 1\n---\n\n"
+        "## Claims / Ideas\n- [ ] Alpha\n"
+    )
+
+
+def test_find_inbox_staleness_flags_in_progress(tmp_path):
+    inbox_dir = tmp_path / "inbox"
+    inbox_dir.mkdir()
+    _write_plan(inbox_dir / "2026-04-10-paper-plan.md", "in-progress")
+    result = find_inbox_staleness(tmp_path)
+    assert result.check == "inbox-staleness"
+    types = {i.type for i in result.issues}
+    assert "inbox-in-progress" in types
+
+
+def test_find_inbox_staleness_includes_started_date(tmp_path):
+    inbox_dir = tmp_path / "inbox"
+    inbox_dir.mkdir()
+    _write_plan(inbox_dir / "2026-04-10-paper-plan.md", "in-progress", started="2026-04-01")
+    result = find_inbox_staleness(tmp_path)
+    assert any("2026-04-01" in i.body for i in result.issues)
+
+
+def test_find_inbox_staleness_ignores_completed(tmp_path):
+    inbox_dir = tmp_path / "inbox"
+    inbox_dir.mkdir()
+    _write_plan(inbox_dir / "2026-04-10-paper-plan.md", "completed")
+    result = find_inbox_staleness(tmp_path)
+    assert result.issues == []
+
+
+def test_find_inbox_staleness_no_inbox_dir(tmp_path):
+    result = find_inbox_staleness(tmp_path)
+    assert result.check == "inbox-staleness"
+    assert result.issues == []
+
+
+def test_find_inbox_staleness_empty_inbox(tmp_path):
+    (tmp_path / "inbox").mkdir()
+    result = find_inbox_staleness(tmp_path)
+    assert result.issues == []
+
+
+def test_find_inbox_staleness_severity_is_minor(tmp_path):
+    inbox_dir = tmp_path / "inbox"
+    inbox_dir.mkdir()
+    _write_plan(inbox_dir / "plan.md", "in-progress")
+    result = find_inbox_staleness(tmp_path)
+    assert all(i.severity == "minor" for i in result.issues)
+
+
+def test_find_inbox_staleness_skips_non_md_files(tmp_path):
+    inbox_dir = tmp_path / "inbox"
+    inbox_dir.mkdir()
+    (inbox_dir / "notes.txt").write_text("status: in-progress\n")
+    result = find_inbox_staleness(tmp_path)
+    assert result.issues == []
+
+
+def test_find_inbox_staleness_skips_missing_status_frontmatter(tmp_path):
+    """A plan file with no frontmatter is not flagged — only explicit in-progress is."""
+    inbox_dir = tmp_path / "inbox"
+    inbox_dir.mkdir()
+    (inbox_dir / "plan.md").write_text("# Plan\n\nNo frontmatter.\n")
+    result = find_inbox_staleness(tmp_path)
+    assert result.issues == []
