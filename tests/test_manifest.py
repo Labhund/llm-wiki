@@ -57,3 +57,21 @@ def test_cluster_summary():
     assert cluster.name == "bio"
     assert cluster.page_count == 5
     assert cluster.total_tokens == 100 + 200 + 300 + 400 + 500
+
+
+def test_build_entry_sets_is_synthesis_for_synthesis_page(tmp_path: Path):
+    """build_entry sets is_synthesis=True when frontmatter has status: synthesis."""
+    p = tmp_path / "my-synthesis.md"
+    p.write_text("---\ntitle: My Synthesis\nstatus: synthesis\n---\nSome content.\n")
+    page = Page.parse(p)
+    entry = build_entry(page, cluster="analysis")
+    assert entry.is_synthesis is True
+
+
+def test_build_entry_is_synthesis_false_for_extracted_page(tmp_path: Path):
+    """build_entry sets is_synthesis=False when status is absent or not synthesis."""
+    p = tmp_path / "ordinary.md"
+    p.write_text("---\ntitle: Ordinary Page\n---\nSome content.\n")
+    page = Page.parse(p)
+    entry = build_entry(page, cluster="bio")
+    assert entry.is_synthesis is False
