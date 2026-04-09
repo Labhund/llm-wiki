@@ -112,3 +112,51 @@ class TestLLMConfigLegacyCompat:
         cfg = LLMConfig()
         with pytest.raises(ValueError):
             cfg.resolve()
+
+
+class TestWikiConfigLoadMigration:
+    def test_legacy_yaml_migrated(self, tmp_path: Path):
+        """Old-style YAML with default/api_base/api_key is migrated to internal fields."""
+        cfg_file = tmp_path / "config.yaml"
+        cfg_file.write_text(
+            "llm:\n"
+            "  default: ollama/llama3\n"
+            "  api_base: http://localhost:11434\n"
+            "  api_key: sk-123\n"
+        )
+        from llm_wiki.config import WikiConfig
+        cfg = WikiConfig.load(cfg_file)
+        assert cfg.llm.default_backend == "default"
+        assert cfg.llm.backends["default"].model == "ollama/llama3"
+        assert cfg.llm.backends["default"].api_base == "http://localhost:11434"
+        assert cfg.llm.backends["default"].api_key == "sk-123"
+        # resolve works through legacy backend
+        backend = cfg.llm.resolve()
+        assert backend.model == "ollama/llama3"
+
+    def test_new_style_yaml_with_backends(self, tmp_path: Path):
+        """New-style YAML with backends dict works directly."""
+        cfg_file = tmp_path / "config.yaml"
+        cfg_file.write_text(yaml.dump({
+            "llm": {
+                "backends": {
+                    "fast": {"model": "openai/gemma"},
+                    "deep": {"model": "openai/qwen35", "api_base": "http://localhost:4000/v1"},
+                },
+                "default_backend": "fast",
+                "adversary": "deep",
+            }
+        }))
+        from llm_wiki.config import WikiConfig
+        cfg = WikiConfig.load(cfg_file)
+        assert isinstance(cfg.llm.backends["fast"], LLMBackend)
+        assert cfg.llm.backends["deep"].model == "openai/qwen35"
+        assert cfg.llm.resolve("adversary").model == "openai/qwen35"
+        assert cfg.llm.resolve().model == "openai/gemma"
+
+    def test_missing_file_still_works(self):
+        """No config file = default LLMConfig (no backends, resolve raises)."""
+        from llm_wiki.config import WikiConfig
+        cfg = WikiConfig.load(Path("/nonexistent/config.yaml"))
+        with pytest.raises(ValueError):
+            cfg.llm.resolve()

@@ -185,4 +185,13 @@ class WikiConfig:
             data = yaml.safe_load(f)
         if not data:
             return cls()
+        # Migrate old LLM config keys to new internal names
+        if "llm" in data and isinstance(data["llm"], dict):
+            llm = data["llm"]
+            if "backends" not in llm and "default" in llm:
+                llm["_default_model"] = llm.pop("default")
+                if "api_base" in llm:
+                    llm["_default_api_base"] = llm.pop("api_base")
+                if "api_key" in llm:
+                    llm["_default_api_key"] = llm.pop("api_key")
         return _merge(cls, data)
