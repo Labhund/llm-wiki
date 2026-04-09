@@ -183,7 +183,7 @@ class Vault:
                 found.append(text)
 
         content = "\n\n---\n\n".join(found)
-        if budget and count_tokens(content) > budget:
+        if budget is not None and count_tokens(content) > budget:
             content = content[: budget * 4].rsplit("\n", 1)[0] + "\n... (truncated)"
 
         return {"content": content, "missing_sections": missing}
