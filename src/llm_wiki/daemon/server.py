@@ -342,7 +342,113 @@ class DaemonServer:
         )
         if content is None:
             return {"status": "error", "message": f"Page not found: {request['page_name']}"}
-        return {"status": "ok", "content": content}
+
+        page_name = request["page_name"]
+        return {
+            "status": "ok",
+            "content": content,
+            "issues": self._read_issues_block(page_name),
+            "talk": self._read_talk_block(page_name),
+        }
+
+    def _read_issues_block(self, page_name: str) -> dict:
+        """Build the per-page issues digest folded into wiki_read responses."""
+        queue = self._issue_queue()
+        all_issues = queue.list(status="open")
+        page_issues = [i for i in all_issues if i.page == page_name]
+
+        by_severity: dict[str, int] = {"critical": 0, "moderate": 0, "minor": 0}
+        for issue in page_issues:
+            by_severity[issue.severity] = by_severity.get(issue.severity, 0) + 1
+
+        items = [
+            {
+                "id": issue.id,
+                "severity": issue.severity,
+                "title": issue.title,
+                "body": issue.body,
+            }
+            for issue in page_issues
+        ]
+        return {
+            "open_count": len(page_issues),
+            "by_severity": by_severity,
+            "items": items,
+        }
+
+    def _read_talk_block(self, page_name: str) -> dict:
+        """Build the per-page talk-page digest folded into wiki_read responses.
+
+        Critical and moderate open entries are inlined verbatim under
+        `recent_critical` / `recent_moderate`. Everything else collapses
+        into counts + the librarian's stored 2-sentence summary.
+        Resolved entries are excluded from counts and `recent_*`.
+        """
+        from llm_wiki.librarian.talk_summary import TalkSummaryStore
+        from llm_wiki.talk.page import TalkPage, compute_open_set
+
+        wiki_dir = self._vault_root / self._config.vault.wiki_dir.rstrip("/")
+        # Find the page file (may be nested) so we can derive the talk path
+        page_path = None
+        for candidate in wiki_dir.rglob(f"{page_name}.md"):
+            rel = candidate.relative_to(wiki_dir)
+            if any(p.startswith(".") for p in rel.parts):
+                continue
+            page_path = candidate
+            break
+
+        empty = {
+            "entry_count": 0,
+            "open_count": 0,
+            "by_severity": {
+                "critical": 0, "moderate": 0, "minor": 0,
+                "suggestion": 0, "new_connection": 0,
+            },
+            "summary": "",
+            "recent_critical": [],
+            "recent_moderate": [],
+        }
+        if page_path is None:
+            return empty
+
+        talk = TalkPage.for_page(page_path)
+        if not talk.exists:
+            return empty
+
+        all_entries = talk.load()
+        open_entries = compute_open_set(all_entries)
+
+        by_severity = {
+            "critical": 0, "moderate": 0, "minor": 0,
+            "suggestion": 0, "new_connection": 0,
+        }
+        for e in open_entries:
+            by_severity[e.severity] = by_severity.get(e.severity, 0) + 1
+
+        recent_critical = [
+            {"index": e.index, "ts": e.timestamp, "author": e.author, "body": e.body}
+            for e in open_entries if e.severity == "critical"
+        ]
+        recent_moderate = [
+            {"index": e.index, "ts": e.timestamp, "author": e.author, "body": e.body}
+            for e in open_entries if e.severity == "moderate"
+        ]
+
+        # Pull the librarian's stored summary if present
+        summary_store = TalkSummaryStore.load(
+            _state_dir_for(self._vault_root) / "talk_summaries.json"
+        )
+        record = summary_store.get(page_name)
+        summary_text = record.summary if record is not None else ""
+
+        return {
+            "entry_count": len(all_entries),
+            "open_count": len(open_entries),
+            "by_severity": by_severity,
+            "summary": summary_text,
+            "recent_critical": recent_critical,
+            "recent_moderate": recent_moderate,
+        }
 
     def _handle_manifest(self, request: dict) -> dict:
         text = self._vault.manifest_text(budget=request.get("budget", 16000))
