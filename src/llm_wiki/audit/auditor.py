@@ -9,6 +9,8 @@ from llm_wiki.audit.checks import (
     find_missing_markers,
     find_orphans,
     find_source_gaps,
+    find_stale_resonance,
+    find_synthesis_without_resonance,
 )
 from llm_wiki.config import WikiConfig
 from llm_wiki.issues.queue import IssueQueue
@@ -60,6 +62,8 @@ class Auditor:
             find_missing_markers(self._vault),
             find_broken_citations(self._vault, self._vault_root),
             find_source_gaps(self._vault_root, self._config),
+            find_stale_resonance(self._vault_root, self._config),
+            find_synthesis_without_resonance(self._vault_root, self._config),
         ]
 
         by_check: dict[str, int] = {}

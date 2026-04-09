@@ -119,3 +119,16 @@ def test_phase6b_config_loads_overrides(tmp_path: Path):
     assert cfg.sessions.namespace_by_connection is False
     assert cfg.write.require_citations_on_create is False
     assert cfg.write.name_jaccard_threshold == 0.4
+
+
+def test_maintenance_config_has_synthesis_defaults():
+    cfg = WikiConfig()
+    assert cfg.maintenance.synthesis_lint_enabled is False
+    assert cfg.maintenance.synthesis_lint_months == 6
+
+
+def test_maintenance_config_has_resonance_defaults():
+    cfg = WikiConfig()
+    assert cfg.maintenance.resonance_matching is False
+    assert cfg.maintenance.resonance_candidates_per_claim == 3
+    assert cfg.maintenance.resonance_stale_weeks == 4

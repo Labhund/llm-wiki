@@ -183,3 +183,25 @@ Situate claims, don't extract them. For each concept, how does it connect to wha
 
 **Scope:** if 10+ pages estimated, flag before committing — large ingests benefit from Deep mode so synthesis doesn't get buried in bulk creation.
 
+## Synthesis Pages
+
+When ingest analysis produces a genuinely original insight — a connection, pattern, or conclusion that exists nowhere in the sources — write it as a synthesis page:
+
+```yaml
+---
+status: synthesis
+title: Your Synthesis Title
+---
+```
+
+Synthesis pages:
+- Do not require `[[raw/...]]` citations (the session is the source; note the session date in the body)
+- Will not be adversary-verified (no raw source to check against)
+- Are priority targets for future resonance matching — the system compares incoming sources against them automatically
+- Should link aggressively to related pages: the value is the connection, not the page itself
+
+When to create a synthesis page vs a talk post:
+- **Talk post:** "I think X and Y might be related" (pre-analysis, speculative)
+- **Synthesis page:** "X and Y are related because Z — here is the evidence" (analysis complete, connections explicit)
+
+The distinction matters: synthesis pages enter the resonance matching queue; talk posts do not.

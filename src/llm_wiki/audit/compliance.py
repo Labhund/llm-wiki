@@ -282,6 +282,10 @@ class ComplianceReviewer:
         considered "new" and checked. For edits, only sentences present in the
         new body but not in the old body are checked.
         """
+        # Synthesis pages have no external citation requirement — the analysis
+        # session itself is the source. Skip the citation check entirely.
+        if self._is_synthesis_page(new_content):
+            return
         new_body = self._strip_frontmatter(new_content)
         new_sentences = set(self._extract_body_sentences(new_body))
         if old_content is None:
@@ -389,3 +393,20 @@ class ComplianceReviewer:
             return False
 
         return True
+
+    @staticmethod
+    def _is_synthesis_page(content: str) -> bool:
+        """True iff the page frontmatter contains `status: synthesis`."""
+        if not content.startswith("---\n"):
+            return False
+        try:
+            end = content.index("\n---", 4)
+        except ValueError:
+            return False
+        fm_text = content[3:end].strip()
+        import yaml
+        try:
+            fm = yaml.safe_load(fm_text) or {}
+        except yaml.YAMLError:
+            return False
+        return fm.get("status") == "synthesis"

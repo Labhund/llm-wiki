@@ -5,7 +5,12 @@ import re
 from dataclasses import dataclass
 from pathlib import Path
 
+import yaml
+
+from llm_wiki.config import WikiConfig
+from llm_wiki.ingest.source_meta import _SUPPORTED_BINARY, read_frontmatter
 from llm_wiki.issues.queue import Issue
+from llm_wiki.talk.page import TalkPage, iter_talk_pages, compute_open_set
 from llm_wiki.vault import Vault
 
 # Page names that should never be flagged as orphans even if nothing links to them.
@@ -198,10 +203,6 @@ def find_broken_citations(vault: Vault, vault_root: Path) -> CheckResult:
     return CheckResult(check="broken-citations", issues=issues)
 
 
-from llm_wiki.config import WikiConfig
-from llm_wiki.ingest.source_meta import _SUPPORTED_BINARY, read_frontmatter
-
-
 def _file_slug(path: Path) -> str:
     """Return a safe lowercase slug from a filename (no extension, no dots)."""
     slug = re.sub(r"[^a-z0-9]+", "-", path.stem.lower()).strip("-")
@@ -349,3 +350,134 @@ def find_source_gaps(vault_root: Path, config: WikiConfig) -> CheckResult:
                 ))
 
     return CheckResult(check="source-gaps", issues=issues)
+
+
+def find_stale_resonance(vault_root: Path, config: WikiConfig) -> CheckResult:
+    """Open resonance talk entries older than resonance_stale_weeks.
+
+    Walks wiki/ talk pages, finds unresolved entries with type='resonance'
+    whose timestamp is older than the configured threshold. Pure file reads,
+    no LLM.
+    """
+    wiki_dir = vault_root / config.vault.wiki_dir.rstrip("/")
+    threshold_days = config.maintenance.resonance_stale_weeks * 7
+    now = datetime.datetime.now(datetime.timezone.utc)
+    issues: list[Issue] = []
+
+    for page_name, talk in iter_talk_pages(wiki_dir):
+        entries = talk.load()
+        open_entries = compute_open_set(entries)
+        resonance_open = [e for e in open_entries if e.type == "resonance"]
+        for entry in resonance_open:
+            try:
+                ts = datetime.datetime.fromisoformat(entry.timestamp)
+                if ts.tzinfo is None:
+                    ts = ts.replace(tzinfo=datetime.timezone.utc)
+            except (ValueError, TypeError):
+                continue
+            age_days = (now - ts).days
+            if age_days < threshold_days:
+                continue
+            issues.append(
+                Issue(
+                    id=Issue.make_id("stale-resonance", page_name, entry.timestamp),
+                    type="stale-resonance",
+                    status="open",
+                    severity="minor",
+                    title=f"Unreviewed resonance entry on '{page_name}' ({age_days}d old)",
+                    page=page_name,
+                    body=(
+                        f"A resonance talk entry on [[{page_name}]] has not been "
+                        f"reviewed in {age_days} days. Review whether the resonance "
+                        f"is meaningful: promote to main content, add cross-reference, "
+                        f"or resolve as a false match."
+                    ),
+                    created=Issue.now_iso(),
+                    detected_by="auditor",
+                    metadata={"entry_timestamp": entry.timestamp, "age_days": age_days},
+                )
+            )
+    return CheckResult(check="stale-resonance", issues=issues)
+
+
+def find_synthesis_without_resonance(vault_root: Path, config: WikiConfig) -> CheckResult:
+    """Synthesis pages older than synthesis_lint_months with no resonance talk entries.
+
+    Gated by config.maintenance.synthesis_lint_enabled (default False).
+    """
+    if not config.maintenance.synthesis_lint_enabled:
+        return CheckResult(check="synthesis-without-resonance", issues=[])
+
+    wiki_dir = vault_root / config.vault.wiki_dir.rstrip("/")
+    threshold_days = config.maintenance.synthesis_lint_months * 30
+    today = datetime.date.today()
+    issues: list[Issue] = []
+
+    if not wiki_dir.exists():
+        return CheckResult(check="synthesis-without-resonance", issues=[])
+
+    for md_path in sorted(wiki_dir.rglob("*.md")):
+        rel = md_path.relative_to(wiki_dir)
+        if any(p.startswith(".") for p in rel.parts):
+            continue
+        if md_path.name.endswith(".talk.md"):
+            continue
+
+        try:
+            with md_path.open(encoding="utf-8") as f:
+                if f.readline().strip() != "---":
+                    continue
+                lines: list[str] = []
+                for _ in range(30):
+                    line = f.readline()
+                    if not line or line.strip() == "---":
+                        break
+                    lines.append(line)
+        except OSError:
+            continue
+
+        try:
+            fm = yaml.safe_load("".join(lines)) or {}
+        except yaml.YAMLError:
+            continue
+
+        if fm.get("status") != "synthesis":
+            continue
+
+        ingested_str = fm.get("ingested")
+        if ingested_str is None:
+            continue
+        try:
+            ingested = datetime.date.fromisoformat(str(ingested_str))
+        except (ValueError, TypeError):
+            continue
+
+        age_days = (today - ingested).days
+        if age_days < threshold_days:
+            continue
+
+        talk = TalkPage.for_page(md_path)
+        entries = talk.load()
+        has_resonance = any(e.type == "resonance" for e in entries)
+        if has_resonance:
+            continue
+
+        page_name = md_path.stem
+        issues.append(
+            Issue(
+                id=Issue.make_id("synthesis-without-resonance", page_name, ""),
+                type="synthesis-without-resonance",
+                status="open",
+                severity="minor",
+                title=f"Synthesis page '{page_name}' has no resonance checks ({age_days}d old)",
+                page=page_name,
+                body=(
+                    f"The synthesis page [[{page_name}]] is {age_days} days old and "
+                    f"has never received a resonance talk entry."
+                ),
+                created=Issue.now_iso(),
+                detected_by="auditor",
+                metadata={"age_days": age_days, "ingested": str(ingested_str)},
+            )
+        )
+    return CheckResult(check="synthesis-without-resonance", issues=issues)

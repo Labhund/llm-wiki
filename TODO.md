@@ -168,39 +168,6 @@ note: "New source may corroborate/extend/contradict this claim. Review recommend
 
 ---
 
-### 7. Attended Ingest Skill Rewrite
-
-**What:** Replace the current two-path (conversational / automated) attended ingest with three distinct modes that reflect actual use cases.
-
-**Current problem:** "Conversational" mode is just automated extraction with a human watching. Both paths produce the same output (extracted pages). The attended agent's unique value — user context, memory, wiki knowledge, synthesis capability — is unused.
-
-**Three modes:**
-
-**Queue** — "I have a paper, ingest it, I don't have opinions."
-- Agent copies source to `raw/`, hands off to `wiki_ingest` (background)
-- Reports what was created
-- No deep engagement required
-
-**Brief** — "Read it for me with my context. Tell me what matters."
-- Agent reads source with user memory + wiki context loaded
-- Produces a briefing: what's genuinely new to *you*, what's already covered, what contradicts existing pages, which bits warrant reading yourself
-- User decides: queue the rest / go deeper on specific claims / do nothing
-- The briefing IS the value — not page creation
-
-**Deep** — "Let's think through this together, claim by claim."
-- Agent creates inbox plan file (item 2) before touching any wiki tool
-- Task list = claims/ideas (not pages)
-- Per-claim loop: agent analysis → human reaction → scratchpad (talk post on relevant page) → decision (create page now / defer / talk post only / skip)
-- Session ends with checkpoint written to plan file, plan committed to git
-- Multi-session: next session reads plan file, reconstructs task list, resumes
-
-**What needs to change:**
-- `skills/llm-wiki/ingest.md` — full rewrite of Act 2 and Act 3
-- `skills/llm-wiki/autonomous/ingest.md` — unchanged (autonomous = queue mode only)
-- Document the inbox plan file convention as part of deep mode
-
----
-
 ## LLM-Facing Interface Optimisation — Information Density Pass
 
 **Origin:** Building `docs/gallery.md` (2026-04-09) revealed a concrete mismatch between the designed interface and how an LLM actually consumes it. The human mental model — pretty-printed JSON, verbose key names, whitespace-aided navigation — is actively wasteful for LLM consumers. This section captures the work needed to fix that across all three layers: serialisation, response schema design, and tool description / skill quality.

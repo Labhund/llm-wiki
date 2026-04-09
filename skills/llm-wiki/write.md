@@ -48,6 +48,20 @@ Link aggressively as you write — every salient noun, technical term, and named
 
 When creating multiple related pages: use a one-level topic subdirectory (`topic/page-name`) to cluster them. Flat naming for standalone concepts; subdirectory for concept families (e.g., `transformers/attention`, `transformers/positional-encoding`).
 
+## Synthesis Pages
+
+Pages that represent original analysis rather than extracted source claims use `status: synthesis` in frontmatter. Synthesis pages:
+- Do not require external `[[raw/...]]` citations (the analysis session is the source)
+- Are skipped by the adversary's verification pass
+- Are targets for resonance matching — the system will compare incoming sources against them
+- Use `wiki_talk_post` on the synthesis page when a related source arrives
+
+Set `status: synthesis` at page creation. Do not set it on extracted pages — use it only when the content is genuinely the agent's synthesis, not a source summary.
+
 ## Before Writing
 
 Check inline signals from `wiki_read`. If a page has open critical or moderate issues, address or acknowledge them before adding new content. Writing over a broken page makes it worse.
+
+---
+
+**Close your session.** When the write task is complete: `wiki_session_close`. Sessions open implicitly on first write; they do not close themselves unless the inactivity timer fires (5 min). In short fast sessions the timer may not fire — close explicitly.
