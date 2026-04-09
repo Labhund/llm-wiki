@@ -8,7 +8,10 @@ from llm_wiki.audit.checks import (
     find_broken_wikilinks,
     find_missing_markers,
     find_orphans,
+    find_stale_resonance,
+    find_synthesis_without_resonance,
 )
+from llm_wiki.config import WikiConfig
 from llm_wiki.issues.queue import IssueQueue
 from llm_wiki.vault import Vault
 
@@ -38,10 +41,11 @@ class AuditReport:
 class Auditor:
     """Runs all structural checks and routes results through the issue queue."""
 
-    def __init__(self, vault: Vault, queue: IssueQueue, vault_root: Path) -> None:
+    def __init__(self, vault: Vault, queue: IssueQueue, vault_root: Path, config: WikiConfig | None = None) -> None:
         self._vault = vault
         self._queue = queue
         self._vault_root = vault_root
+        self._config = config or WikiConfig()
 
     def audit(self) -> AuditReport:
         """Run every check and file each issue idempotently."""
@@ -50,6 +54,8 @@ class Auditor:
             find_broken_wikilinks(self._vault),
             find_missing_markers(self._vault),
             find_broken_citations(self._vault, self._vault_root),
+            find_stale_resonance(self._vault_root, self._config),
+            find_synthesis_without_resonance(self._vault_root, self._config),
         ]
 
         by_check: dict[str, int] = {}
