@@ -223,3 +223,30 @@ def test_scan_skips_directory_named_dot_md(tmp_path):
     # Should not raise
     vault = Vault.scan(tmp_path)
     assert vault.page_count == 1
+
+
+def test_scan_rejects_non_vault_directory(tmp_path):
+    """Vault.scan() raises ValueError with a clear message for non-vault paths."""
+    import pytest
+    (tmp_path / "downloads").mkdir()
+    (tmp_path / "documents").mkdir()
+
+    with pytest.raises(ValueError, match="does not appear to be an llm-wiki vault"):
+        Vault.scan(tmp_path)
+
+
+def test_scan_accepts_directory_with_schema_config(tmp_path):
+    """Vault.scan() accepts a directory that has schema/config.yaml."""
+    (tmp_path / "schema").mkdir()
+    (tmp_path / "schema" / "config.yaml").write_text("vault:\n  mode: managed\n")
+
+    vault = Vault.scan(tmp_path)
+    assert vault.page_count == 0
+
+
+def test_scan_accepts_directory_with_wiki_dir(tmp_path):
+    """Vault.scan() accepts a directory that has a wiki/ subdirectory."""
+    (tmp_path / "wiki").mkdir()
+
+    vault = Vault.scan(tmp_path)
+    assert vault.page_count == 0

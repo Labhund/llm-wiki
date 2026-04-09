@@ -61,6 +61,10 @@ It references [[some-other-page]] in passing.
 @pytest.fixture
 def sample_vault(tmp_path: Path) -> Path:
     """Create a temporary vault with sample pages."""
+    # Add wiki/ directory to pass vault validation guard
+    wiki_dir = tmp_path / "wiki"
+    wiki_dir.mkdir()
+
     bio = tmp_path / "bioinformatics"
     bio.mkdir()
     (bio / "srna-embeddings.md").write_text(SAMPLE_PAGE_WITH_MARKERS)

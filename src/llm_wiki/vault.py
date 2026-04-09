@@ -53,6 +53,15 @@ class Vault:
         state_dir = _state_dir_for(root)
         state_dir.mkdir(parents=True, exist_ok=True)
 
+        # Validate that this directory looks like a vault before walking.
+        has_config = (root / "schema" / "config.yaml").exists()
+        has_vault_dir = (root / "raw").exists() or (root / "wiki").exists()
+        if not has_config and not has_vault_dir:
+            raise ValueError(
+                f"Path '{root}' does not appear to be an llm-wiki vault. "
+                "Pass --vault <path> or run from inside a vault directory."
+            )
+
         # Find all markdown files, excluding hidden directories
         md_files = sorted(root.rglob("*.md"))
         md_files = [
