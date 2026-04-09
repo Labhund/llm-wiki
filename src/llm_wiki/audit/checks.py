@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import datetime
 import re
 from dataclasses import dataclass
 from pathlib import Path
@@ -195,3 +196,156 @@ def find_broken_citations(vault: Vault, vault_root: Path) -> CheckResult:
                 )
             )
     return CheckResult(check="broken-citations", issues=issues)
+
+
+from llm_wiki.config import WikiConfig
+from llm_wiki.ingest.source_meta import _SUPPORTED_BINARY, read_frontmatter
+
+
+def _file_slug(path: Path) -> str:
+    """Return a safe lowercase slug from a filename (no extension, no dots)."""
+    slug = re.sub(r"[^a-z0-9]+", "-", path.stem.lower()).strip("-")
+    return slug or "file"
+
+
+def _canonical_source(companion: Path, raw_dir: Path) -> str:
+    """Return the canonical raw/<filename> path used in plan file source: fields.
+
+    For a companion foo.md, checks whether a sibling binary (foo.pdf etc.) exists.
+    If yes, returns raw/<binary_name>. If no, returns raw/<companion_name> (native .md source).
+    """
+    for ext in _SUPPORTED_BINARY:
+        binary = companion.with_suffix(ext)
+        if binary.exists():
+            return f"raw/{binary.name}"
+    return f"raw/{companion.name}"
+
+
+def find_source_gaps(vault_root: Path, config: WikiConfig) -> CheckResult:
+    """Scan raw/ for sources with missing or stale reading_status metadata.
+
+    Four issue types:
+      bare-source             (minor)   — binary with no companion .md
+      missing-reading-status  (minor)   — .md with no reading_status field
+      unread-source           (minor)   — unread for > auditor_unread_source_days
+      in-progress-no-plan     (moderate)— in_progress with no matching inbox/ plan
+    """
+    raw_dir = vault_root / "raw"
+    if not raw_dir.is_dir():
+        return CheckResult(check="source-gaps", issues=[])
+
+    threshold_days = config.maintenance.auditor_unread_source_days
+    today = datetime.date.today()
+    issues: list[Issue] = []
+
+    for file in sorted(raw_dir.iterdir()):
+        if not file.is_file():
+            continue
+        suffix = file.suffix.lower()
+
+        # bare-source: binary with no companion .md
+        if suffix in _SUPPORTED_BINARY:
+            companion = file.with_suffix(".md")
+            if not companion.exists():
+                issues.append(Issue(
+                    id=Issue.make_id("bare-source", _file_slug(file), ""),
+                    type="bare-source",
+                    status="open",
+                    severity="minor",
+                    title=f"Source has no metadata companion: raw/{file.name}",
+                    page=f"raw/{file.name}",
+                    body=(
+                        f"`raw/{file.name}` has no companion `.md` file. "
+                        f"Run `wiki_ingest` on it, or call `wiki_source_mark` to register it."
+                    ),
+                    created=Issue.now_iso(),
+                    detected_by="auditor",
+                    metadata={"path": f"raw/{file.name}"},
+                ))
+            continue
+
+        # Only process .md files below this point
+        if suffix not in (".md", ".markdown"):
+            continue
+
+        fm = read_frontmatter(file)
+
+        # missing-reading-status
+        if "reading_status" not in fm:
+            issues.append(Issue(
+                id=Issue.make_id("missing-reading-status", _file_slug(file), ""),
+                type="missing-reading-status",
+                status="open",
+                severity="minor",
+                title=f"Source missing reading_status: raw/{file.name}",
+                page=f"raw/{file.name}",
+                body=(
+                    f"`raw/{file.name}` has no `reading_status` field. "
+                    f"Call `wiki_source_mark` to set it."
+                ),
+                created=Issue.now_iso(),
+                detected_by="auditor",
+                metadata={"path": f"raw/{file.name}"},
+            ))
+            continue
+
+        reading_status = fm["reading_status"]
+        ingested = fm.get("ingested")
+
+        # unread-source: unread for longer than threshold
+        if reading_status == "unread" and ingested is not None:
+            if isinstance(ingested, datetime.date):
+                ingested_date = ingested
+            else:
+                try:
+                    ingested_date = datetime.date.fromisoformat(str(ingested))
+                except (ValueError, TypeError):
+                    ingested_date = None
+            if ingested_date is not None and (today - ingested_date).days > threshold_days:
+                issues.append(Issue(
+                    id=Issue.make_id("unread-source", _file_slug(file), ""),
+                    type="unread-source",
+                    status="open",
+                    severity="minor",
+                    title=f"Unread source: raw/{file.name} (ingested {ingested})",
+                    page=f"raw/{file.name}",
+                    body=(
+                        f"`raw/{file.name}` has been `reading_status: unread` for "
+                        f"{(today - ingested_date).days} days (ingested {ingested}). "
+                        f"Read it or queue it for ingest."
+                    ),
+                    created=Issue.now_iso(),
+                    detected_by="auditor",
+                    metadata={"path": f"raw/{file.name}", "ingested": str(ingested)},
+                ))
+
+        # in-progress-no-plan: check inbox/ if it exists
+        elif reading_status == "in_progress":
+            inbox_dir = vault_root / "inbox"
+            if not inbox_dir.is_dir():
+                continue  # inbox/ not yet created — skip gracefully
+            canonical = _canonical_source(file, raw_dir)
+            has_plan = any(
+                read_frontmatter(plan).get("source") == canonical
+                for plan in inbox_dir.glob("*.md")
+                if plan.is_file()
+            )
+            if not has_plan:
+                issues.append(Issue(
+                    id=Issue.make_id("in-progress-no-plan", _file_slug(file), ""),
+                    type="in-progress-no-plan",
+                    status="open",
+                    severity="moderate",
+                    title=f"In-progress source has no plan file: raw/{file.name}",
+                    page=f"raw/{file.name}",
+                    body=(
+                        f"`raw/{file.name}` is `reading_status: in_progress` but no "
+                        f"plan file in `inbox/` has `source: {canonical}`. "
+                        f"Create an inbox plan file or mark the source as read."
+                    ),
+                    created=Issue.now_iso(),
+                    detected_by="auditor",
+                    metadata={"path": f"raw/{file.name}", "canonical_source": canonical},
+                ))
+
+    return CheckResult(check="source-gaps", issues=issues)

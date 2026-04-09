@@ -225,3 +225,136 @@ def test_find_broken_citations_severity_is_critical(tmp_path: Path):
     assert result.issues, "expected a broken-citation issue"
     for issue in result.issues:
         assert issue.severity == "critical"
+
+
+from llm_wiki.audit.checks import find_source_gaps
+from llm_wiki.config import WikiConfig
+import datetime
+
+
+def _write_companion(path: Path, reading_status: str, ingested: str, source_type: str = "paper") -> None:
+    path.write_text(
+        f"---\nreading_status: {reading_status}\ningested: {ingested}\nsource_type: {source_type}\n---\n"
+    )
+
+
+def test_find_source_gaps_bare_source(tmp_path: Path):
+    """A PDF in raw/ with no companion .md raises a bare-source issue."""
+    raw_dir = tmp_path / "raw"
+    raw_dir.mkdir()
+    (raw_dir / "paper.pdf").write_bytes(b"%PDF-1.4 fake")
+    result = find_source_gaps(tmp_path, WikiConfig())
+    assert result.check == "source-gaps"
+    types = {i.type for i in result.issues}
+    assert "bare-source" in types
+
+
+def test_find_source_gaps_no_issue_when_companion_exists(tmp_path: Path):
+    """A PDF with a companion .md does not trigger bare-source."""
+    raw_dir = tmp_path / "raw"
+    raw_dir.mkdir()
+    (raw_dir / "paper.pdf").write_bytes(b"%PDF-1.4 fake")
+    _write_companion(raw_dir / "paper.md", "unread", "2026-04-10")
+    result = find_source_gaps(tmp_path, WikiConfig())
+    types = {i.type for i in result.issues}
+    assert "bare-source" not in types
+
+
+def test_find_source_gaps_missing_reading_status(tmp_path: Path):
+    """A .md in raw/ without reading_status raises missing-reading-status."""
+    raw_dir = tmp_path / "raw"
+    raw_dir.mkdir()
+    (raw_dir / "article.md").write_text("---\ntitle: Article\n---\nContent.\n")
+    result = find_source_gaps(tmp_path, WikiConfig())
+    types = {i.type for i in result.issues}
+    assert "missing-reading-status" in types
+
+
+def test_find_source_gaps_unread_source_over_threshold(tmp_path: Path):
+    """reading_status: unread older than threshold raises unread-source."""
+    raw_dir = tmp_path / "raw"
+    raw_dir.mkdir()
+    old_date = (datetime.date.today() - datetime.timedelta(days=60)).isoformat()
+    _write_companion(raw_dir / "old-paper.md", "unread", old_date)
+    result = find_source_gaps(tmp_path, WikiConfig())
+    types = {i.type for i in result.issues}
+    assert "unread-source" in types
+
+
+def test_find_source_gaps_unread_source_within_threshold(tmp_path: Path):
+    """reading_status: unread within threshold is NOT flagged."""
+    raw_dir = tmp_path / "raw"
+    raw_dir.mkdir()
+    recent = datetime.date.today().isoformat()
+    _write_companion(raw_dir / "recent-paper.md", "unread", recent)
+    result = find_source_gaps(tmp_path, WikiConfig())
+    types = {i.type for i in result.issues}
+    assert "unread-source" not in types
+
+
+def test_find_source_gaps_in_progress_no_plan_with_inbox(tmp_path: Path):
+    """in_progress source with no matching plan file raises in-progress-no-plan."""
+    raw_dir = tmp_path / "raw"
+    raw_dir.mkdir()
+    inbox_dir = tmp_path / "inbox"
+    inbox_dir.mkdir()
+    _write_companion(raw_dir / "paper.md", "in_progress", "2026-04-10")
+    result = find_source_gaps(tmp_path, WikiConfig())
+    types = {i.type for i in result.issues}
+    assert "in-progress-no-plan" in types
+
+
+def test_find_source_gaps_in_progress_with_matching_plan(tmp_path: Path):
+    """in_progress source WITH a matching plan is not flagged."""
+    raw_dir = tmp_path / "raw"
+    raw_dir.mkdir()
+    inbox_dir = tmp_path / "inbox"
+    inbox_dir.mkdir()
+    _write_companion(raw_dir / "paper.md", "in_progress", "2026-04-10")
+    (inbox_dir / "2026-04-10-paper-plan.md").write_text(
+        "---\nsource: raw/paper.md\nstatus: in-progress\n---\n"
+    )
+    result = find_source_gaps(tmp_path, WikiConfig())
+    types = {i.type for i in result.issues}
+    assert "in-progress-no-plan" not in types
+
+
+def test_find_source_gaps_in_progress_skips_if_no_inbox(tmp_path: Path):
+    """in-progress-no-plan check is silently skipped if inbox/ doesn't exist."""
+    raw_dir = tmp_path / "raw"
+    raw_dir.mkdir()
+    _write_companion(raw_dir / "paper.md", "in_progress", "2026-04-10")
+    # No inbox/ directory
+    result = find_source_gaps(tmp_path, WikiConfig())
+    types = {i.type for i in result.issues}
+    assert "in-progress-no-plan" not in types
+
+
+def test_find_source_gaps_empty_raw_dir(tmp_path: Path):
+    """Empty raw/ produces no issues."""
+    (tmp_path / "raw").mkdir()
+    result = find_source_gaps(tmp_path, WikiConfig())
+    assert result.issues == []
+
+
+def test_find_source_gaps_no_raw_dir(tmp_path: Path):
+    """Missing raw/ produces no issues (vault not yet initialized)."""
+    result = find_source_gaps(tmp_path, WikiConfig())
+    assert result.issues == []
+
+
+def test_find_source_gaps_severity(tmp_path: Path):
+    """bare-source, missing-reading-status, unread-source are minor; in-progress-no-plan is moderate."""
+    raw_dir = tmp_path / "raw"
+    raw_dir.mkdir()
+    inbox_dir = tmp_path / "inbox"
+    inbox_dir.mkdir()
+    (raw_dir / "bare.pdf").write_bytes(b"%PDF-1.4")
+    old_date = (datetime.date.today() - datetime.timedelta(days=60)).isoformat()
+    _write_companion(raw_dir / "unread.md", "unread", old_date)
+    _write_companion(raw_dir / "inprog.md", "in_progress", "2026-04-10")
+    result = find_source_gaps(tmp_path, WikiConfig())
+    by_type = {i.type: i.severity for i in result.issues}
+    assert by_type["bare-source"] == "minor"
+    assert by_type["unread-source"] == "minor"
+    assert by_type["in-progress-no-plan"] == "moderate"
