@@ -198,15 +198,20 @@ def parse_patch(text: str) -> Patch:
     return Patch(op="update", target_path=target_path, hunks=hunks)
 
 
-def apply_patch(patch: Patch, current_content: str) -> tuple[str, ApplyResult]:
+def apply_patch(
+    patch: Patch,
+    current_content: str,
+    fuzzy_threshold: float = 0.85,
+) -> tuple[str, ApplyResult]:
     """Apply a parsed Patch to file content. Returns (new_content, result).
 
-    Exact-match path only in this revision: every context line and every
-    remove line must appear in the file at the position indicated by the
-    hunk. Fuzzy fallback is added in Task 6.
+    Two-stage matching:
+      1. Exact: every context/remove line must appear verbatim.
+      2. Fuzzy: trailing whitespace tolerated; per-line normalized
+         Levenshtein similarity must be >= ``fuzzy_threshold``.
 
     Raises:
-        PatchConflict: if a hunk's context cannot be located exactly.
+        PatchConflict: if neither stage can locate the hunk.
     """
     if patch.op != "update":
         raise PatchConflict(
@@ -217,11 +222,18 @@ def apply_patch(patch: Patch, current_content: str) -> tuple[str, ApplyResult]:
     cursor = 0  # Index into `lines` — we walk forward as we apply hunks.
     additions = 0
     removals = 0
+    used_fuzzy = False
 
     for hunk in patch.hunks:
-        new_cursor, new_lines, h_adds, h_rems = _apply_hunk_exact(
-            hunk, lines, start=cursor,
-        )
+        try:
+            new_cursor, new_lines, h_adds, h_rems = _apply_hunk_exact(
+                hunk, lines, start=cursor,
+            )
+        except PatchConflict:
+            new_cursor, new_lines, h_adds, h_rems = _apply_hunk_fuzzy(
+                hunk, lines, start=cursor, threshold=fuzzy_threshold,
+            )
+            used_fuzzy = True
         lines = new_lines
         cursor = new_cursor
         additions += h_adds
@@ -230,7 +242,7 @@ def apply_patch(patch: Patch, current_content: str) -> tuple[str, ApplyResult]:
     return "".join(lines), ApplyResult(
         additions=additions,
         removals=removals,
-        applied_via="exact",
+        applied_via="fuzzy" if used_fuzzy else "exact",
     )
 
 
@@ -307,3 +319,105 @@ def _excerpt_around(lines: list[str], start: int, hint: str) -> str:
     lo = max(0, start - 2)
     hi = min(len(lines), start + 6)
     return "".join(lines[lo:hi])
+
+
+def _apply_hunk_fuzzy(
+    hunk: Hunk,
+    lines: list[str],
+    start: int,
+    threshold: float,
+) -> tuple[int, list[str], int, int]:
+    """Fuzzy fallback: tolerate trailing whitespace and per-line typos."""
+    expected: list[str] = [
+        l.text for l in hunk.lines if l.kind in ("context", "remove")
+    ]
+
+    match_start = _find_window_fuzzy(
+        lines, expected, search_from=start, threshold=threshold,
+    )
+    if match_start is None:
+        excerpt = _excerpt_around(lines, start, hunk.context_hint)
+        raise PatchConflict(
+            f"Could not locate hunk context (fuzzy): {hunk.context_hint or '<no hint>'}",
+            current_excerpt=excerpt,
+        )
+
+    replacement: list[str] = []
+    for hl in hunk.lines:
+        if hl.kind == "remove":
+            continue
+        replacement.append(hl.text + "\n")
+
+    additions = sum(1 for l in hunk.lines if l.kind == "add")
+    removals = sum(1 for l in hunk.lines if l.kind == "remove")
+
+    new_lines = (
+        lines[:match_start]
+        + replacement
+        + lines[match_start + len(expected) :]
+    )
+    new_cursor = match_start + len(replacement)
+    return new_cursor, new_lines, additions, removals
+
+
+def _find_window_fuzzy(
+    lines: list[str],
+    expected: list[str],
+    search_from: int,
+    threshold: float,
+) -> int | None:
+    """Like ``_find_window`` but tolerates trailing whitespace and per-line drift."""
+    if not expected:
+        return None
+    n = len(expected)
+    for i in range(search_from, len(lines) - n + 1):
+        all_match = True
+        for j in range(n):
+            file_line = lines[i + j].rstrip("\n").rstrip("\r").rstrip()
+            patch_line = expected[j].rstrip()
+            sim = _line_similarity(file_line, patch_line)
+            if sim < threshold:
+                all_match = False
+                break
+        if all_match:
+            return i
+    return None
+
+
+def _line_similarity(a: str, b: str) -> float:
+    """Normalized Levenshtein similarity in [0.0, 1.0]. 1.0 means identical."""
+    if a == b:
+        return 1.0
+    if not a and not b:
+        return 1.0
+    distance = levenshtein(a, b)
+    longest = max(len(a), len(b))
+    if longest == 0:
+        return 1.0
+    return 1.0 - (distance / longest)
+
+
+def levenshtein(a: str, b: str) -> int:
+    """Standard Levenshtein edit distance, iterative DP.
+
+    Public so ``name_similarity.py`` (Phase 6b Task 10) can reuse it
+    without dipping into private symbols across modules.
+    """
+    if a == b:
+        return 0
+    if not a:
+        return len(b)
+    if not b:
+        return len(a)
+    prev = list(range(len(b) + 1))
+    for i, ca in enumerate(a, 1):
+        curr = [i] + [0] * len(b)
+        for j, cb in enumerate(b, 1):
+            cost = 0 if ca == cb else 1
+            curr[j] = min(
+                curr[j - 1] + 1,        # insertion
+                prev[j] + 1,            # deletion
+                prev[j - 1] + cost,     # substitution
+            )
+        prev = curr
+    return prev[-1]

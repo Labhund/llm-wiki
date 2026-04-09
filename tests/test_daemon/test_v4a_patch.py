@@ -262,6 +262,71 @@ def test_apply_patch_multi_hunk():
     assert result.removals == 1
 
 
+def test_apply_patch_fuzzy_tolerates_trailing_whitespace_drift():
+    """A patch context line with no trailing space matches a file line with trailing spaces."""
+    from llm_wiki.daemon.v4a_patch import apply_patch, parse_patch
+    page = (
+        "## Methods\n\n"
+        "We trained on 50k sequences using k-means   \n"  # trailing spaces
+        "with cosine similarity, learning rate 1e-4.\n"
+        "The clustering converged in 12 epochs.\n"
+    )
+    patch = parse_patch(SIMPLE_PATCH)
+    new_content, result = apply_patch(patch, page)
+    assert "learning rate 3e-4" in new_content
+    assert result.applied_via == "fuzzy"
+
+
+def test_apply_patch_fuzzy_tolerates_minor_typo():
+    """A patch context line matches a file line within the configured similarity threshold."""
+    from llm_wiki.daemon.v4a_patch import apply_patch, parse_patch
+    page = (
+        "## Methods\n\n"
+        "We trained on 50k sequences using k means\n"  # missing hyphen
+        "with cosine similarity, learning rate 1e-4.\n"
+        "The clustering converged in 12 epochs.\n"
+    )
+    patch = parse_patch(SIMPLE_PATCH)
+    new_content, result = apply_patch(patch, page)
+    assert "learning rate 3e-4" in new_content
+    assert result.applied_via == "fuzzy"
+
+
+def test_apply_patch_conflict_when_context_missing_entirely():
+    from llm_wiki.daemon.v4a_patch import PatchConflict, apply_patch, parse_patch
+    page = (
+        "## Different Section\n\n"
+        "totally unrelated content\n"
+    )
+    patch = parse_patch(SIMPLE_PATCH)
+    with pytest.raises(PatchConflict) as exc_info:
+        apply_patch(patch, page)
+    assert exc_info.value.current_excerpt
+    assert "Could not locate" in str(exc_info.value)
+
+
+def test_apply_patch_conflict_excerpt_carries_actual_content():
+    from llm_wiki.daemon.v4a_patch import PatchConflict, apply_patch, parse_patch
+    page = (
+        "## Methods\n\n"
+        "Completely different content\n"
+        "Nothing matches\n"
+    )
+    patch = parse_patch(SIMPLE_PATCH)
+    with pytest.raises(PatchConflict) as exc_info:
+        apply_patch(patch, page)
+    assert "Completely different content" in exc_info.value.current_excerpt
+
+
+def test_levenshtein_basic():
+    """Public levenshtein helper exposed for name-similarity reuse."""
+    from llm_wiki.daemon.v4a_patch import levenshtein
+    assert levenshtein("kitten", "sitting") == 3
+    assert levenshtein("", "abc") == 3
+    assert levenshtein("abc", "") == 3
+    assert levenshtein("same", "same") == 0
+
+
 def test_parse_patch_blank_context_line_inside_hunk():
     """A blank line in the middle of a hunk is treated as an empty context line.
 
