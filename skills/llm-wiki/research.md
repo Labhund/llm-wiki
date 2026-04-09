@@ -5,6 +5,10 @@ description: "Use when researching a topic in an llm-wiki vault. Covers three tr
 
 # LLM-Wiki Research — Attended Traversal
 
+## Wiki First
+
+When the wiki covers the topic, derive from compiled wiki knowledge — not training data alone. Start with a `wiki_query` or traversal before answering from memory.
+
 ## Hard Gate
 
 Before any traversal, state out loud:
@@ -19,7 +23,7 @@ No exceptions. This keeps reasoning legible and prevents purposeless browsing.
 After stating intent, offer the three modes to the user:
 
 > "I can research this three ways:
-> 1. **Daemon query** (`wiki_query`) — fast, low context cost, quality depends on the daemon's configured model
+> 1. **Daemon query** (`wiki_query`) — fast, near-zero context cost; the daemon runs semantic search + LLM synthesis internally and returns a direct answer, not a list of excerpts
 > 2. **Sub-agent** — I spawn a research agent using my framework's native sub-agent mechanism; my context stays clean; configurable model
 > 3. **In-context manual** — I traverse step by step; you see each hop; costs more context
 >
@@ -52,3 +56,7 @@ The sub-agent follows Mode 3 (in-context manual) discipline internally.
 ## Exit Condition
 
 Traversal ends when you can answer the stated intent. Not when pages run out.
+
+## Synthesis
+
+After traversal completes, synthesize findings into a coherent answer. If you encountered gaps (topics with no wiki coverage), contradictions (pages with conflicting claims), or stale content during traversal — note them for follow-up with the write or maintain skills. Research is an input to the knowledge graph, not a dead end.
