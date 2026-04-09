@@ -1,6 +1,6 @@
 # Phase 6: MCP Server — Design
 
-> Status: Phase 6a + 6b implemented; 6c (MCP server) pending
+> Status: Phase 6 complete (6a + 6b + 6c implemented and tagged)
 > Author: Markus Williams, with collaborative design from Claude (Opus 4.6)
 > Date: 2026-04-08
 
