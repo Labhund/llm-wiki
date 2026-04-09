@@ -24,10 +24,16 @@ class DaemonServer:
         vault_root: Path,
         socket_path: Path,
         config: WikiConfig | None = None,
+        enabled_workers: set[str] | None = None,
     ) -> None:
         self._vault_root = vault_root
         self._socket_path = socket_path
         self._config = config or WikiConfig()
+        # `enabled_workers=None` means "register all workers" (production
+        # default). An explicit set narrows registration; an empty set
+        # registers nothing — useful for tests that want a quiescent daemon
+        # without racing the scheduler. Unknown names raise at start().
+        self._enabled_workers = enabled_workers
         self._vault: Vault | None = None
         self._server: asyncio.Server | None = None
         self._llm_queue = LLMQueue(self._config.llm_queue.max_concurrent)
@@ -187,41 +193,50 @@ class DaemonServer:
             count = await agent.refresh_talk_summaries()
             logger.info("Talk summary: refreshed=%d", count)
 
-        self._scheduler.register(
+        all_workers = [
             ScheduledWorker(
                 name="auditor",
                 interval_seconds=parse_interval(self._config.maintenance.auditor_interval),
                 coro_factory=run_auditor,
-            )
-        )
-        self._scheduler.register(
+            ),
             ScheduledWorker(
                 name="librarian",
                 interval_seconds=parse_interval(self._config.maintenance.librarian_interval),
                 coro_factory=run_librarian,
-            )
-        )
-        self._scheduler.register(
+            ),
             ScheduledWorker(
                 name="authority_recalc",
                 interval_seconds=parse_interval(self._config.maintenance.authority_recalc),
                 coro_factory=run_authority_recalc,
-            )
-        )
-        self._scheduler.register(
+            ),
             ScheduledWorker(
                 name="adversary",
                 interval_seconds=parse_interval(self._config.maintenance.adversary_interval),
                 coro_factory=run_adversary,
-            )
-        )
-        self._scheduler.register(
+            ),
             ScheduledWorker(
                 name="talk_summary",
                 interval_seconds=parse_interval(self._config.maintenance.librarian_interval),
                 coro_factory=run_talk_summary,
-            )
-        )
+            ),
+        ]
+        # `enabled_workers=None` → register all. Otherwise filter, and
+        # validate up front so a typo in the test fixture (or an obsolete
+        # name in a config) fails loudly instead of silently dropping work.
+        if self._enabled_workers is not None:
+            known = {w.name for w in all_workers}
+            unknown = self._enabled_workers - known
+            if unknown:
+                raise ValueError(
+                    f"Unknown worker name(s) in enabled_workers: {sorted(unknown)}. "
+                    f"Known workers: {sorted(known)}."
+                )
+        for worker in all_workers:
+            if (
+                self._enabled_workers is None
+                or worker.name in self._enabled_workers
+            ):
+                self._scheduler.register(worker)
 
     async def handle_file_changes(
         self, changed: list[Path], removed: list[Path]
