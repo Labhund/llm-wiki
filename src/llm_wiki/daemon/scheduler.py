@@ -115,7 +115,7 @@ class IntervalScheduler:
             for w in self._workers
         ]
 
-    def health_info(self) -> dict[str, dict]:
+    def health_info(self) -> dict[str, dict[str, str | int | bool | None]]:
         """Return health snapshot for all registered workers."""
         return {
             worker.name: {

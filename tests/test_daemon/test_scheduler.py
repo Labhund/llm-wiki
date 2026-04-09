@@ -461,7 +461,11 @@ def test_scheduler_health_info_structure():
         assert "backend_reachable" in entry
 
     assert info["worker-a"]["last_run"] is None  # never ran
+    assert info["worker-a"]["last_attempt"] is None
     assert info["worker-a"]["consecutive_failures"] == 0
+    # backend_reachable is None before any probe fires (for both probe-less and probed workers)
+    assert info["worker-a"]["backend_reachable"] is None
+    assert info["worker-b"]["backend_reachable"] is None
 
 
 @pytest.mark.asyncio
