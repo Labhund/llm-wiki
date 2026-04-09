@@ -15,7 +15,14 @@ Before touching any wiki tool, read the source:
 
 Form a view: what are the key concepts, what claims does it make, what is genuinely novel vs. already-known territory. This calibrates all subsequent wiki interactions — you cannot search for the right things until you know what the source is about.
 
-**COPY the source into `raw/` first.** Before any wiki tool call, copy the source verbatim to `raw/YYYY-MM-DD-slug.md` (flat — no subdirectories inside `raw/`). This is a copy, not a transcription — preserve the original text exactly. All `source_ref` values in subsequent wiki calls must point to this vault-internal path; `wiki_lint` will flag broken citations otherwise.
+**COPY the source into `raw/` first.** Before any wiki tool call, copy the source into `raw/` (flat — no subdirectories). For PDFs: store the original file as `raw/YYYY-MM-DD-slug.pdf` (canonical ground truth), then extract text separately for agent use. For plain text/markdown: copy verbatim to `raw/YYYY-MM-DD-slug.md`. This is a copy, not a transcription. All `source_ref` values must point to this vault-internal path; `wiki_lint` will flag broken citations otherwise.
+
+**PDF extraction quality varies.** The vault config's `pdf_extractor` controls the tool used:
+- `pdftotext` (default) — fast, zero deps, poor layout awareness; fine for text-heavy papers with no tables
+- `local-ocr` — vision-language model (e.g. Qianfan-OCR via llama.cpp) running locally; handles tables, figures, equations
+- `marker` / `nougat` — high quality but GPU or API required
+
+If the extracted text looks mangled (captions bleeding into body, garbled tables, watermarks repeating), flag it to the user before proceeding — bad extraction degrades every page written from it. When in doubt, note the extraction quality in the raw/ file's header.
 
 ## Act 2 — Ask the User How to Handle It
 
@@ -29,6 +36,18 @@ State what you found, then offer the choice:
 Wait for the user's response; if none comes, use the automated path.
 
 If the dry-run or your Act 1 estimate suggests 10+ pages, flag this scope to the user before committing — large ingests benefit from conversational mode so important synthesis doesn't get buried in bulk creation.
+
+**For 4+ pages: create a task list before writing anything.** Once the page list is agreed, capture each proposed page as a task (using your framework's native task tool) before touching any wiki tool:
+
+```
+[ ] protein-dj — pipeline architecture, 4 stages, benchmarks
+[ ] rfdiffusion — diffusion fold generation, design modes
+[ ] bindcraft — hallucination-based binder design
+[ ] ...
+[ ] cascade — cross-links and index update
+```
+
+Mark each task `in_progress` as you start it, `completed` when done. This keeps the session navigable across many turns without losing track of what's pending. For <4 pages, skip the task list and write directly.
 
 ## Act 3 — Execute
 
