@@ -188,6 +188,7 @@ async def test_adversary_skips_when_raw_source_missing(tmp_path: Path, _clean_st
 @pytest.mark.asyncio
 async def test_adversary_empty_vault(tmp_path: Path, _clean_state):
     _clean_state.append(_state_dir_for(tmp_path))
+    (tmp_path / "wiki").mkdir()
     vault = Vault.scan(tmp_path)
     config = WikiConfig()
     agent = AdversaryAgent(

@@ -82,6 +82,7 @@ async def test_recalc_authority_does_not_call_llm(sample_vault: Path):
 
 @pytest.mark.asyncio
 async def test_recalc_authority_empty_vault(tmp_path: Path):
+    (tmp_path / "wiki").mkdir()
     vault = Vault.scan(tmp_path)
     agent = LibrarianAgent(vault, tmp_path, _StubLLM(), IssueQueue(tmp_path / "wiki"), WikiConfig())
     count = await agent.recalc_authority()
@@ -331,6 +332,7 @@ async def test_run_uses_delta_since_last_refresh(sample_vault: Path):
 
 @pytest.mark.asyncio
 async def test_run_empty_vault(tmp_path: Path):
+    (tmp_path / "wiki").mkdir()
     vault = Vault.scan(tmp_path)
     agent = LibrarianAgent(vault, tmp_path, _StubLLM(), IssueQueue(tmp_path / "wiki"), WikiConfig())
     result = await agent.run()

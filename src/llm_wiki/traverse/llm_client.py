@@ -14,9 +14,21 @@ logger = logging.getLogger(__name__)
 _TRANSIENT_HTTP_CODES = {408, 429, 500, 502, 503, 504}
 _RETRY_DELAYS = [5.0, 15.0, 45.0]
 
+# These exception types indicate permanent failures — retrying won't help.
+# Check type first because litellm may report unexpected status codes
+# (e.g. AuthenticationError with status_code=500 in some environments).
+_PERMANENT_EXC_TYPES = (
+    litellm.AuthenticationError,
+    litellm.BadRequestError,
+    litellm.NotFoundError,
+    litellm.PermissionDeniedError,
+)
+
 
 def _should_retry(exc: Exception) -> bool:
     """Return True for transient errors that should be retried."""
+    if isinstance(exc, _PERMANENT_EXC_TYPES):
+        return False
     status = getattr(exc, "status_code", None)
     if status is None:
         return True  # Connection/timeout errors have no status_code

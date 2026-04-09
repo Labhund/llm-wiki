@@ -25,6 +25,7 @@ def _init_git_repo(path: Path) -> None:
 @pytest_asyncio.fixture
 async def write_daemon(tmp_path):
     _init_git_repo(tmp_path)
+    (tmp_path / "wiki").mkdir()
     sock_path = tmp_path / "write.sock"
     config = WikiConfig()
     server = DaemonServer(tmp_path, sock_path, config=config)

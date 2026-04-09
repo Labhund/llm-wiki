@@ -27,6 +27,7 @@ def _make_service(tmp_path: Path):
     from llm_wiki.daemon.writes import PageWriteService
 
     _init_git_repo(tmp_path)
+    (tmp_path / "wiki").mkdir()
     config = WikiConfig()
     vault = Vault.scan(tmp_path)
     coordinator = WriteCoordinator()

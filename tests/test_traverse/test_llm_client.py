@@ -42,6 +42,14 @@ def test_should_not_retry_400():
     assert _should_retry(exc) is False
 
 
+def test_should_not_retry_litellm_auth_error_even_when_status_500():
+    """litellm.AuthenticationError is permanent even if it reports status_code=500."""
+    import litellm as _litellm
+    exc = _litellm.AuthenticationError("no key", llm_provider="openai", model="gpt-4")
+    exc.status_code = 500  # simulate litellm's unexpected status mapping
+    assert _should_retry(exc) is False
+
+
 @pytest.mark.asyncio
 async def test_complete_retries_on_transient_error():
     """complete() retries up to 3 times on transient failures then succeeds."""

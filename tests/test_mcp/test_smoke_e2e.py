@@ -26,6 +26,7 @@ def _init_git_repo(path: Path) -> None:
 @pytest_asyncio.fixture
 async def mcp_e2e(tmp_path):
     _init_git_repo(tmp_path)
+    (tmp_path / "wiki").mkdir()
     sock_path = tmp_path / "e2e.sock"
     # IMPORTANT: use the production-default WikiConfig() so that
     # `wiki_dir = "wiki"` and the daemon's PageWriteService writes pages
