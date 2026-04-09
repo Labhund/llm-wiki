@@ -38,7 +38,7 @@ async def test_full_daemon_lifecycle(sample_vault: Path, tmp_path: Path):
     original_count = resp["page_count"]
 
     # Add a new page to the vault
-    (sample_vault / "new-topic.md").write_text(
+    (sample_vault / "wiki" / "new-topic.md").write_text(
         "---\ntitle: Brand New Topic\n---\n\n## Overview\n\nThis is new content.\n"
     )
 
@@ -95,7 +95,7 @@ async def test_watcher_triggers_rescan(sample_vault: Path, tmp_path: Path):
     initial_count = resp["page_count"]
 
     # Add a file
-    (sample_vault / "watcher-test.md").write_text("# Watcher Test\n\nDetected!")
+    (sample_vault / "wiki" / "watcher-test.md").write_text("# Watcher Test\n\nDetected!")
     await asyncio.sleep(1.0)
 
     # Verify new page appeared

@@ -31,10 +31,11 @@ def test_find_orphans_does_not_flag_referenced_pages(sample_vault: Path):
 
 def test_find_orphans_skips_index_readme_home(tmp_path: Path):
     """Pages named index/readme/home are entry points, not orphans."""
-    (tmp_path / "wiki").mkdir()
-    (tmp_path / "index.md").write_text("# Index\n\nEntry point.\n")
-    (tmp_path / "README.md").write_text("# Readme\n")
-    (tmp_path / "home.md").write_text("# Home\n")
+    wiki_dir = tmp_path / "wiki"
+    wiki_dir.mkdir()
+    (wiki_dir / "index.md").write_text("# Index\n\nEntry point.\n")
+    (wiki_dir / "README.md").write_text("# Readme\n")
+    (wiki_dir / "home.md").write_text("# Home\n")
 
     vault = Vault.scan(tmp_path)
     result = find_orphans(vault)
@@ -169,7 +170,7 @@ def test_find_broken_citations_passes_when_source_exists(sample_vault: Path):
 def test_find_broken_citations_detects_inline_raw_reference(tmp_path: Path):
     """A [[raw/missing.pdf]] reference in page body is also flagged."""
     (tmp_path / "wiki").mkdir()
-    page = tmp_path / "doc.md"
+    page = tmp_path / "wiki" / "doc.md"
     page.write_text(
         "---\ntitle: Doc\n---\n\nSee [[raw/missing.pdf]] for details.\n"
     )
@@ -213,8 +214,9 @@ def test_find_missing_markers_severity_is_minor(sample_vault: Path):
 
 def test_find_broken_citations_severity_is_critical(tmp_path: Path):
     """Construct a vault with a broken raw citation; severity should be critical."""
-    (tmp_path / "wiki").mkdir()
-    (tmp_path / "p.md").write_text(
+    wiki_dir = tmp_path / "wiki"
+    wiki_dir.mkdir()
+    (wiki_dir / "p.md").write_text(
         "---\ntitle: P\nsource: \"[[raw/missing.pdf]]\"\n---\n\n"
         "## Body\n\nHas a citation [[raw/missing.pdf]].\n"
     )

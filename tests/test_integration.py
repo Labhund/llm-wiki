@@ -83,12 +83,12 @@ def test_vault_api_directly(sample_vault: Path):
 
 
 def test_existing_wiki_directory():
-    """Test against the actual wiki/ directory in the repo."""
-    wiki_path = Path("/home/labhund/repos/llm-wiki/wiki")
-    if not wiki_path.exists():
+    """Test against the actual vault in the repo (wiki/ lives under the vault root)."""
+    vault_root = Path("/home/labhund/repos/llm-wiki")
+    if not (vault_root / "wiki").exists():
         return  # Skip if not in the expected location
 
-    vault = Vault.scan(wiki_path)
+    vault = Vault.scan(vault_root)
     assert vault.page_count >= 3
 
     results = vault.search("sRNA")

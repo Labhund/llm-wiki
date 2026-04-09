@@ -35,7 +35,7 @@ async def test_detects_modified_file(sample_vault: Path):
     await watcher.start()
     await asyncio.sleep(0.3)
 
-    existing = sample_vault / "bioinformatics" / "srna-embeddings.md"
+    existing = sample_vault / "wiki" / "bioinformatics" / "srna-embeddings.md"
     existing.write_text(existing.read_text() + "\nAppended content.")
     await asyncio.sleep(0.5)
 
@@ -74,7 +74,7 @@ async def test_detects_deleted_file(sample_vault: Path):
     await watcher.start()
     await asyncio.sleep(0.3)
 
-    (sample_vault / "no-structure.md").unlink()
+    (sample_vault / "wiki" / "no-structure.md").unlink()
     await asyncio.sleep(0.5)
 
     await watcher.stop()
