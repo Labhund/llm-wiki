@@ -16,6 +16,7 @@ from llm_wiki.ingest.prompts import (
 )
 
 if TYPE_CHECKING:
+    from llm_wiki.daemon.writes import PageWriteService
     from llm_wiki.traverse.llm_client import LLMClient
 
 logger = logging.getLogger(__name__)
@@ -55,26 +56,31 @@ class IngestAgent:
         self._llm = llm
         self._config = config
 
-    async def ingest(self, source_path: Path, vault_root: Path) -> IngestResult:
+    async def ingest(
+        self,
+        source_path: Path,
+        vault_root: Path,
+        *,
+        author: str = "cli",
+        connection_id: str = "cli",
+        write_service: "PageWriteService | None" = None,
+    ) -> IngestResult:
         """Ingest one source file into the wiki.
 
-        Args:
-            source_path: Absolute path to the source file (PDF, DOCX, markdown, etc.)
-            vault_root:  Root directory of the vault.
-
-        Returns:
-            IngestResult listing which pages were created vs. updated.
+        When `write_service` is provided, all page creates/appends are routed
+        through it so they journal under the caller's session and land in the
+        commit pipeline. When `write_service` is None, falls back to the
+        legacy direct-write path (used by older code paths only — new code
+        should always pass write_service).
         """
         result = IngestResult(source_path=source_path)
         wiki_dir = vault_root / self._config.vault.wiki_dir.rstrip("/")
 
-        # Derive the citation reference: relative to vault_root if possible
         try:
             source_ref = str(source_path.relative_to(vault_root))
         except ValueError:
             source_ref = source_path.name
 
-        # 1. Extract text
         extraction = await extract_text(source_path)
         if not extraction.success:
             logger.warning(
@@ -82,7 +88,6 @@ class IngestAgent:
             )
             return result
 
-        # 2. Identify concepts
         budget = self._config.budgets.default_ingest
         messages = compose_concept_extraction_messages(
             source_text=extraction.content,
@@ -96,7 +101,6 @@ class IngestAgent:
             logger.info("No concepts identified in %s", source_path)
             return result
 
-        # 3. Generate + write one page per concept
         wiki_dir.mkdir(parents=True, exist_ok=True)
         for concept in concepts:
             page_messages = compose_page_content_messages(
@@ -108,7 +112,6 @@ class IngestAgent:
                 page_messages, temperature=0.5, priority="ingest"
             )
             sections = parse_page_content(page_response.content)
-
             if not sections:
                 logger.warning(
                     "No sections generated for concept %r from %s",
@@ -116,10 +119,70 @@ class IngestAgent:
                 )
                 continue
 
-            written = write_page(wiki_dir, concept.name, concept.title, sections, source_ref)
-            if written.was_update:
-                result.pages_updated.append(concept.name)
+            if write_service is not None:
+                await self._write_via_service(
+                    write_service, wiki_dir, concept, sections, source_ref,
+                    author=author, connection_id=connection_id, result=result,
+                )
             else:
-                result.pages_created.append(concept.name)
+                # Legacy direct-write path
+                written = write_page(
+                    wiki_dir, concept.name, concept.title, sections, source_ref,
+                )
+                if written.was_update:
+                    result.pages_updated.append(concept.name)
+                else:
+                    result.pages_created.append(concept.name)
 
         return result
+
+    async def _write_via_service(
+        self,
+        service: "PageWriteService",
+        wiki_dir: Path,
+        concept: ConceptPlan,
+        sections: list,
+        source_ref: str,
+        *,
+        author: str,
+        connection_id: str,
+        result: IngestResult,
+    ) -> None:
+        """Route a concept through the supervised write surface."""
+        page_path = wiki_dir / f"{concept.name}.md"
+        body = self._sections_to_body(sections)
+        if not page_path.exists():
+            wr = await service.create(
+                title=concept.title,
+                body=body,
+                citations=[source_ref],
+                author=author,
+                connection_id=connection_id,
+                intent=f"ingest from {source_ref}",
+                force=True,  # ingest must not be blocked by near-match heuristics
+            )
+            if wr.status == "ok":
+                result.pages_created.append(concept.name)
+        else:
+            # Append a new section labeled with the source
+            wr = await service.append(
+                page=concept.name,
+                section_heading=f"From {source_ref}",
+                body=body,
+                citations=[source_ref],
+                author=author,
+                connection_id=connection_id,
+                intent=f"ingest update from {source_ref}",
+            )
+            if wr.status == "ok":
+                result.pages_updated.append(concept.name)
+
+    @staticmethod
+    def _sections_to_body(sections: list) -> str:
+        parts = []
+        for s in sections:
+            parts.append(f"## {s.heading}")
+            parts.append("")
+            parts.append(s.content)
+            parts.append("")
+        return "\n".join(parts).strip()

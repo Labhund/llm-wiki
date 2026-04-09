@@ -24,10 +24,16 @@ class DaemonServer:
         vault_root: Path,
         socket_path: Path,
         config: WikiConfig | None = None,
+        enabled_workers: set[str] | None = None,
     ) -> None:
         self._vault_root = vault_root
         self._socket_path = socket_path
         self._config = config or WikiConfig()
+        # `enabled_workers=None` means "register all workers" (production
+        # default). An explicit set narrows registration; an empty set
+        # registers nothing — useful for tests that want a quiescent daemon
+        # without racing the scheduler. Unknown names raise at start().
+        self._enabled_workers = enabled_workers
         self._vault: Vault | None = None
         self._server: asyncio.Server | None = None
         self._llm_queue = LLMQueue(self._config.llm_queue.max_concurrent)
@@ -35,6 +41,13 @@ class DaemonServer:
         self._snapshot_store: PageSnapshotStore | None = None
         self._compliance_reviewer = None  # type: ignore[assignment]  # set in start()
         self._dispatcher: ChangeDispatcher | None = None
+        # Phase 6b write surface — populated in start()
+        self._commit_lock = asyncio.Lock()
+        self._commit_service = None  # type: ignore[assignment]
+        self._session_registry = None  # type: ignore[assignment]
+        self._page_write_service = None  # type: ignore[assignment]
+        self._write_coordinator = None  # type: ignore[assignment]
+        self._inactivity_task: asyncio.Task | None = None
 
     async def start(self) -> None:
         """Scan vault, construct maintenance substrate, start listening."""
@@ -58,6 +71,42 @@ class DaemonServer:
         self._register_maintenance_workers()
         await self._scheduler.start()
 
+        # Phase 6b: write surface (commit pipeline + page writes)
+        from llm_wiki.daemon.commit import CommitService
+        from llm_wiki.daemon.sessions import SessionRegistry, recover_sessions
+        from llm_wiki.daemon.writer import WriteCoordinator
+        from llm_wiki.daemon.writes import PageWriteService
+        from llm_wiki.traverse.llm_client import LLMClient
+
+        self._write_coordinator = WriteCoordinator()
+        self._session_registry = SessionRegistry(self._config.sessions)
+
+        commit_llm = LLMClient(
+            self._llm_queue,
+            model=self._config.llm.default,
+            api_base=self._config.llm.api_base,
+            api_key=self._config.llm.api_key,
+        )
+        self._commit_service = CommitService(
+            vault_root=self._vault_root,
+            llm=commit_llm,
+            lock=self._commit_lock,
+        )
+        self._page_write_service = PageWriteService(
+            vault=self._vault,
+            vault_root=self._vault_root,
+            config=self._config,
+            write_coordinator=self._write_coordinator,
+            registry=self._session_registry,
+            commit_service=self._commit_service,
+        )
+
+        # Recovery: settle any orphaned journals from a prior crash
+        await recover_sessions(state_dir=state_dir, commit_service=self._commit_service)
+
+        # Inactivity timer: settle quiet sessions after `inactivity_timeout_seconds`
+        self._inactivity_task = asyncio.create_task(self._inactivity_loop())
+
         if self._socket_path.exists():
             self._socket_path.unlink()
         self._server = await asyncio.start_unix_server(
@@ -75,8 +124,89 @@ class DaemonServer:
             async with self._server:
                 await self._server.serve_forever()
 
+    async def _inactivity_loop(self) -> None:
+        """Settle sessions whose last_write_at is older than the timeout.
+
+        KNOWN RACE WINDOW (low-probability, documented for honesty):
+        Between `load_journal(sess.journal_path)` reading the entries and
+        `settle_with_fallback` archiving the file, a concurrent write to
+        the same session could append a new entry to the journal. That
+        new entry would be on disk in the to-be-archived file but never
+        included in the commit. After settle, `_session_registry.close(sess)`
+        removes the session, so the next write from the same author opens
+        a fresh session — leaving the orphan entry as a permanent gap.
+
+        This is extremely unlikely in practice: the inactivity loop only
+        fires after `inactivity_timeout_seconds` of zero activity, so by
+        definition the agent has been quiet. The window between
+        `load_journal` and the journal-archive step inside settle is also
+        narrow (single-digit milliseconds in normal conditions).
+
+        If this ever bites in practice, the fix is to acquire the per-page
+        write lock around the journal-read + settle + close sequence so a
+        concurrent write blocks until settle completes. Not done now to
+        keep this hot path simple.
+        """
+        import datetime as _dt
+        from llm_wiki.daemon.sessions import Session, load_journal
+
+        timeout = self._config.sessions.inactivity_timeout_seconds
+        poll_interval = max(0.5, timeout / 2)
+        try:
+            while True:
+                await asyncio.sleep(poll_interval)
+                if self._session_registry is None or self._commit_service is None:
+                    continue
+                now = _dt.datetime.now(_dt.timezone.utc)
+                stale: list[Session] = []
+                for sess in list(self._session_registry.all_sessions()):
+                    try:
+                        last = _dt.datetime.fromisoformat(sess.last_write_at)
+                    except ValueError:
+                        continue
+                    if (now - last).total_seconds() >= timeout:
+                        stale.append(sess)
+                for sess in stale:
+                    try:
+                        entries = load_journal(sess.journal_path)
+                        if entries:
+                            await self._commit_service.settle_with_fallback(sess, entries)
+                    except Exception:
+                        logger.exception(
+                            "Inactivity settle failed for session %s", sess.id,
+                        )
+                    finally:
+                        self._session_registry.close(sess)
+        except asyncio.CancelledError:
+            return
+
     async def stop(self) -> None:
         """Shut down the maintenance substrate, then the server."""
+        # Phase 6b: cancel the inactivity timer first so it doesn't race the settle
+        if self._inactivity_task is not None:
+            self._inactivity_task.cancel()
+            try:
+                await self._inactivity_task
+            except asyncio.CancelledError:
+                pass
+            self._inactivity_task = None
+
+        # Phase 6b: settle every open session before tearing down anything else
+        if self._session_registry is not None and self._commit_service is not None:
+            from llm_wiki.daemon.sessions import load_journal
+
+            for sess in list(self._session_registry.all_sessions()):
+                try:
+                    entries = load_journal(sess.journal_path)
+                    if entries:
+                        await self._commit_service.settle_with_fallback(sess, entries)
+                except Exception:
+                    logger.exception(
+                        "Failed to settle session %s on shutdown", sess.id,
+                    )
+                finally:
+                    self._session_registry.close(sess)
+
         if self._scheduler is not None:
             await self._scheduler.stop()
             self._scheduler = None
@@ -187,41 +317,50 @@ class DaemonServer:
             count = await agent.refresh_talk_summaries()
             logger.info("Talk summary: refreshed=%d", count)
 
-        self._scheduler.register(
+        all_workers = [
             ScheduledWorker(
                 name="auditor",
                 interval_seconds=parse_interval(self._config.maintenance.auditor_interval),
                 coro_factory=run_auditor,
-            )
-        )
-        self._scheduler.register(
+            ),
             ScheduledWorker(
                 name="librarian",
                 interval_seconds=parse_interval(self._config.maintenance.librarian_interval),
                 coro_factory=run_librarian,
-            )
-        )
-        self._scheduler.register(
+            ),
             ScheduledWorker(
                 name="authority_recalc",
                 interval_seconds=parse_interval(self._config.maintenance.authority_recalc),
                 coro_factory=run_authority_recalc,
-            )
-        )
-        self._scheduler.register(
+            ),
             ScheduledWorker(
                 name="adversary",
                 interval_seconds=parse_interval(self._config.maintenance.adversary_interval),
                 coro_factory=run_adversary,
-            )
-        )
-        self._scheduler.register(
+            ),
             ScheduledWorker(
                 name="talk_summary",
                 interval_seconds=parse_interval(self._config.maintenance.librarian_interval),
                 coro_factory=run_talk_summary,
-            )
-        )
+            ),
+        ]
+        # `enabled_workers=None` → register all. Otherwise filter, and
+        # validate up front so a typo in the test fixture (or an obsolete
+        # name in a config) fails loudly instead of silently dropping work.
+        if self._enabled_workers is not None:
+            known = {w.name for w in all_workers}
+            unknown = self._enabled_workers - known
+            if unknown:
+                raise ValueError(
+                    f"Unknown worker name(s) in enabled_workers: {sorted(unknown)}. "
+                    f"Known workers: {sorted(known)}."
+                )
+        for worker in all_workers:
+            if (
+                self._enabled_workers is None
+                or worker.name in self._enabled_workers
+            ):
+                self._scheduler.register(worker)
 
     async def handle_file_changes(
         self, changed: list[Path], removed: list[Path]
@@ -320,14 +459,100 @@ class DaemonServer:
                 return self._handle_talk_append(request)
             case "talk-list":
                 return self._handle_talk_list()
+            case "page-create":
+                return await self._handle_page_create(request)
+            case "page-update":
+                return await self._handle_page_update(request)
+            case "page-append":
+                return await self._handle_page_append(request)
+            case "session-close":
+                return await self._handle_session_close(request)
             case _:
                 return {"status": "error", "message": f"Unknown request type: {req_type}"}
 
+    async def _handle_session_close(self, request: dict) -> dict:
+        for f in ("author", "connection_id"):
+            if f not in request:
+                return {"status": "error", "message": f"Missing required field: {f}"}
+        if self._session_registry is None or self._commit_service is None:
+            return {"status": "error", "message": "Session machinery not initialized"}
+
+        from llm_wiki.daemon.sessions import load_journal
+
+        sess = self._session_registry.get_active(
+            request["author"], request["connection_id"],
+        )
+        if sess is None:
+            # Idempotent: closing a session that was never opened (or already
+            # settled) is not an error. The caller may be the inactivity timer
+            # racing with an explicit close, or a swarm orchestrator closing
+            # eagerly.
+            return {"status": "ok", "settled": False}
+
+        entries = load_journal(sess.journal_path)
+        result = await self._commit_service.settle_with_fallback(sess, entries)
+        self._session_registry.close(sess)
+        return {
+            "status": "ok",
+            "settled": True,
+            "commit_sha": result.commit_sha,
+        }
+
+    async def _handle_page_create(self, request: dict) -> dict:
+        if self._page_write_service is None:
+            return {"status": "error", "message": "Page write service not initialized"}
+        for f in ("title", "body", "citations", "author", "connection_id"):
+            if f not in request:
+                return {"status": "error", "message": f"Missing required field: {f}"}
+        result = await self._page_write_service.create(
+            title=request["title"],
+            body=request["body"],
+            citations=list(request["citations"]),
+            tags=list(request.get("tags", [])),
+            author=request["author"],
+            connection_id=request["connection_id"],
+            intent=request.get("intent"),
+            force=bool(request.get("force", False)),
+        )
+        return _serialize_write_result(result)
+
+    async def _handle_page_update(self, request: dict) -> dict:
+        if self._page_write_service is None:
+            return {"status": "error", "message": "Page write service not initialized"}
+        for f in ("page", "patch", "author", "connection_id"):
+            if f not in request:
+                return {"status": "error", "message": f"Missing required field: {f}"}
+        result = await self._page_write_service.update(
+            page=request["page"],
+            patch=request["patch"],
+            author=request["author"],
+            connection_id=request["connection_id"],
+            intent=request.get("intent"),
+        )
+        return _serialize_write_result(result)
+
+    async def _handle_page_append(self, request: dict) -> dict:
+        if self._page_write_service is None:
+            return {"status": "error", "message": "Page write service not initialized"}
+        for f in ("page", "section_heading", "body", "citations", "author", "connection_id"):
+            if f not in request:
+                return {"status": "error", "message": f"Missing required field: {f}"}
+        result = await self._page_write_service.append(
+            page=request["page"],
+            section_heading=request["section_heading"],
+            body=request["body"],
+            citations=list(request["citations"]),
+            author=request["author"],
+            connection_id=request["connection_id"],
+            after_heading=request.get("after_heading"),
+            intent=request.get("intent"),
+        )
+        return _serialize_write_result(result)
+
     def _handle_search(self, request: dict) -> dict:
-        results = self._vault._backend.search_with_snippets(
+        results = self._vault.search_with_snippets(
             request["query"],
             limit=request.get("limit", 10),
-            vault_root=self._vault_root,
         )
         return {
             "status": "ok",
@@ -489,7 +714,7 @@ class DaemonServer:
         Talk counts come from walking every *.talk.md and computing the
         open set per page. Resolved entries are excluded.
         """
-        from llm_wiki.talk.page import TalkPage, compute_open_set
+        from llm_wiki.talk.page import compute_open_set, iter_talk_pages
 
         wiki_dir = self._vault_root / self._config.vault.wiki_dir.rstrip("/")
 
@@ -512,26 +737,20 @@ class DaemonServer:
             page_entry["issues"][sev] += 1
 
         # Talk pages — same shape, swap vocabularies
-        if wiki_dir.exists():
-            for talk_path in sorted(wiki_dir.rglob("*.talk.md")):
-                rel = talk_path.relative_to(wiki_dir)
-                if any(p.startswith(".") for p in rel.parts):
-                    continue
-                stem = talk_path.stem
-                page_name = stem[: -len(".talk")] if stem.endswith(".talk") else stem
-                entries = TalkPage(talk_path).load()
-                open_entries = compute_open_set(entries)
-                for e in open_entries:
-                    sev = _clamp_severity(e.severity, _TALK_SEVERITIES, "suggestion")
-                    totals_talk[sev] += 1
-                    page_entry = by_page.setdefault(
-                        page_name,
-                        {
-                            "issues": _empty_severity_counts(_ISSUE_SEVERITIES),
-                            "talk": _empty_severity_counts(_TALK_SEVERITIES),
-                        },
-                    )
-                    page_entry["talk"][sev] += 1
+        for page_name, talk in iter_talk_pages(wiki_dir):
+            entries = talk.load()
+            open_entries = compute_open_set(entries)
+            for e in open_entries:
+                sev = _clamp_severity(e.severity, _TALK_SEVERITIES, "suggestion")
+                totals_talk[sev] += 1
+                page_entry = by_page.setdefault(
+                    page_name,
+                    {
+                        "issues": _empty_severity_counts(_ISSUE_SEVERITIES),
+                        "talk": _empty_severity_counts(_TALK_SEVERITIES),
+                    },
+                )
+                page_entry["talk"][sev] += 1
 
         return {
             "pages_needing_attention": sorted(by_page.keys()),
@@ -628,17 +847,9 @@ class DaemonServer:
         return {"status": "ok"}
 
     def _handle_talk_list(self) -> dict:
+        from llm_wiki.talk.page import iter_talk_pages
         wiki_dir = self._vault_root / self._config.vault.wiki_dir.rstrip("/")
-        pages: list[str] = []
-        if wiki_dir.exists():
-            for talk_file in sorted(wiki_dir.rglob("*.talk.md")):
-                # Skip files inside hidden directories
-                rel = talk_file.relative_to(wiki_dir)
-                if any(p.startswith(".") for p in rel.parts):
-                    continue
-                stem = talk_file.stem  # foo.talk
-                if stem.endswith(".talk"):
-                    pages.append(stem[: -len(".talk")])
+        pages = [name for name, _ in iter_talk_pages(wiki_dir)]
         return {"status": "ok", "pages": pages}
 
     async def _handle_query(self, request: dict) -> dict:
@@ -677,10 +888,17 @@ class DaemonServer:
     async def _handle_ingest(self, request: dict) -> dict:
         if "source_path" not in request:
             return {"status": "error", "message": "Missing required field: source_path"}
+        if "connection_id" not in request:
+            return {"status": "error", "message": "Missing required field: connection_id"}
 
         from llm_wiki.ingest.agent import IngestAgent
         from llm_wiki.traverse.llm_client import LLMClient
 
+        author = request.get("author", "cli")
+        if author == "cli":
+            logger.info("ingest route called without author; defaulting to 'cli'")
+
+        connection_id = request["connection_id"]
         source_path = Path(request["source_path"])
         llm = LLMClient(
             self._llm_queue,
@@ -690,19 +908,48 @@ class DaemonServer:
         )
         agent = IngestAgent(llm, self._config)
         try:
-            result = await agent.ingest(source_path, self._vault_root)
+            result = await agent.ingest(
+                source_path, self._vault_root,
+                author=author,
+                connection_id=connection_id,
+                write_service=self._page_write_service,
+            )
         finally:
             try:
                 await self.rescan()
             except Exception:
                 logger.warning("Failed to rescan vault after ingest")
 
-        return {
+        # Apply response cap (mcp.ingest_response_max_pages)
+        cap = self._config.mcp.ingest_response_max_pages
+        all_pages = result.pages_created + result.pages_updated
+        truncated = len(all_pages) > cap
+        shown = set(all_pages[:cap]) if truncated else set(all_pages)
+        warnings = []
+        if truncated:
+            warnings.append({
+                "code": "response-truncated",
+                "total_affected": len(all_pages),
+                "shown": cap,
+                "message": (
+                    f"{len(all_pages)} pages affected, showing the first {cap}. "
+                    f"Use wiki_lint to see the full attention map."
+                ),
+            })
+
+        response = {
             "status": "ok",
-            "pages_created": result.pages_created,
-            "pages_updated": result.pages_updated,
+            "pages_created": len(result.pages_created),
+            "pages_updated": len(result.pages_updated),
+            "created": [n for n in result.pages_created if n in shown],
+            "updated": [n for n in result.pages_updated if n in shown],
             "concepts_found": result.concepts_found,
         }
+        if truncated:
+            response["truncated"] = True
+            response["shown"] = cap
+            response["warnings"] = warnings
+        return response
 
 
 def _serialize_result(r: SearchResult) -> dict:
@@ -711,6 +958,23 @@ def _serialize_result(r: SearchResult) -> dict:
         "score": r.score,
         "manifest": r.entry.to_manifest_text(),
     }
+
+
+def _serialize_write_result(result) -> dict:
+    out = {
+        "status": result.status,
+        "page_path": result.page_path,
+        "journal_id": result.journal_id,
+        "session_id": result.session_id,
+        "content_hash": result.content_hash,
+    }
+    if result.warnings:
+        out["warnings"] = result.warnings
+    if result.code is not None:
+        out["code"] = result.code
+    if result.details:
+        out.update(result.details)
+    return out
 
 
 def _serialize_snippet_result(r) -> dict:

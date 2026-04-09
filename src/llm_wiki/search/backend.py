@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+from pathlib import Path
 from typing import Protocol
 
 from llm_wiki.manifest import ManifestEntry
@@ -35,3 +36,9 @@ class SearchBackend(Protocol):
     def index_entries(self, entries: list[ManifestEntry]) -> None: ...
     def search(self, query: str, limit: int = 10) -> list[SearchResult]: ...
     def entry_count(self) -> int: ...
+    def search_with_snippets(
+        self,
+        query: str,
+        limit: int,
+        vault_root: Path,
+    ) -> list[SnippetSearchResult]: ...

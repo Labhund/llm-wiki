@@ -84,6 +84,21 @@ class TalkSummaryStore:
     def delete(self, page_name: str) -> None:
         self._entries.pop(page_name, None)
 
+    def page_names(self) -> list[str]:
+        """Return the list of page names currently tracked in the store."""
+        return list(self._entries.keys())
+
+    def prune(self, live_page_names: set[str]) -> int:
+        """Drop entries for pages not in `live_page_names`.
+
+        Returns the number of entries removed. The caller is responsible
+        for calling `save()` afterwards if anything was pruned.
+        """
+        stale = [name for name in self._entries if name not in live_page_names]
+        for name in stale:
+            del self._entries[name]
+        return len(stale)
+
     def save(self) -> None:
         self._path.parent.mkdir(parents=True, exist_ok=True)
         payload = {name: asdict(rec) for name, rec in self._entries.items()}
@@ -141,9 +156,16 @@ async def summarize_open_entries(
 
 
 def _deterministic_summary(entries: list[TalkEntry]) -> str:
-    """Build a one-line count-based summary as a fallback for LLM failures."""
+    """Build a one-line count-based summary as a fallback for LLM failures.
+
+    Severity ordering is by rank (critical → moderate → minor → suggestion
+    → new_connection), not alphabetical. P6A-M4 carryover.
+    """
+    from llm_wiki.severity import severity_sort_key
+
     by_severity: dict[str, int] = {}
     for e in entries:
         by_severity[e.severity] = by_severity.get(e.severity, 0) + 1
-    parts = [f"{count} {sev}" for sev, count in sorted(by_severity.items())]
+    ordered = sorted(by_severity.items(), key=lambda kv: severity_sort_key(kv[0]))
+    parts = [f"{count} {sev}" for sev, count in ordered]
     return f"{len(entries)} unresolved talk entries: " + ", ".join(parts) + "."

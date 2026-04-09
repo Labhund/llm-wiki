@@ -67,3 +67,51 @@ def test_maintenance_config_loads_talk_summary_overrides(tmp_path: Path):
     cfg = WikiConfig.load(cfg_file)
     assert cfg.maintenance.talk_summary_min_new_entries == 3
     assert cfg.maintenance.talk_summary_min_interval_seconds == 1800
+
+
+def test_mcp_config_defaults():
+    cfg = WikiConfig()
+    assert cfg.mcp.transport == "stdio"
+    assert cfg.mcp.ingest_response_max_pages == 15
+
+
+def test_sessions_config_defaults():
+    cfg = WikiConfig()
+    assert cfg.sessions.namespace_by_connection is True
+    assert cfg.sessions.inactivity_timeout_seconds == 300
+    assert cfg.sessions.write_count_cap == 30
+    assert cfg.sessions.cap_warn_ratio == 0.6
+    assert cfg.sessions.auto_commit_user_edits is False
+    assert cfg.sessions.user_edit_settle_interval_seconds == 600
+
+
+def test_write_config_defaults():
+    cfg = WikiConfig()
+    assert cfg.write.require_citations_on_create is True
+    assert cfg.write.require_citations_on_append is True
+    assert cfg.write.patch_fuzzy_match_threshold == 0.85
+    assert cfg.write.name_jaccard_threshold == 0.5
+    assert cfg.write.name_levenshtein_threshold == 0.85
+
+
+def test_phase6b_config_loads_overrides(tmp_path: Path):
+    cfg_file = tmp_path / "config.yaml"
+    cfg_file.write_text(yaml.dump({
+        "mcp": {"ingest_response_max_pages": 30},
+        "sessions": {
+            "inactivity_timeout_seconds": 60,
+            "write_count_cap": 10,
+            "namespace_by_connection": False,
+        },
+        "write": {
+            "require_citations_on_create": False,
+            "name_jaccard_threshold": 0.4,
+        },
+    }))
+    cfg = WikiConfig.load(cfg_file)
+    assert cfg.mcp.ingest_response_max_pages == 30
+    assert cfg.sessions.inactivity_timeout_seconds == 60
+    assert cfg.sessions.write_count_cap == 10
+    assert cfg.sessions.namespace_by_connection is False
+    assert cfg.write.require_citations_on_create is False
+    assert cfg.write.name_jaccard_threshold == 0.4

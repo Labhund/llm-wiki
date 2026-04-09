@@ -85,6 +85,31 @@ class HonchoConfig:
 
 
 @dataclass
+class MCPConfig:
+    transport: str = "stdio"
+    ingest_response_max_pages: int = 15
+
+
+@dataclass
+class SessionsConfig:
+    namespace_by_connection: bool = True
+    inactivity_timeout_seconds: int = 300
+    write_count_cap: int = 30
+    cap_warn_ratio: float = 0.6
+    auto_commit_user_edits: bool = False
+    user_edit_settle_interval_seconds: int = 600
+
+
+@dataclass
+class WriteConfig:
+    require_citations_on_create: bool = True
+    require_citations_on_append: bool = True
+    patch_fuzzy_match_threshold: float = 0.85
+    name_jaccard_threshold: float = 0.5
+    name_levenshtein_threshold: float = 0.85
+
+
+@dataclass
 class WikiConfig:
     llm: LLMConfig = field(default_factory=LLMConfig)
     llm_queue: LLMQueueConfig = field(default_factory=LLMQueueConfig)
@@ -93,6 +118,9 @@ class WikiConfig:
     maintenance: MaintenanceConfig = field(default_factory=MaintenanceConfig)
     vault: VaultConfig = field(default_factory=VaultConfig)
     honcho: HonchoConfig = field(default_factory=HonchoConfig)
+    mcp: MCPConfig = field(default_factory=MCPConfig)
+    sessions: SessionsConfig = field(default_factory=SessionsConfig)
+    write: WriteConfig = field(default_factory=WriteConfig)
 
     @classmethod
     def load(cls, path: Path) -> "WikiConfig":

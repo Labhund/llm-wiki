@@ -547,3 +547,62 @@ async def test_refresh_talk_summaries_rate_limit_blocks_resummary(tmp_path):
     agent = LibrarianAgent(vault, tmp_path, UnusedLLM(), queue, cfg)
     summarized = await agent.refresh_talk_summaries()
     assert summarized == 0
+
+
+@pytest.mark.asyncio
+async def test_refresh_talk_summaries_prunes_deleted_pages(tmp_path):
+    """When a talk file is deleted, the next refresh prunes its store entry.
+
+    Phase 6a P6A-I3 carryover: TalkSummaryStore was missing the prune step
+    that ManifestOverrides has, so deleted-page records grew unbounded in
+    the JSON sidecar.
+    """
+    from llm_wiki.config import WikiConfig
+    from llm_wiki.issues.queue import IssueQueue
+    from llm_wiki.librarian.agent import LibrarianAgent
+    from llm_wiki.librarian.talk_summary import TalkSummaryStore
+    from llm_wiki.talk.page import TalkEntry, TalkPage
+    from llm_wiki.traverse.llm_client import LLMResponse
+    from llm_wiki.vault import Vault, _state_dir_for
+
+    wiki = tmp_path / "wiki"
+    wiki.mkdir()
+    (wiki / "alpha.md").write_text("---\ntitle: A\n---\n\n## Body\n\nx\n")
+    (wiki / "beta.md").write_text("---\ntitle: B\n---\n\n## Body\n\ny\n")
+
+    # Both pages get 5 open entries → both summarized on the first run.
+    for slug in ("alpha", "beta"):
+        talk = TalkPage(wiki / f"{slug}.talk.md")
+        for i in range(5):
+            talk.append(TalkEntry(0, f"t{i}", f"@u{i}", f"entry {i}"))
+
+    cfg = WikiConfig()
+
+    class StubLLM:
+        async def complete(self, messages, temperature=0.0, priority="maintenance"):
+            return LLMResponse(content="Stub summary.", tokens_used=10)
+
+    vault = Vault.scan(tmp_path)
+    queue = IssueQueue(tmp_path)
+    agent = LibrarianAgent(vault, tmp_path, StubLLM(), queue, cfg)
+
+    assert await agent.refresh_talk_summaries() == 2
+
+    state_dir = _state_dir_for(tmp_path)
+    store = TalkSummaryStore.load(state_dir / "talk_summaries.json")
+    assert store.get("alpha") is not None
+    assert store.get("beta") is not None
+
+    # Delete one talk file (and the page itself, to cover the realistic
+    # case of removing a page from the wiki).
+    (wiki / "alpha.talk.md").unlink()
+    (wiki / "alpha.md").unlink()
+
+    # Even though `beta` is rate-limited and won't be re-summarized, the
+    # refresh pass should still prune the deleted page from the store.
+    refreshed = await agent.refresh_talk_summaries()
+    assert refreshed == 0  # beta blocked by rate limit; alpha deleted
+
+    store2 = TalkSummaryStore.load(state_dir / "talk_summaries.json")
+    assert store2.get("alpha") is None, "deleted page should be pruned"
+    assert store2.get("beta") is not None, "live page should remain"

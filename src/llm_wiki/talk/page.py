@@ -3,6 +3,7 @@ from __future__ import annotations
 import re
 from dataclasses import dataclass, field
 from pathlib import Path
+from typing import Iterator
 
 import yaml
 
@@ -88,14 +89,16 @@ def compute_open_set(entries: list[TalkEntry]) -> list[TalkEntry]:
     """Return the subset of `entries` that are not closed by any later entry.
 
     A `TalkEntry` is closed iff some entry with a strictly greater `index`
-    references it via its `resolves` list. Walks entries forward in pure
-    Python — no LLM calls, no I/O. Order of the returned list is the same
-    as the input (chronological).
+    references it via its `resolves` list. Earlier entries cannot close
+    later ones, and an entry cannot close itself — both cases are silently
+    ignored. Walks entries forward in pure Python — no LLM calls, no I/O.
+    Order of the returned list is the same as the input (chronological).
     """
     closed: set[int] = set()
     for entry in entries:
         for target in entry.resolves:
-            closed.add(target)
+            if target < entry.index:
+                closed.add(target)
     return [e for e in entries if e.index not in closed]
 
 
@@ -217,3 +220,26 @@ class TalkPage:
         except ValueError:
             return text
         return text[end + 4:].lstrip()
+
+
+def iter_talk_pages(wiki_dir: Path) -> Iterator[tuple[str, "TalkPage"]]:
+    """Yield (page_name, TalkPage) for every talk file in `wiki_dir`.
+
+    Walks `wiki_dir` recursively, sorted for determinism. Skips files
+    inside hidden directories (e.g. `.issues/`). Returns immediately if
+    `wiki_dir` does not exist.
+
+    Page name is derived from the talk file's stem with the trailing
+    `.talk` removed (so `bioinformatics/srna.talk.md` yields `srna`).
+    P6A-M3 carryover — extracted because three call sites duplicated
+    this exact walk.
+    """
+    if not wiki_dir.exists():
+        return
+    for talk_path in sorted(wiki_dir.rglob("*.talk.md")):
+        rel = talk_path.relative_to(wiki_dir)
+        if any(p.startswith(".") for p in rel.parts):
+            continue
+        stem = talk_path.stem  # foo.talk
+        page_name = stem[: -len(".talk")] if stem.endswith(".talk") else stem
+        yield page_name, TalkPage(talk_path)

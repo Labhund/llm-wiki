@@ -32,15 +32,18 @@ async def _request(sock_path: Path, msg: dict) -> dict:
 
 @pytest.mark.asyncio
 async def test_ingest_route_missing_file_returns_ok(server_with_ingest):
-    """Ingest with non-existent file returns ok with empty pages (extraction fails gracefully)."""
+    """Ingest with non-existent file returns ok with zero pages (extraction fails gracefully)."""
     server, sock_path = server_with_ingest
     resp = await _request(sock_path, {
         "type": "ingest",
         "source_path": "/nonexistent/file.md",
+        "author": "cli",
+        "connection_id": "test-conn",
     })
     assert resp["status"] == "ok"
     assert "pages_created" in resp
-    assert resp["pages_created"] == []
+    # Phase 6b: pages_created is now a count, not a list
+    assert resp["pages_created"] == 0
 
 
 @pytest.mark.asyncio
@@ -50,3 +53,16 @@ async def test_ingest_route_missing_source_path(server_with_ingest):
     resp = await _request(sock_path, {"type": "ingest"})
     assert resp["status"] == "error"
     assert "source_path" in resp["message"]
+
+
+@pytest.mark.asyncio
+async def test_ingest_route_missing_connection_id_returns_error(server_with_ingest):
+    """Phase 6b: connection_id is required so the ingest can join a session."""
+    server, sock_path = server_with_ingest
+    resp = await _request(sock_path, {
+        "type": "ingest",
+        "source_path": "/nonexistent/file.md",
+        "author": "cli",
+    })
+    assert resp["status"] == "error"
+    assert "connection_id" in resp["message"]

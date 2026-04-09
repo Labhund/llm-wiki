@@ -258,16 +258,19 @@ def lint(vault_path: Path) -> None:
 )
 def ingest(source_path: Path, vault_path: Path) -> None:
     """Ingest a source document — extracts concepts and creates wiki pages."""
+    import uuid as _uuid
     client = _get_client(vault_path)
     resp = client.request({
         "type": "ingest",
         "source_path": str(source_path.resolve()),
+        "author": "cli",
+        "connection_id": _uuid.uuid4().hex,
     })
     if resp["status"] != "ok":
         raise click.ClickException(resp.get("message", "Ingest failed"))
 
-    created = resp.get("pages_created", [])
-    updated = resp.get("pages_updated", [])
+    created = resp.get("created", [])
+    updated = resp.get("updated", [])
     click.echo(f"Ingested: {resp['concepts_found']} concept(s) identified.")
     if created:
         click.echo(f"  Created: {', '.join(created)}")

@@ -111,3 +111,61 @@ def test_search_with_snippets_empty_results_for_no_match(sample_vault):
         "absolutelynothingmatchesthistoken", limit=5, vault_root=sample_vault,
     )
     assert results == []
+
+
+def test_extract_snippets_respects_max_bytes_cap(tmp_path: Path):
+    """P6A-M2: _extract_snippets must not read unbounded page bytes.
+
+    A multi-megabyte page with the match deep in the body should:
+    1. Not blow up the function (still returns matches found in the head)
+    2. Be capped by `max_bytes` so we don't pay O(file_size) per query
+    """
+    from llm_wiki.search.tantivy_backend import TantivyBackend
+
+    index_dir = tmp_path / "index"
+    vault_dir = tmp_path / "vault"
+    vault_dir.mkdir()
+
+    # Build a synthetic 5MB page where the search term appears in the head
+    # AND deep in the tail. With a small max_bytes cap we should only see
+    # the head match.
+    head = "## Head Section\n\nThe TARGETWORD is here.\n\n"
+    filler = ("filler line that doesn't match\n" * 200_000)  # ~6 MB
+    tail = "\n## Tail Section\n\nAnother TARGETWORD lives down here.\n"
+    big_page = head + filler + tail
+
+    page_path = vault_dir / "bigpage.md"
+    page_path.write_text("---\ntitle: Big\n---\n\n" + big_page)
+
+    backend = TantivyBackend(index_dir)
+
+    # 64KB cap: head match visible, tail match invisible.
+    head_only = backend._extract_snippets(
+        "bigpage", ["targetword"], vault_dir, max_matches=10, max_bytes=64 * 1024,
+    )
+    assert len(head_only) == 1
+    assert "TARGETWORD is here" in head_only[0].match
+
+    # Default (no cap arg) should still work — be generous enough to find
+    # both, OR document the default. The plan picks ~64KB as the default,
+    # so the default behavior should match the small cap.
+    default_call = backend._extract_snippets(
+        "bigpage", ["targetword"], vault_dir, max_matches=10,
+    )
+    assert len(default_call) == 1, "default cap should hide deep matches"
+
+
+def test_vault_search_with_snippets_public_api(sample_vault):
+    """Phase 6a P6A-I4 carryover: search_with_snippets is exposed via Vault.
+
+    Production callers (server.py) must not reach into `vault._backend`;
+    they go through `vault.search_with_snippets(query, limit)` which fills
+    in vault_root from the Vault's own root.
+    """
+    from llm_wiki.vault import Vault
+
+    vault = Vault.scan(sample_vault)
+    results = vault.search_with_snippets("PCA", limit=5)
+    assert results, "expected at least one result for 'PCA'"
+    for r in results:
+        assert hasattr(r, "matches")

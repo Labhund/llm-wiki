@@ -178,22 +178,99 @@ async def phase6a_daemon_server(sample_vault: Path, tmp_path: Path):
     """Daemon server for Phase 6a tests where wiki_dir == vault_root.
 
     Uses wiki_dir="" so _read_talk_block can rglob cluster subdirectories.
-    Clears any auditor-created issues after start so tests begin with a clean
-    issue queue (the scheduler runs workers immediately on start).
+    Registers no maintenance workers (enabled_workers=set()) so the scheduler
+    doesn't race with the test body — the test fixture's job is to set up a
+    quiescent daemon, and waiting for "the auditor finished writing then
+    rmtree'd its output" is fragile the moment any worker body grows an
+    `await`. P6A-I6 carryover.
     """
-    import shutil
     from llm_wiki.config import VaultConfig, WikiConfig
     sock_path = tmp_path / "p6a.sock"
     config = WikiConfig(vault=VaultConfig(wiki_dir=""))
-    server = DaemonServer(sample_vault, sock_path, config=config)
+    server = DaemonServer(
+        sample_vault, sock_path, config=config, enabled_workers=set(),
+    )
     await server.start()
-    # Yield control so scheduler tasks can fire, then clear auditor noise.
-    await asyncio.sleep(0)
-    issues_dir = sample_vault / ".issues"
-    if issues_dir.exists():
-        shutil.rmtree(issues_dir)
     yield server, sock_path
     await server.stop()
+
+
+@pytest.mark.asyncio
+async def test_enabled_workers_filters_registration(sample_vault: Path, tmp_path: Path):
+    """P6A-I6: enabled_workers narrows scheduler registration.
+
+    None (default) registers all workers. An explicit set registers only
+    those workers. An empty set registers nothing — useful for tests that
+    want a quiescent daemon with no background side effects.
+    """
+    from llm_wiki.config import VaultConfig, WikiConfig
+
+    config = WikiConfig(vault=VaultConfig(wiki_dir=""))
+
+    # Default: all workers.
+    sock1 = tmp_path / "all.sock"
+    server_all = DaemonServer(sample_vault, sock1, config=config)
+    await server_all.start()
+    try:
+        all_names = set(server_all._scheduler.worker_names)
+        assert all_names == {
+            "auditor", "librarian", "authority_recalc",
+            "adversary", "talk_summary",
+        }
+    finally:
+        await server_all.stop()
+
+    # Explicit subset.
+    sock2 = tmp_path / "subset.sock"
+    server_sub = DaemonServer(
+        sample_vault, sock2, config=config,
+        enabled_workers={"talk_summary", "auditor"},
+    )
+    await server_sub.start()
+    try:
+        assert set(server_sub._scheduler.worker_names) == {"talk_summary", "auditor"}
+    finally:
+        await server_sub.stop()
+
+    # Empty set: nothing registered. Note: we can't check the filesystem
+    # for "no issues created" because sample_vault is session-scoped and
+    # an earlier sub-test in this same function already ran the auditor.
+    # The worker_names assertion is sufficient — no registered worker
+    # means no execution path can fire.
+    sock3 = tmp_path / "none.sock"
+    server_none = DaemonServer(
+        sample_vault, sock3, config=config, enabled_workers=set(),
+    )
+    await server_none.start()
+    try:
+        assert server_none._scheduler.worker_names == []
+        assert server_none._scheduler.last_run_iso("auditor") is None
+    finally:
+        await server_none.stop()
+
+
+@pytest.mark.asyncio
+async def test_enabled_workers_unknown_name_raises(sample_vault: Path, tmp_path: Path):
+    """An unknown worker name in enabled_workers should fail loudly at start.
+
+    Silently ignoring would let typos hide for months. Better to surface
+    the bad name when the daemon starts than to wonder why a worker never ran.
+    """
+    from llm_wiki.config import VaultConfig, WikiConfig
+
+    config = WikiConfig(vault=VaultConfig(wiki_dir=""))
+    sock_path = tmp_path / "bad.sock"
+    server = DaemonServer(
+        sample_vault, sock_path, config=config,
+        enabled_workers={"talk_summary", "not_a_real_worker"},
+    )
+    with pytest.raises(ValueError, match="not_a_real_worker"):
+        await server.start()
+    # Cleanup in case start() partially succeeded.
+    try:
+        await server.stop()
+    except Exception:
+        pass
 
 
 @pytest.mark.asyncio

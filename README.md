@@ -98,6 +98,20 @@ Every finding carries a severity (`critical | moderate | minor` for issues; talk
 
 Findings flow into a shared issue queue (`llm-wiki issues list`) and append-only talk pages (`llm-wiki talk read <page>`). The agents may file issues, append to talk pages, update sidecar metadata, and insert invisible markers — but never edit human-authored markdown body content. "Human prose is sacred."
 
+### Supervised Write Surface (Phase 6b)
+
+The daemon also exposes three write routes for supervised agents — `page-create`, `page-update`, `page-append` — which a Phase 6c MCP server will surface to frontier models as `wiki_create` / `wiki_update` / `wiki_append`. Every write must declare an `author` and a `connection_id`; writes without both are rejected. Updates use a V4A-style patch format (exact match with a fuzzy fallback for trailing-whitespace and minor-typo drift, structured `patch-conflict` errors otherwise) so the agent can re-read and retry instead of clobbering the page.
+
+Writes are grouped into per-author **sessions** that batch into a single git commit. A session settles — and produces one commit — on inactivity timeout (default 5 min), write-count cap (default 30, with a `session-cap-approaching` warning at 60% of the cap), explicit `session-close`, or daemon shutdown. The pipeline:
+
+1. **Per-page write lock** — concurrent writes to the same page serialize; different pages proceed in parallel.
+2. **Synchronous fsync'd journal** — every write appends one JSONL line to `<state>/sessions/<uuid>.journal` before the daemon returns `ok` to the agent. Crash-safe.
+3. **Serial commit lock** — the `CommitService` holds one `asyncio.Lock` so two settling sessions can't race on git.
+4. **Cheap LLM summarizer** — the maintenance LLM produces a one-line subject + bullets; if it fails (model unreachable, parse error, anything), a deterministic fallback message lands. **The commit always happens.** The worst case is a less narrative subject line.
+5. **Recovery on startup** — orphaned journals from a daemon crash get processed through the same settle pipeline before the new daemon accepts requests.
+
+The commit message carries `Session: <id>`, `Agent: <author>`, and `Writes: <count>` trailers, so `git log --grep "Agent: researcher-3"` becomes a meaningful audit query — the swarm-equivalent of `git log --author=...`. Talk pages and issues continue to live outside the supervised write surface; background workers can post to either, but **mechanically cannot reach the write routes**. An AST hard-rule test walks every module under `daemon/`, `audit/`, `librarian/`, `adversary/`, `talk/` at every test run and fails if any background-worker code path imports or references `PageWriteService` or the write-route handlers — closing the gap that pure code review would otherwise leave open.
+
 ## Philosophy
 
 The principles plans are derived from. See [PHILOSOPHY.md](PHILOSOPHY.md) for the full document.
@@ -152,6 +166,11 @@ src/llm_wiki/          # Core Python package
     scheduler.py       # IntervalScheduler + ScheduledWorker
     dispatcher.py      # ChangeDispatcher (per-path debouncer)
     snapshot.py        # PageSnapshotStore
+    v4a_patch.py       # V4A patch parser + applier (exact + fuzzy match)
+    sessions.py        # Session, journal IO, registry, recovery scan
+    commit.py          # Serial commit pipeline + LLM summarizer + fallback
+    name_similarity.py # Jaccard + Levenshtein hybrid for name collisions
+    writes.py          # PageWriteService — supervised write surface
     __main__.py        # Daemon entry point
   ingest/
     extractor.py       # Text extraction (PDF, DOCX, markdown, images via liteparse)
@@ -223,7 +242,7 @@ raw/                   # Immutable source documents
 - [x] **Phase 5c: Librarian** — Usage-driven manifest refinement, authority scoring
 - [x] **Phase 5d: Adversary + Talk Pages** — Claim verification, async discussion sidecars
 - [x] **Phase 6a: Visibility & Severity** — Severity-aware issues and talk entries, append-only closure, librarian talk summaries, enriched `read`/`search`/`lint` routes
-- [ ] **Phase 6b: Write Surface + Sessions** — V4A patches, per-author session journaling, serial commit pipeline, AST hard-rule test
+- [x] **Phase 6b: Write Surface + Sessions** — V4A patches, per-author session journaling, serial commit pipeline, recovery, inactivity/cap settle, AST hard-rule test, session-aware ingest
 - [ ] **Phase 6c: MCP Server** — Tool definitions, `llm-wiki mcp` CLI subcommand, end-to-end smoke test
 
 ## Philosophy
