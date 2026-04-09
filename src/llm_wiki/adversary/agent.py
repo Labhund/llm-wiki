@@ -212,6 +212,7 @@ class AdversaryAgent:
                 f"{explanation}"
             ),
             severity="critical",
+            type="adversary-finding",
         )
         talk.append(entry)
         ensure_talk_marker(page_path)

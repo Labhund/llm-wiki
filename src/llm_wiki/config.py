@@ -135,7 +135,6 @@ class MaintenanceConfig:
     synthesis_lint_months: int = 6
     resonance_matching: bool = False
     resonance_candidates_per_claim: int = 3
-    resonance_weight_synthesis: float = 2.0
     resonance_stale_weeks: int = 4
 
 

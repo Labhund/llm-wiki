@@ -131,5 +131,4 @@ def test_maintenance_config_has_resonance_defaults():
     cfg = WikiConfig()
     assert cfg.maintenance.resonance_matching is False
     assert cfg.maintenance.resonance_candidates_per_claim == 3
-    assert cfg.maintenance.resonance_weight_synthesis == 2.0
     assert cfg.maintenance.resonance_stale_weeks == 4
