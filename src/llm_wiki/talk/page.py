@@ -19,19 +19,19 @@ _ENTRY_HEADER_RE = re.compile(
 )
 
 
-def _parse_meta(meta_str: str | None) -> tuple[str, list[int]]:
-    """Parse a `severity:foo, resolves:[1,2]` metadata blob.
+def _parse_meta(meta_str: str | None) -> tuple[str, list[int], str]:
+    """Parse a `severity:foo, type:bar, resolves:[1,2]` metadata blob.
 
-    Returns (severity, resolves). Missing keys default to ("suggestion", []).
-    Whitespace and key order are tolerant. Invalid blobs return defaults.
+    Returns (severity, resolves, type). Missing keys default to
+    ("suggestion", [], "suggestion").
     """
     if not meta_str:
-        return "suggestion", []
+        return "suggestion", [], "suggestion"
 
     severity = "suggestion"
     resolves: list[int] = []
+    entry_type = "suggestion"
 
-    # Split top-level by comma — but not inside [...] which holds the resolves list.
     parts: list[str] = []
     depth = 0
     buf: list[str] = []
@@ -58,6 +58,8 @@ def _parse_meta(meta_str: str | None) -> tuple[str, list[int]]:
         value = value.strip()
         if key == "severity":
             severity = value
+        elif key == "type":
+            entry_type = value
         elif key == "resolves":
             inner = value.strip("[]")
             if inner:
@@ -65,16 +67,18 @@ def _parse_meta(meta_str: str | None) -> tuple[str, list[int]]:
                     resolves = [int(x.strip()) for x in inner.split(",") if x.strip()]
                 except ValueError:
                     resolves = []
-    return severity, resolves
+    return severity, resolves, entry_type
 
 
-def _format_meta(severity: str, resolves: list[int]) -> str:
+def _format_meta(severity: str, resolves: list[int], entry_type: str = "suggestion") -> str:
     """Build the optional `<!-- ... -->` suffix for an entry header line.
 
-    Returns an empty string for the default case (severity='suggestion',
-    no resolves) so the writer emits the same shape as pre-Phase-6a files.
+    Returns an empty string for the fully-default case (type='suggestion',
+    severity='suggestion', no resolves).
     """
     parts: list[str] = []
+    if entry_type != "suggestion":
+        parts.append(f"type:{entry_type}")
     if severity != "suggestion":
         parts.append(f"severity:{severity}")
     if resolves:
@@ -116,6 +120,7 @@ class TalkEntry:
     body: str
     severity: Severity = "suggestion"
     resolves: list[int] = field(default_factory=list)
+    type: str = "suggestion"   # suggestion | resonance | adversary-finding | new_connection
 
 
 class TalkPage:
@@ -171,7 +176,7 @@ class TalkPage:
             ts = match.group("ts")
             author = match.group("author")
             meta = match.group("meta")
-            severity, resolves = _parse_meta(meta)
+            severity, resolves, entry_type = _parse_meta(meta)
             content_start = match.end()
             content_end = headers[i + 1].start() if i + 1 < len(headers) else len(body)
             entry_body = body[content_start:content_end].strip()
@@ -182,6 +187,7 @@ class TalkPage:
                 body=entry_body,
                 severity=severity,
                 resolves=resolves,
+                type=entry_type,
             ))
         return entries
 
@@ -193,7 +199,7 @@ class TalkPage:
         in an HTML comment on the header line; the default case writes the
         same shape as pre-Phase-6a files.
         """
-        meta_suffix = _format_meta(entry.severity, entry.resolves)
+        meta_suffix = _format_meta(entry.severity, entry.resolves, entry.type)
         block = (
             f"\n**{entry.timestamp} — {entry.author}**{meta_suffix}\n"
             f"{entry.body.strip()}\n"
