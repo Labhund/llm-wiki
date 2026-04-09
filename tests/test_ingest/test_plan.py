@@ -19,7 +19,7 @@ def test_render_plan_file_frontmatter(tmp_path: Path):
         started="2026-04-10",
     )
     assert "source: raw/paper.pdf" in content
-    assert "started: 2026-04-10" in content
+    assert "2026-04-10" in content  # yaml may quote date strings; check value presence
     assert "status: in-progress" in content
     assert "sessions: 1" in content
 
@@ -36,6 +36,20 @@ def test_render_plan_file_empty_claims():
     content = render_plan_file("raw/p.pdf", "T", [], "2026-04-10")
     assert "## Claims / Ideas" in content
     assert "- [ ]" not in content
+
+
+def test_render_plan_file_source_with_colon_is_yaml_safe():
+    """Source paths containing ': ' must not break YAML frontmatter."""
+    from llm_wiki.ingest.plan import render_plan_file, read_plan_frontmatter
+    import tempfile, pathlib
+    content = render_plan_file("raw/paper: annotated.pdf", "T", [], "2026-04-10")
+    # Write + re-parse to confirm it roundtrips without error
+    with tempfile.NamedTemporaryFile(suffix=".md", delete=False, mode="w") as f:
+        f.write(content)
+        tmp = pathlib.Path(f.name)
+    fm = read_plan_frontmatter(tmp)
+    tmp.unlink()
+    assert fm.get("source") == "raw/paper: annotated.pdf"
 
 
 def test_render_plan_file_has_required_sections():
@@ -85,6 +99,12 @@ def test_create_plan_file_creates_inbox_dir(tmp_path: Path):
     assert (tmp_path / "inbox").is_dir()
 
 
+def test_create_plan_file_respects_inbox_dir(tmp_path: Path):
+    from llm_wiki.ingest.plan import create_plan_file
+    path = create_plan_file(tmp_path, "raw/paper.pdf", "T", [], inbox_dir="my-inbox")
+    assert path.parent == tmp_path / "my-inbox"
+
+
 def test_create_plan_file_raises_if_already_exists(tmp_path: Path):
     from llm_wiki.ingest.plan import create_plan_file
     create_plan_file(tmp_path, "raw/paper.pdf", "T", ["A"])
@@ -116,6 +136,13 @@ def test_read_plan_frontmatter_returns_dict(tmp_path: Path):
 def test_read_plan_frontmatter_missing_file_returns_empty(tmp_path: Path):
     from llm_wiki.ingest.plan import read_plan_frontmatter
     assert read_plan_frontmatter(tmp_path / "nonexistent.md") == {}
+
+
+def test_read_plan_frontmatter_no_frontmatter_block_returns_empty(tmp_path: Path):
+    f = tmp_path / "plan.md"
+    f.write_text("# Just a heading\n\nNo frontmatter here.\n")
+    from llm_wiki.ingest.plan import read_plan_frontmatter
+    assert read_plan_frontmatter(f) == {}
 
 
 # ---------------------------------------------------------------------------

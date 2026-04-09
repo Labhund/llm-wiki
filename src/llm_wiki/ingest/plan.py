@@ -14,13 +14,16 @@ def render_plan_file(
     started: str,
 ) -> str:
     """Return the full text of a new inbox plan file (frontmatter + body)."""
+    frontmatter = yaml.dump(
+        {"source": source, "started": started, "status": "in-progress", "sessions": 1},
+        default_flow_style=False,
+        allow_unicode=True,
+        sort_keys=False,
+    )
     claims_md = "\n".join(f"- [ ] {c}" for c in claims)
     return (
         f"---\n"
-        f"source: {source}\n"
-        f"started: {started}\n"
-        f"status: in-progress\n"
-        f"sessions: 1\n"
+        f"{frontmatter}"
         f"---\n\n"
         f"# {title} — Research Plan\n\n"
         f"## Claims / Ideas\n"
@@ -48,21 +51,25 @@ def create_plan_file(
     source: str,
     title: str,
     claims: list[str],
+    inbox_dir: str = "inbox",
 ) -> Path:
-    """Create a scaffolded plan file in inbox/.
+    """Create a scaffolded plan file in the inbox directory.
 
-    Creates inbox/ if it does not exist. Does NOT git-commit — the
-    daemon handler is responsible for the commit.
+    Creates the inbox directory if it does not exist. Does NOT
+    git-commit — the daemon handler is responsible for the commit.
+
+    `inbox_dir` should be the configured directory name relative to
+    `vault_root` (from `config.vault.inbox_dir`, default ``"inbox"``).
 
     Raises FileExistsError if the plan file already exists (same
     source ingested on the same day).
     """
-    inbox_dir = vault_root / "inbox"
-    inbox_dir.mkdir(exist_ok=True)
+    inbox_path = vault_root / inbox_dir.rstrip("/")
+    inbox_path.mkdir(exist_ok=True)
 
     started = datetime.date.today().isoformat()
     filename = plan_filename(source, started)
-    plan_path = inbox_dir / filename
+    plan_path = inbox_path / filename
 
     if plan_path.exists():
         raise FileExistsError(
