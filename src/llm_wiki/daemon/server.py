@@ -324,10 +324,9 @@ class DaemonServer:
                 return {"status": "error", "message": f"Unknown request type: {req_type}"}
 
     def _handle_search(self, request: dict) -> dict:
-        results = self._vault._backend.search_with_snippets(
+        results = self._vault.search_with_snippets(
             request["query"],
             limit=request.get("limit", 10),
-            vault_root=self._vault_root,
         )
         return {
             "status": "ok",

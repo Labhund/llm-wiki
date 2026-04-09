@@ -8,7 +8,7 @@ from pathlib import Path
 from llm_wiki.config import WikiConfig
 from llm_wiki.manifest import ManifestEntry, ManifestStore, build_entry
 from llm_wiki.page import Page
-from llm_wiki.search.backend import SearchResult
+from llm_wiki.search.backend import SearchResult, SnippetSearchResult
 from llm_wiki.search.tantivy_backend import TantivyBackend
 from llm_wiki.tokens import count_tokens
 
@@ -98,6 +98,22 @@ class Vault:
 
     def search(self, query: str, limit: int = 10) -> list[SearchResult]:
         return self._backend.search(query, limit=limit)
+
+    def search_with_snippets(
+        self,
+        query: str,
+        limit: int = 10,
+    ) -> list[SnippetSearchResult]:
+        """Public search-with-snippets API.
+
+        Delegates to the backend, filling in `vault_root` from the Vault's
+        own root so callers don't have to thread it through. This is the
+        path production code should use; reaching into `_backend` directly
+        is only acceptable in test code.
+        """
+        return self._backend.search_with_snippets(
+            query, limit=limit, vault_root=self._root,
+        )
 
     def read_page(self, name: str) -> Page | None:
         return self._pages.get(name)

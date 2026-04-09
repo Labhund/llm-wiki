@@ -111,3 +111,19 @@ def test_search_with_snippets_empty_results_for_no_match(sample_vault):
         "absolutelynothingmatchesthistoken", limit=5, vault_root=sample_vault,
     )
     assert results == []
+
+
+def test_vault_search_with_snippets_public_api(sample_vault):
+    """Phase 6a P6A-I4 carryover: search_with_snippets is exposed via Vault.
+
+    Production callers (server.py) must not reach into `vault._backend`;
+    they go through `vault.search_with_snippets(query, limit)` which fills
+    in vault_root from the Vault's own root.
+    """
+    from llm_wiki.vault import Vault
+
+    vault = Vault.scan(sample_vault)
+    results = vault.search_with_snippets("PCA", limit=5)
+    assert results, "expected at least one result for 'PCA'"
+    for r in results:
+        assert hasattr(r, "matches")
