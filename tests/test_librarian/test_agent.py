@@ -348,8 +348,10 @@ async def test_refresh_talk_summaries_below_threshold_does_nothing(tmp_path):
     from llm_wiki.talk.page import TalkEntry, TalkPage
     from llm_wiki.vault import Vault, _state_dir_for
 
-    (tmp_path / "p.md").write_text("---\ntitle: P\n---\n\n## Body\n\ncontent\n")
-    talk = TalkPage(tmp_path / "p.talk.md")
+    wiki = tmp_path / "wiki"
+    wiki.mkdir()
+    (wiki / "p.md").write_text("---\ntitle: P\n---\n\n## Body\n\ncontent\n")
+    talk = TalkPage(wiki / "p.talk.md")
     # Two entries — below the default threshold of 5
     talk.append(TalkEntry(0, "t1", "@a", "first"))
     talk.append(TalkEntry(0, "t2", "@b", "second"))
@@ -383,8 +385,10 @@ async def test_refresh_talk_summaries_above_threshold_summarizes(tmp_path):
     from llm_wiki.traverse.llm_client import LLMResponse
     from llm_wiki.vault import Vault, _state_dir_for
 
-    (tmp_path / "p.md").write_text("---\ntitle: P\n---\n\n## Body\n\ncontent\n")
-    talk = TalkPage(tmp_path / "p.talk.md")
+    wiki = tmp_path / "wiki"
+    wiki.mkdir()
+    (wiki / "p.md").write_text("---\ntitle: P\n---\n\n## Body\n\ncontent\n")
+    talk = TalkPage(wiki / "p.talk.md")
     for i in range(5):
         talk.append(TalkEntry(0, f"t{i}", f"@a{i}", f"entry {i}"))
 
@@ -422,8 +426,10 @@ async def test_refresh_talk_summaries_robust_to_intervening_closures(tmp_path):
     from llm_wiki.traverse.llm_client import LLMResponse
     from llm_wiki.vault import Vault, _state_dir_for
 
-    (tmp_path / "p.md").write_text("---\ntitle: P\n---\n\n## Body\n\ncontent\n")
-    talk = TalkPage(tmp_path / "p.talk.md")
+    wiki = tmp_path / "wiki"
+    wiki.mkdir()
+    (wiki / "p.md").write_text("---\ntitle: P\n---\n\n## Body\n\ncontent\n")
+    talk = TalkPage(wiki / "p.talk.md")
 
     # First run: 5 entries, all open → summarize, high-water = 5
     for i in range(5):
@@ -478,8 +484,10 @@ async def test_refresh_talk_summaries_excludes_resolved_entries(tmp_path):
     from llm_wiki.talk.page import TalkEntry, TalkPage
     from llm_wiki.vault import Vault
 
-    (tmp_path / "p.md").write_text("---\ntitle: P\n---\n\n## Body\n\ncontent\n")
-    talk = TalkPage(tmp_path / "p.talk.md")
+    wiki = tmp_path / "wiki"
+    wiki.mkdir()
+    (wiki / "p.md").write_text("---\ntitle: P\n---\n\n## Body\n\ncontent\n")
+    talk = TalkPage(wiki / "p.talk.md")
     # Five entries, but four of them get resolved → only one open + the resolver
     for i in range(5):
         talk.append(TalkEntry(0, f"t{i}", f"@a{i}", f"entry {i}"))
@@ -510,8 +518,10 @@ async def test_refresh_talk_summaries_rate_limit_blocks_resummary(tmp_path):
     from llm_wiki.talk.page import TalkEntry, TalkPage
     from llm_wiki.vault import Vault, _state_dir_for
 
-    (tmp_path / "p.md").write_text("---\ntitle: P\n---\n\n## Body\n\ncontent\n")
-    talk = TalkPage(tmp_path / "p.talk.md")
+    wiki = tmp_path / "wiki"
+    wiki.mkdir()
+    (wiki / "p.md").write_text("---\ntitle: P\n---\n\n## Body\n\ncontent\n")
+    talk = TalkPage(wiki / "p.talk.md")
     for i in range(6):
         talk.append(TalkEntry(0, f"t{i}", f"@a{i}", f"entry {i}"))
 

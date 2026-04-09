@@ -159,8 +159,6 @@ class LibrarianAgent:
 
         wiki_dir = self._vault_root / self._config.vault.wiki_dir.rstrip("/")
         if not wiki_dir.exists():
-            wiki_dir = self._vault_root
-        if not wiki_dir.exists():
             return 0
 
         store = TalkSummaryStore.load(self._state_dir / "talk_summaries.json")
