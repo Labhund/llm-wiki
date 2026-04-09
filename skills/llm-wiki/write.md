@@ -42,6 +42,12 @@ Sessions open implicitly on the first write call — no explicit open needed. Cl
 
 Use `wiki_talk_post`. Talk pages accept: half-formed ideas, proposals, connections you cannot yet cite, contradictions waiting on resolution. This is a first-class path, not a consolation.
 
+## Wikilinks Posture
+
+Link aggressively as you write — every salient noun, technical term, and named entity on its first mention in a page. `[[concept]]` syntax; the daemon resolves targets. This is a writing habit, not a post-step checklist.
+
+When creating multiple related pages: use a one-level topic subdirectory (`topic/page-name`) to cluster them. Flat naming for standalone concepts; subdirectory for concept families (e.g., `transformers/attention`, `transformers/positional-encoding`).
+
 ## Before Writing
 
 Check inline signals from `wiki_read`. If a page has open critical or moderate issues, address or acknowledge them before adding new content. Writing over a broken page makes it worse.
