@@ -888,10 +888,17 @@ class DaemonServer:
     async def _handle_ingest(self, request: dict) -> dict:
         if "source_path" not in request:
             return {"status": "error", "message": "Missing required field: source_path"}
+        if "connection_id" not in request:
+            return {"status": "error", "message": "Missing required field: connection_id"}
 
         from llm_wiki.ingest.agent import IngestAgent
         from llm_wiki.traverse.llm_client import LLMClient
 
+        author = request.get("author", "cli")
+        if author == "cli":
+            logger.info("ingest route called without author; defaulting to 'cli'")
+
+        connection_id = request["connection_id"]
         source_path = Path(request["source_path"])
         llm = LLMClient(
             self._llm_queue,
@@ -901,19 +908,48 @@ class DaemonServer:
         )
         agent = IngestAgent(llm, self._config)
         try:
-            result = await agent.ingest(source_path, self._vault_root)
+            result = await agent.ingest(
+                source_path, self._vault_root,
+                author=author,
+                connection_id=connection_id,
+                write_service=self._page_write_service,
+            )
         finally:
             try:
                 await self.rescan()
             except Exception:
                 logger.warning("Failed to rescan vault after ingest")
 
-        return {
+        # Apply response cap (mcp.ingest_response_max_pages)
+        cap = self._config.mcp.ingest_response_max_pages
+        all_pages = result.pages_created + result.pages_updated
+        truncated = len(all_pages) > cap
+        shown = set(all_pages[:cap]) if truncated else set(all_pages)
+        warnings = []
+        if truncated:
+            warnings.append({
+                "code": "response-truncated",
+                "total_affected": len(all_pages),
+                "shown": cap,
+                "message": (
+                    f"{len(all_pages)} pages affected, showing the first {cap}. "
+                    f"Use wiki_lint to see the full attention map."
+                ),
+            })
+
+        response = {
             "status": "ok",
-            "pages_created": result.pages_created,
-            "pages_updated": result.pages_updated,
+            "pages_created": len(result.pages_created),
+            "pages_updated": len(result.pages_updated),
+            "created": [n for n in result.pages_created if n in shown],
+            "updated": [n for n in result.pages_updated if n in shown],
             "concepts_found": result.concepts_found,
         }
+        if truncated:
+            response["truncated"] = True
+            response["shown"] = cap
+            response["warnings"] = warnings
+        return response
 
 
 def _serialize_result(r: SearchResult) -> dict:
