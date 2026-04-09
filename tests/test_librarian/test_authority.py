@@ -123,3 +123,47 @@ def test_compute_authority_full_formula():
     result = compute_authority(entries, usage)
     # star: 0.3*1.0 + 0.4*1.0 + 0.2*1.0 + 0.1*1.0 = 1.00
     assert abs(result["star"] - 1.00) < 1e-6
+
+
+# --- synthesis_boost parameter ---
+
+
+def test_synthesis_boost_raises_score():
+    """A synthesis page with synthesis_boost=2.0 gets a higher score than without."""
+    entries = {
+        "synth": ManifestEntry(
+            name="synth", title="Synth", summary="", tags=[],
+            cluster="default", tokens=100,
+            sections=[SectionInfo(name="content", tokens=100)],
+            links_to=[], links_from=[],
+            is_synthesis=True,
+        ),
+    }
+    baseline = compute_authority(entries, {}, synthesis_boost=1.0)
+    boosted = compute_authority(entries, {}, synthesis_boost=2.0)
+    assert boosted["synth"] > baseline["synth"]
+
+
+def test_synthesis_boost_caps_at_one():
+    """A synthesis page score never exceeds 1.0 regardless of boost."""
+    entries = {
+        "synth": ManifestEntry(
+            name="synth", title="Synth", summary="", tags=[],
+            cluster="default", tokens=100,
+            sections=[SectionInfo(name="content", tokens=100)],
+            links_to=[], links_from=["a", "b", "c"],
+            is_synthesis=True,
+        ),
+        "a": _entry("a"), "b": _entry("b"), "c": _entry("c"),
+    }
+    usage = {"synth": PageUsage(name="synth", read_count=5, turn_appearances=5, total_relevance=5.0)}
+    result = compute_authority(entries, usage, synthesis_boost=10.0)
+    assert result["synth"] <= 1.0
+
+
+def test_synthesis_boost_does_not_affect_non_synthesis():
+    """Non-synthesis pages are unaffected by synthesis_boost."""
+    entries = {"regular": _entry("regular")}
+    baseline = compute_authority(entries, {}, synthesis_boost=1.0)
+    boosted = compute_authority(entries, {}, synthesis_boost=3.0)
+    assert boosted["regular"] == baseline["regular"]

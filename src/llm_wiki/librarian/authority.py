@@ -53,6 +53,8 @@ def freshness_score(
 def compute_authority(
     entries: dict[str, "ManifestEntry"],
     usage: dict[str, PageUsage],
+    *,
+    synthesis_boost: float = 1.0,
 ) -> dict[str, float]:
     """Compute authority scores for every entry.
 
@@ -62,6 +64,7 @@ def compute_authority(
     - usefulness: avg_relevance from usage, capped at 1.0
     - freshness: per freshness_score()
     - outlink_quality: fraction of links_to that resolve to known pages
+    - synthesis_boost: multiplier applied to synthesis pages (capped at 1.0)
     """
     if not entries:
         return {}
@@ -91,6 +94,10 @@ def compute_authority(
             + _W_FRESHNESS * fresh
             + _W_OUTLINK * outlink
         )
+
+        if getattr(entry, "is_synthesis", False) and synthesis_boost != 1.0:
+            score = min(1.0, score * synthesis_boost)
+
         result[name] = score
 
     return result
