@@ -126,6 +126,10 @@ class AdversaryAgent:
         if not entries:
             return result
 
+        if self._vault_unchanged_since_last_run():
+            logger.info("Adversary: vault unchanged since last run, skipping")
+            return result
+
         raw_prefix = self._config.vault.raw_dir.rstrip("/")
 
         # 1. Extract claims from every non-synthesis page
@@ -139,6 +143,7 @@ class AdversaryAgent:
             all_claims.extend(extract_claims(page, raw_dir=raw_prefix))
 
         if not all_claims:
+            self._record_last_run_ts()
             return result
 
         # 2. Sample
@@ -170,6 +175,7 @@ class AdversaryAgent:
         for claim in sampled:
             await self._process_claim(claim, result, now)
 
+        self._record_last_run_ts()
         return result
 
     async def _process_claim(

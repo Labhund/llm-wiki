@@ -388,3 +388,123 @@ def test_load_last_run_ts_corrupt_file(tmp_path: Path):
     agent._state_dir.mkdir(parents=True, exist_ok=True)
     (agent._state_dir / "adversary_last_run.txt").write_text("not-a-float\n")
     assert agent._load_last_run_ts() is None
+
+
+@pytest.mark.asyncio
+async def test_idle_guard_skips_llm_on_stable_vault(tmp_path: Path, _clean_state):
+    """Second run on an unchanged vault makes zero LLM calls."""
+    vault_root, _ = _build_vault_with_one_claim(tmp_path)
+    _clean_state.append(_state_dir_for(vault_root))
+    config = WikiConfig(maintenance=MaintenanceConfig(adversary_claims_per_run=5))
+    stub = _StubLLM(
+        '{"verdict": "validated", "confidence": 0.9, "explanation": "Matches."}'
+    )
+    vault = Vault.scan(vault_root)
+    queue = IssueQueue(vault_root / "wiki")
+    agent = AdversaryAgent(vault, vault_root, stub, queue, config)
+
+    # First run: vault is fresh, guard has no timestamp → runs normally
+    result1 = await agent.run()
+    assert result1.claims_checked == 1
+    calls_after_first = len(stub.calls)
+    assert calls_after_first == 1
+
+    # Second run: vault unchanged → guard fires → zero new LLM calls
+    result2 = await agent.run()
+    assert result2.claims_checked == 0
+    assert len(stub.calls) == calls_after_first  # no new calls
+
+
+@pytest.mark.asyncio
+async def test_idle_guard_runs_after_wiki_change(tmp_path: Path, _clean_state):
+    """Guard does not fire after a wiki file is touched."""
+    vault_root, page_path = _build_vault_with_one_claim(tmp_path)
+    _clean_state.append(_state_dir_for(vault_root))
+    config = WikiConfig(maintenance=MaintenanceConfig(adversary_claims_per_run=5))
+    stub = _StubLLM(
+        '{"verdict": "validated", "confidence": 0.9, "explanation": "Matches."}'
+    )
+    vault = Vault.scan(vault_root)
+    queue = IssueQueue(vault_root / "wiki")
+    agent = AdversaryAgent(vault, vault_root, stub, queue, config)
+
+    # First run
+    await agent.run()
+    calls_after_first = len(stub.calls)
+
+    # Simulate wiki change: touch the page so its mtime is after the stored ts
+    time.sleep(0.05)
+    page_path.touch()
+
+    # Second run: wiki file changed → guard does not fire → LLM called again
+    result2 = await agent.run()
+    assert result2.claims_checked == 1
+    assert len(stub.calls) == calls_after_first + 1
+
+
+@pytest.mark.asyncio
+async def test_idle_guard_force_recheck_bypasses_stable_vault(tmp_path: Path, _clean_state):
+    """Guard is bypassed when force_recheck_days have elapsed, even with no file changes."""
+    vault_root, _ = _build_vault_with_one_claim(tmp_path)
+    _clean_state.append(_state_dir_for(vault_root))
+    # force_recheck_days=1; timestamp is 2 days old → guard bypassed → LLM called
+    config = WikiConfig(maintenance=MaintenanceConfig(
+        adversary_claims_per_run=5,
+        adversary_force_recheck_days=1,
+    ))
+    stub = _StubLLM(
+        '{"verdict": "validated", "confidence": 0.9, "explanation": "Matches."}'
+    )
+    vault = Vault.scan(vault_root)
+    queue = IssueQueue(vault_root / "wiki")
+    agent = AdversaryAgent(vault, vault_root, stub, queue, config)
+
+    # Manually write an old timestamp (2 days ago) so force-recheck fires
+    state_dir = _state_dir_for(vault_root)
+    state_dir.mkdir(parents=True, exist_ok=True)
+    (state_dir / "adversary_last_run.txt").write_text(str(time.time() - 2 * 86400))
+
+    result = await agent.run()
+    assert result.claims_checked == 1
+    assert len(stub.calls) == 1
+
+
+@pytest.mark.asyncio
+async def test_idle_guard_empty_vault_does_not_record_timestamp(tmp_path: Path, _clean_state):
+    """Running on an empty vault (no entries) does not write the timestamp file."""
+    _clean_state.append(_state_dir_for(tmp_path))
+    (tmp_path / "wiki").mkdir()
+    vault = Vault.scan(tmp_path)
+    config = WikiConfig()
+    stub = _StubLLM('{"verdict": "validated", "confidence": 0.9, "explanation": "x"}')
+    agent = AdversaryAgent(vault, tmp_path, stub, IssueQueue(tmp_path / "wiki"), config)
+
+    await agent.run()
+
+    ts_file = _state_dir_for(tmp_path) / "adversary_last_run.txt"
+    assert not ts_file.exists(), "timestamp must not be written when vault is empty"
+
+
+@pytest.mark.asyncio
+async def test_idle_guard_no_claims_records_timestamp(tmp_path: Path, _clean_state):
+    """Running on a vault with pages but no raw citations writes the timestamp
+    so the guard fires on subsequent runs (preventing repeated scans)."""
+    wiki_dir = tmp_path / "wiki"
+    wiki_dir.mkdir()
+    (wiki_dir / "page.md").write_text(
+        "---\ntitle: Page\n---\n\n%% section: overview %%\n## Overview\n\n"
+        "No citations here, just prose.\n"
+    )
+    _clean_state.append(_state_dir_for(tmp_path))
+    config = WikiConfig(maintenance=MaintenanceConfig(adversary_claims_per_run=5))
+    stub = _StubLLM('{"verdict": "validated", "confidence": 0.9, "explanation": "x"}')
+    vault = Vault.scan(tmp_path)
+    agent = AdversaryAgent(vault, tmp_path, stub, IssueQueue(wiki_dir), config)
+
+    result = await agent.run()
+    assert result.claims_checked == 0
+    assert stub.calls == []  # no LLM calls (no claims)
+
+    ts_file = _state_dir_for(tmp_path) / "adversary_last_run.txt"
+    assert ts_file.exists(), "timestamp must be written even when no claims found"
+    assert agent._load_last_run_ts() is not None
