@@ -32,3 +32,4 @@ pythonpath = ["src", "tests"]
 
 [tool.hatch.build.targets.wheel]
 packages = ["src/llm_wiki"]
+artifacts = ["src/llm_wiki/skills/**/*.md"]

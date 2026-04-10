@@ -8,6 +8,31 @@ from typing import Any
 import yaml
 
 
+def _skills_source() -> Path:
+    """Locate the bundled skills/llm-wiki/ directory.
+
+    Works for both editable (pip install -e .) and non-editable installs.
+    Raises RuntimeError with a clear message if the package is broken.
+    """
+    # Editable install: src/llm_wiki/cli/configure.py → ../../skills/llm-wiki
+    candidate = Path(__file__).parent.parent / "skills" / "llm-wiki"
+    if candidate.is_dir():
+        return candidate
+    # Non-editable install: use importlib.resources
+    try:
+        import importlib.resources
+        ref = importlib.resources.files("llm_wiki") / "skills" / "llm-wiki"
+        with importlib.resources.as_file(ref) as p:
+            if Path(p).is_dir():
+                return Path(p)
+    except Exception:
+        pass
+    raise RuntimeError(
+        "Could not locate bundled skills directory.\n"
+        "Run: pip install -e . to ensure the package is properly installed."
+    )
+
+
 # ── ANSI colors ───────────────────────────────────────────────────────────────
 
 class _C:
