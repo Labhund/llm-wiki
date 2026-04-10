@@ -936,7 +936,7 @@ def find_index_out_of_sync(vault: Vault) -> CheckResult:
     Pure Python — no LLM.
     Gracefully skips if wiki/index.md does not yet exist.
     """
-    index_path = vault._root / "wiki" / "index.md"
+    index_path = vault.wiki_dir / "index.md"
     if not index_path.exists():
         return CheckResult(check="index-out-of-sync", issues=[])
 

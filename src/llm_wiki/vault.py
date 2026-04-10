@@ -211,6 +211,11 @@ class Vault:
         }
 
     @property
+    def wiki_dir(self) -> Path:
+        """Absolute path to the wiki/ directory containing page files."""
+        return self._root / "wiki"
+
+    @property
     def page_count(self) -> int:
         return len(self._pages)
 
