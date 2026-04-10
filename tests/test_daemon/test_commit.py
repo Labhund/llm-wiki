@@ -84,14 +84,15 @@ async def test_commit_service_settle_with_llm_uses_summary(tmp_path):
     page.write_text("body.\n")
 
     class MockLLM:
-        async def complete(self, messages, temperature=0.0, priority="maintenance"):
+        async def complete(self, messages, temperature=0.0, priority="maintenance", **kwargs):
             return LLMResponse(
                 content=(
                     "fix learning rate per source table 3\n\n"
                     "- updated Methods section\n"
                     "- corrected the cited number"
                 ),
-                tokens_used=20,
+                input_tokens=20,
+                output_tokens=0,
             )
 
     service = CommitService(vault_root=tmp_path, llm=MockLLM(), lock=asyncio.Lock())

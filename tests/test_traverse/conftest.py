@@ -16,14 +16,14 @@ class MockLLMClient:
         self.calls: list[list[dict]] = []
 
     async def complete(
-        self, messages: list[dict], temperature: float = 0.7
+        self, messages: list[dict], temperature: float = 0.7, **kwargs
     ) -> LLMResponse:
         self.calls.append(messages)
         if self._call_index >= len(self._responses):
             raise RuntimeError("MockLLMClient: no more scripted responses")
         content = self._responses[self._call_index]
         self._call_index += 1
-        return LLMResponse(content=content, tokens_used=100)
+        return LLMResponse(content=content, input_tokens=100, output_tokens=0)
 
 
 @pytest.fixture

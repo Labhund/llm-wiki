@@ -142,7 +142,8 @@ class AdversaryAgent:
         messages = compose_verification_messages(claim, raw_text=extraction.content)
         try:
             response = await self._llm.complete(
-                messages, temperature=0.2, priority="maintenance"
+                messages, temperature=0.2, priority="maintenance",
+                label=f"adversary:verify:{claim.page}",
             )
         except Exception:
             logger.exception("Adversary: LLM call failed for claim %s", claim.id)

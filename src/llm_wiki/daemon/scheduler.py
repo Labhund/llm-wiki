@@ -4,6 +4,7 @@ import asyncio
 import datetime
 import logging
 import re
+import time
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Awaitable, Callable
 
@@ -81,6 +82,8 @@ class IntervalScheduler:
         self._escalation_threshold = escalation_threshold
         self._escalation_issue_ids: dict[str, str] = {}  # worker_name -> open issue id
         self._stopping = False
+        self._running: set[str] = set()
+        self._running_since: dict[str, float] = {}
 
     def register(self, worker: ScheduledWorker) -> None:
         if any(w.name == worker.name for w in self._workers):
@@ -126,6 +129,18 @@ class IntervalScheduler:
             }
             for worker in self._workers
         }
+
+    @property
+    def running_workers(self) -> set[str]:
+        """Names of workers currently mid-execution."""
+        return set(self._running)
+
+    def running_elapsed_s(self, name: str) -> float | None:
+        """Seconds since this worker entered its current run, or None if idle."""
+        since = self._running_since.get(name)
+        if since is None:
+            return None
+        return time.monotonic() - since
 
     async def start(self) -> None:
         self._stopping = False
@@ -211,6 +226,8 @@ class IntervalScheduler:
 
         now = datetime.datetime.now(datetime.timezone.utc).isoformat()
         self._last_attempt[worker.name] = now
+        self._running.add(worker.name)
+        self._running_since[worker.name] = time.monotonic()
         try:
             await worker.coro_factory()
             self._last_run[worker.name] = now
@@ -237,3 +254,6 @@ class IntervalScheduler:
                 self._maybe_escalate(worker, failures, exc)
             except Exception:
                 logger.exception("Worker %r: escalation filing failed", worker.name)
+        finally:
+            self._running.discard(worker.name)
+            self._running_since.pop(worker.name, None)

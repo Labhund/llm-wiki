@@ -20,14 +20,14 @@ class _StubLLM:
         # Each entry is {"messages": [...], "priority": str | None, "temperature": float}
         self.calls: list[dict] = []
 
-    async def complete(self, messages, temperature: float = 0.7, priority: str = "query"):
+    async def complete(self, messages, temperature: float = 0.7, priority: str = "query", **kwargs):
         from llm_wiki.traverse.llm_client import LLMResponse
         self.calls.append({
             "messages": messages,
             "priority": priority,
             "temperature": temperature,
         })
-        return LLMResponse(content=self.response, tokens_used=100)
+        return LLMResponse(content=self.response, input_tokens=100, output_tokens=0)
 
 
 def _seed_log(state_dir: Path, entries: list[dict]) -> None:
@@ -397,8 +397,8 @@ async def test_refresh_talk_summaries_above_threshold_summarizes(tmp_path):
     cfg = WikiConfig()  # threshold default = 5
 
     class MockLLM:
-        async def complete(self, messages, temperature=0.0, priority="maintenance"):
-            return LLMResponse(content="Five open entries about validation.", tokens_used=10)
+        async def complete(self, messages, temperature=0.0, priority="maintenance", **kwargs):
+            return LLMResponse(content="Five open entries about validation.", input_tokens=10, output_tokens=0)
 
     vault = Vault.scan(tmp_path)
     queue = IssueQueue(tmp_path)
@@ -441,9 +441,9 @@ async def test_refresh_talk_summaries_robust_to_intervening_closures(tmp_path):
     call_count = {"n": 0}
 
     class CountingLLM:
-        async def complete(self, messages, temperature=0.0, priority="maintenance"):
+        async def complete(self, messages, temperature=0.0, priority="maintenance", **kwargs):
             call_count["n"] += 1
-            return LLMResponse(content="Summary text.", tokens_used=10)
+            return LLMResponse(content="Summary text.", input_tokens=10, output_tokens=0)
 
     vault = Vault.scan(tmp_path)
     queue = IssueQueue(tmp_path)
@@ -581,8 +581,8 @@ async def test_refresh_talk_summaries_prunes_deleted_pages(tmp_path):
     cfg = WikiConfig()
 
     class StubLLM:
-        async def complete(self, messages, temperature=0.0, priority="maintenance"):
-            return LLMResponse(content="Stub summary.", tokens_used=10)
+        async def complete(self, messages, temperature=0.0, priority="maintenance", **kwargs):
+            return LLMResponse(content="Stub summary.", input_tokens=10, output_tokens=0)
 
     vault = Vault.scan(tmp_path)
     queue = IssueQueue(tmp_path)

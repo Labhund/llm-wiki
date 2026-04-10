@@ -38,7 +38,13 @@ def _should_retry(exc: Exception) -> bool:
 @dataclass
 class LLMResponse:
     content: str
-    tokens_used: int
+    input_tokens: int
+    output_tokens: int
+
+    @property
+    def tokens_used(self) -> int:
+        """Total tokens (input + output, unweighted). Used for context budget tracking."""
+        return self.input_tokens + self.output_tokens
 
 
 class LLMClient:
@@ -55,17 +61,20 @@ class LLMClient:
         model: str,
         api_base: str | None = None,
         api_key: str | None = None,
+        timeout: float | None = None,
     ) -> None:
         self._queue = queue
         self._model = model
         self._api_base = api_base
         self._api_key = api_key
+        self._timeout = timeout
 
     async def complete(
         self,
         messages: list[dict[str, str]],
         temperature: float = 0.7,
         priority: str = "query",
+        label: str = "unknown",
     ) -> LLMResponse:
         """Send a completion request through the concurrency-limited queue."""
 
@@ -82,12 +91,20 @@ class LLMClient:
                         kwargs["api_base"] = self._api_base
                     if self._api_key is not None:
                         kwargs["api_key"] = self._api_key
+                    if self._timeout is not None:
+                        kwargs["timeout"] = self._timeout
 
                     response = await litellm.acompletion(**kwargs)
                     content = response.choices[0].message.content
-                    tokens = response.usage.total_tokens if response.usage else 0
-                    self._queue.record_tokens(tokens)
-                    return LLMResponse(content=content, tokens_used=tokens)
+                    usage = response.usage
+                    input_tokens = usage.prompt_tokens if usage else 0
+                    output_tokens = usage.completion_tokens if usage else 0
+                    self._queue.record_tokens(input_tokens, output_tokens)
+                    return LLMResponse(
+                        content=content,
+                        input_tokens=input_tokens,
+                        output_tokens=output_tokens,
+                    )
                 except asyncio.CancelledError:
                     raise
                 except Exception as exc:
@@ -101,4 +118,4 @@ class LLMClient:
                     await asyncio.sleep(delay)
             raise last_exc  # type: ignore[misc]  # unreachable
 
-        return await self._queue.submit(_call, priority=priority)
+        return await self._queue.submit(_call, priority=priority, label=label)

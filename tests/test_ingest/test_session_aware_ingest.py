@@ -61,8 +61,8 @@ async def test_ingest_creates_pages_via_write_service(tmp_path):
     ])
 
     class MockLLM:
-        async def complete(self, messages, temperature=0.0, priority="ingest"):
-            return LLMResponse(content=next(responses), tokens_used=10)
+        async def complete(self, messages, temperature=0.0, priority="ingest", **kwargs):
+            return LLMResponse(content=next(responses), input_tokens=10, output_tokens=0)
 
     # Create the source file
     raw_dir = tmp_path / "raw"
@@ -105,8 +105,8 @@ async def test_ingest_route_requires_author_or_defaults_to_cli(tmp_path):
     ])
 
     class MockLLM:
-        async def complete(self, messages, temperature=0.0, priority="ingest"):
-            return LLMResponse(content=next(responses), tokens_used=10)
+        async def complete(self, messages, temperature=0.0, priority="ingest", **kwargs):
+            return LLMResponse(content=next(responses), input_tokens=10, output_tokens=0)
 
     raw_dir = tmp_path / "raw"
     raw_dir.mkdir()

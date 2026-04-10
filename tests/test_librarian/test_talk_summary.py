@@ -59,13 +59,14 @@ async def test_summarize_open_entries_calls_llm(tmp_path):
     captured: dict = {}
 
     class MockLLM:
-        async def complete(self, messages, temperature=0.0, priority="maintenance"):
+        async def complete(self, messages, temperature=0.0, priority="maintenance", **kwargs):
             from llm_wiki.traverse.llm_client import LLMResponse
             captured["messages"] = messages
             captured["priority"] = priority
             return LLMResponse(
                 content="Two unresolved entries: an adversary contradiction and a compliance flag.",
-                tokens_used=20,
+                input_tokens=20,
+                output_tokens=0,
             )
 
     summary = await summarize_open_entries(entries, MockLLM())
@@ -86,7 +87,7 @@ async def test_summarize_open_entries_falls_back_on_llm_error():
     ]
 
     class FailingLLM:
-        async def complete(self, messages, temperature=0.0, priority="maintenance"):
+        async def complete(self, messages, temperature=0.0, priority="maintenance", **kwargs):
             raise RuntimeError("model unreachable")
 
     summary = await summarize_open_entries(entries, FailingLLM())

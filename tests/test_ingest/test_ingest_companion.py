@@ -15,10 +15,10 @@ class MockLLMClient:
         self._responses = list(responses)
         self._idx = 0
 
-    async def complete(self, messages, temperature=0.7, priority="query") -> LLMResponse:
+    async def complete(self, messages, temperature=0.7, priority="query", **kwargs) -> LLMResponse:
         content = self._responses[self._idx]
         self._idx += 1
-        return LLMResponse(content=content, tokens_used=10)
+        return LLMResponse(content=content, input_tokens=10, output_tokens=0)
 
 
 def _concept_json(concepts):

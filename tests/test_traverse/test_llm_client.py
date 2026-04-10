@@ -12,8 +12,8 @@ from llm_wiki.traverse.llm_client import LLMClient, LLMResponse, _should_retry
 def _make_client():
     """Create an LLMClient with a simple pass-through mock queue."""
     queue = MagicMock()
-    # queue.submit(fn, priority=...) should call fn() directly
-    async def submit(fn, priority="query"):
+    # queue.submit(fn, priority=..., label=...) should call fn() directly
+    async def submit(fn, priority="query", label="unknown", **kwargs):
         return await fn()
     queue.submit = submit
     queue.record_tokens = MagicMock()
@@ -61,7 +61,8 @@ async def test_complete_retries_on_transient_error():
             raise ConnectionError("connection refused")
         resp = MagicMock()
         resp.choices[0].message.content = "answer"
-        resp.usage.total_tokens = 10
+        resp.usage.prompt_tokens = 8
+        resp.usage.completion_tokens = 2
         return resp
 
     client = _make_client()
@@ -110,11 +111,12 @@ async def test_complete_raises_after_max_retries():
     assert call_count["n"] == 4  # 1 initial + 3 retries
 
 
-def _make_mock_response(content: str, total_tokens: int) -> MagicMock:
+def _make_mock_response(content: str, input_tokens: int, output_tokens: int) -> MagicMock:
     resp = MagicMock()
     resp.choices = [MagicMock()]
     resp.choices[0].message.content = content
-    resp.usage.total_tokens = total_tokens
+    resp.usage.prompt_tokens = input_tokens
+    resp.usage.completion_tokens = output_tokens
     return resp
 
 
@@ -122,7 +124,7 @@ def _make_mock_response(content: str, total_tokens: int) -> MagicMock:
 async def test_complete_returns_llm_response():
     queue = LLMQueue(max_concurrent=2)
     client = LLMClient(queue, model="test-model")
-    mock_resp = _make_mock_response("Hello world", 42)
+    mock_resp = _make_mock_response("Hello world", input_tokens=30, output_tokens=12)
 
     with patch("llm_wiki.traverse.llm_client.litellm") as mock_litellm:
         mock_litellm.acompletion = AsyncMock(return_value=mock_resp)
@@ -130,6 +132,8 @@ async def test_complete_returns_llm_response():
 
     assert isinstance(result, LLMResponse)
     assert result.content == "Hello world"
+    assert result.input_tokens == 30
+    assert result.output_tokens == 12
     assert result.tokens_used == 42
 
 
@@ -142,7 +146,7 @@ async def test_complete_passes_model_temperature_and_proxy_args():
         api_base="http://localhost:4000",
         api_key="sk-fake",
     )
-    mock_resp = _make_mock_response("Answer", 50)
+    mock_resp = _make_mock_response("Answer", input_tokens=40, output_tokens=10)
 
     with patch("llm_wiki.traverse.llm_client.litellm") as mock_litellm:
         mock_litellm.acompletion = AsyncMock(return_value=mock_resp)
@@ -163,7 +167,7 @@ async def test_complete_omits_proxy_args_when_none():
     """When api_base/api_key are not configured, they're not passed to litellm."""
     queue = LLMQueue(max_concurrent=2)
     client = LLMClient(queue, model="test-model")  # No api_base/api_key
-    mock_resp = _make_mock_response("ok", 10)
+    mock_resp = _make_mock_response("ok", input_tokens=8, output_tokens=2)
 
     with patch("llm_wiki.traverse.llm_client.litellm") as mock_litellm:
         mock_litellm.acompletion = AsyncMock(return_value=mock_resp)
@@ -178,12 +182,14 @@ async def test_complete_omits_proxy_args_when_none():
 async def test_complete_records_tokens_on_queue():
     queue = LLMQueue(max_concurrent=2)
     client = LLMClient(queue, model="test-model")
-    mock_resp = _make_mock_response("Answer", 150)
+    mock_resp = _make_mock_response("Answer", input_tokens=100, output_tokens=50)
 
     with patch("llm_wiki.traverse.llm_client.litellm") as mock_litellm:
         mock_litellm.acompletion = AsyncMock(return_value=mock_resp)
         await client.complete([{"role": "user", "content": "test"}])
 
+    assert queue.input_tokens_total == 100
+    assert queue.output_tokens_total == 50
     assert queue.tokens_used == 150
 
 
@@ -192,7 +198,7 @@ async def test_complete_routes_through_queue_semaphore():
     """Verify the call holds the semaphore slot while executing."""
     queue = LLMQueue(max_concurrent=1)
     client = LLMClient(queue, model="test-model")
-    mock_resp = _make_mock_response("OK", 10)
+    mock_resp = _make_mock_response("OK", input_tokens=8, output_tokens=2)
     peak_active: list[int] = []
 
     async def slow_acompletion(**kwargs):
@@ -205,3 +211,31 @@ async def test_complete_routes_through_queue_semaphore():
 
     assert result.content == "OK"
     assert peak_active == [1]  # semaphore was held during the call
+
+
+@pytest.mark.asyncio
+async def test_complete_passes_label_to_queue(monkeypatch):
+    """LLMClient.complete() passes the label parameter to queue.submit()."""
+    captured_labels: list[str] = []
+    original_submit = LLMQueue.submit
+
+    async def capturing_submit(self, fn, priority="maintenance", label="unknown", **kwargs):
+        captured_labels.append(label)
+        return await original_submit(self, fn, priority=priority, label=label, **kwargs)
+
+    monkeypatch.setattr(LLMQueue, "submit", capturing_submit)
+
+    queue = LLMQueue(max_concurrent=2)
+    client = LLMClient(queue, model="test-model")
+
+    # Patch litellm to avoid real network call
+    mock_resp = _make_mock_response("response", input_tokens=10, output_tokens=0)
+    with patch("llm_wiki.traverse.llm_client.litellm") as mock_litellm:
+        mock_litellm.acompletion = AsyncMock(return_value=mock_resp)
+
+        await client.complete(
+            [{"role": "user", "content": "hello"}],
+            label="adversary:verify:test-page",
+        )
+
+    assert "adversary:verify:test-page" in captured_labels

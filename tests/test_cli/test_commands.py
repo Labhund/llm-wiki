@@ -152,7 +152,8 @@ def test_query_via_daemon(daemon_for_cli, monkeypatch):
         mock_resp.choices = [MagicMock()]
         mock_resp.choices[0].message.content = content
         mock_resp.usage = MagicMock()
-        mock_resp.usage.total_tokens = 100
+        mock_resp.usage.prompt_tokens = 80
+        mock_resp.usage.completion_tokens = 20
         return mock_resp
 
     monkeypatch.setattr("litellm.acompletion", mock_acompletion)
@@ -424,3 +425,14 @@ def test_proposals_list_shows_pending(daemon_for_cli, monkeypatch):
     result = runner.invoke(cli, ["proposals", "list", "--vault", str(vault_path)])
     assert result.exit_code == 0, result.output
     assert "boltz-2" in result.output
+
+
+def test_init_bootstraps_fresh_directory(tmp_path):
+    """init on an empty directory creates skeleton dirs and reports success."""
+    runner = CliRunner()
+    result = runner.invoke(cli, ["init", str(tmp_path)])
+    assert result.exit_code == 0, f"output={result.output!r} exception={result.exception!r}"
+    assert (tmp_path / "wiki").is_dir()
+    assert (tmp_path / "raw").is_dir()
+    assert (tmp_path / "inbox").is_dir()
+    assert "Initialised new vault" in result.output

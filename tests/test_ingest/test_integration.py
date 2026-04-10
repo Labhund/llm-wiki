@@ -21,12 +21,12 @@ class MockLLMClient:
         self._responses = list(responses)
         self._idx = 0
 
-    async def complete(self, messages, temperature=0.7, priority="query") -> LLMResponse:
+    async def complete(self, messages, temperature=0.7, priority="query", **kwargs) -> LLMResponse:
         if self._idx >= len(self._responses):
             raise RuntimeError("no more responses")
         content = self._responses[self._idx]
         self._idx += 1
-        return LLMResponse(content=content, tokens_used=80)
+        return LLMResponse(content=content, input_tokens=80, output_tokens=0)
 
 
 @pytest.fixture

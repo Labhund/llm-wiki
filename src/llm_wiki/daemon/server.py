@@ -36,7 +36,11 @@ class DaemonServer:
         self._enabled_workers = enabled_workers
         self._vault: Vault | None = None
         self._server: asyncio.Server | None = None
-        self._llm_queue = LLMQueue(self._config.llm_queue.max_concurrent)
+        self._llm_queue = LLMQueue(
+            max_concurrent=self._config.llm_queue.max_concurrent,
+            hourly_limit=self._config.llm_queue.cloud_hourly_limit,
+            daily_limit=self._config.llm_queue.cloud_daily_limit,
+        )
         self._scheduler: IntervalScheduler | None = None
         self._snapshot_store: PageSnapshotStore | None = None
         self._compliance_reviewer = None  # type: ignore[assignment]  # set in start()
@@ -272,6 +276,8 @@ class DaemonServer:
             except Exception:
                 logger.exception("execute_proposal_merges failed — audit result unaffected")
 
+        _maint_timeout = float(self._config.maintenance.maintenance_llm_timeout)
+
         async def run_librarian() -> None:
             from llm_wiki.issues.queue import IssueQueue
             from llm_wiki.librarian.agent import LibrarianAgent
@@ -284,6 +290,7 @@ class DaemonServer:
                 model=backend.model,
                 api_base=backend.api_base,
                 api_key=backend.api_key,
+                timeout=_maint_timeout,
             )
             agent = LibrarianAgent(self._vault, self._vault_root, llm, queue, self._config)
             result = await agent.run()
@@ -304,6 +311,7 @@ class DaemonServer:
                 model=backend.model,
                 api_base=backend.api_base,
                 api_key=backend.api_key,
+                timeout=_maint_timeout,
             )
             agent = LibrarianAgent(self._vault, self._vault_root, llm, queue, self._config)
             count = await agent.recalc_authority()
@@ -321,6 +329,7 @@ class DaemonServer:
                 model=backend.model,
                 api_base=backend.api_base,
                 api_key=backend.api_key,
+                timeout=_maint_timeout,
             )
             agent = AdversaryAgent(self._vault, self._vault_root, llm, queue, self._config)
             result = await agent.run()
@@ -342,6 +351,7 @@ class DaemonServer:
                 model=backend.model,
                 api_base=backend.api_base,
                 api_key=backend.api_key,
+                timeout=_maint_timeout,
             )
             agent = LibrarianAgent(self._vault, self._vault_root, llm, queue, self._config)
             count = await agent.refresh_talk_summaries()
@@ -580,6 +590,8 @@ class DaemonServer:
                 return self._handle_issues_update(request)
             case "scheduler-status":
                 return self._handle_scheduler_status()
+            case "process-list":
+                return self._handle_process_list()
             case "talk-read":
                 return self._handle_talk_read(request)
             case "talk-append":
@@ -1144,6 +1156,48 @@ class DaemonServer:
             for name, interval_seconds, last_run in self._scheduler.workers_info()
         ]
         return {"status": "ok", "workers": workers}
+
+    def _handle_process_list(self) -> dict:
+        jobs = []
+        pending = 0
+        slots_total = 0
+        tokens_used = 0
+
+        if self._llm_queue is not None:
+            for job in self._llm_queue.active_jobs:
+                jobs.append({
+                    "id": job.id,
+                    "label": job.label,
+                    "priority": job.priority,
+                    "elapsed_s": round(job.elapsed_s, 1),
+                })
+            pending = self._llm_queue.pending_count
+            slots_total = self._llm_queue.slots_total
+            tokens_used = self._llm_queue.tokens_used
+
+        workers = []
+        if self._scheduler is not None:
+            running = self._scheduler.running_workers
+            health = self._scheduler.health_info()
+            for name, _interval_s, last_run in self._scheduler.workers_info():
+                workers.append({
+                    "name": name,
+                    "state": "running" if name in running else "idle",
+                    "last_run": last_run,
+                    "consecutive_failures": health.get(name, {}).get(
+                        "consecutive_failures", 0
+                    ),
+                    "running_elapsed_s": self._scheduler.running_elapsed_s(name),
+                })
+
+        return {
+            "status": "ok",
+            "jobs": jobs,
+            "pending": pending,
+            "slots_total": slots_total,
+            "tokens_used": tokens_used,
+            "workers": workers,
+        }
 
     def _handle_lint(self) -> dict:
         from llm_wiki.audit.auditor import Auditor
