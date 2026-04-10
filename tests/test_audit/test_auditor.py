@@ -22,7 +22,7 @@ def test_audit_runs_all_checks_on_sample_vault(sample_vault: Path):
     assert report.by_check["broken-wikilinks"] >= 1
     assert report.by_check["missing-markers"] >= 1
     assert report.by_check["broken-citations"] >= 1
-    assert report.total_checks_run == 10
+    assert report.total_checks_run == 11
     assert len(report.new_issue_ids) == report.total_issues
     assert report.existing_issue_ids == []
 
@@ -56,7 +56,7 @@ def test_audit_empty_vault(tmp_path: Path):
     auditor = Auditor(Vault.scan(tmp_path), queue, tmp_path)
     report = auditor.audit()
     assert report.total_issues == 0
-    assert report.total_checks_run == 10
+    assert report.total_checks_run == 11
 
 
 def test_audit_preserves_wontfix_status(sample_vault: Path):

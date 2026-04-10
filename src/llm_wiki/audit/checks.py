@@ -508,6 +508,90 @@ def find_missing_frontmatter(vault: Vault) -> CheckResult:
     return CheckResult(check="missing-frontmatter", issues=issues)
 
 
+# Matches [[raw/<path>]] anywhere in a page body, allowing optional | alias.
+# Must start with "raw/" to distinguish from plain wikilinks like [[boltz2.pdf]].
+_INLINE_RAW_CITATION_RE = re.compile(r"\[\[raw/[^\]|]+(?:\|[^\]]+)?\]\]")
+
+# created_by values that indicate machine-generated pages requiring inline citations.
+_NEEDS_CITATION = {"ingest", "proposal"}
+
+# Frontmatter end delimiter: a line that is exactly "---" (after the opening "---").
+_FM_END_RE = re.compile(r"^---\s*$", re.MULTILINE)
+
+
+def _body_only(raw_content: str) -> str:
+    """Return just the body of raw_content, stripping the YAML frontmatter block.
+
+    If the file starts with '---' (the YAML front-matter delimiter), skip
+    everything up to and including the closing '---' line and return the rest.
+    Otherwise return the full content unchanged.
+    """
+    if not raw_content.startswith("---"):
+        return raw_content
+    # Find the closing delimiter — the second occurrence of "---" at line start.
+    # The first is at position 0, so we search from position 3.
+    end = raw_content.find("\n---", 3)
+    if end == -1:
+        return raw_content
+    return raw_content[end + 4:]
+
+
+def find_uncited_sourced_pages(vault: Vault) -> CheckResult:
+    """Pages with a source/created_by field but no inline [[raw/...]] body citations.
+
+    A page is flagged when ALL of the following are true:
+      - It has a `source:` frontmatter field, OR `created_by` is 'ingest'/'proposal'
+      - Its body (content after frontmatter) contains ZERO occurrences of [[raw/...]]
+
+    The check strips YAML frontmatter before scanning so that a `source: [[raw/...]]`
+    frontmatter line does not count as an inline body citation.
+
+    Severity: moderate (the adversary cannot verify any claims on the page).
+    Pure Python — no LLM. Implements PHILOSOPHY Principle 13.
+    """
+    issues: list[Issue] = []
+
+    for name, _entry in vault.manifest_entries().items():
+        page = vault.read_page(name)
+        if page is None:
+            continue
+        fm = page.frontmatter
+
+        has_source_field = "source" in fm
+        created_by = fm.get("created_by")
+        is_machine_generated = created_by in _NEEDS_CITATION
+
+        if not has_source_field and not is_machine_generated:
+            continue  # hand-written page — exempt
+
+        body = _body_only(page.raw_content)
+        if _INLINE_RAW_CITATION_RE.search(body):
+            continue  # at least one [[raw/...]] citation present in body
+
+        issues.append(
+            Issue(
+                id=Issue.make_id("uncited-source", name, ""),
+                type="uncited-source",
+                status="open",
+                severity="moderate",
+                title=f"[{name}] has source but no inline [[raw/...]] citations",
+                page=name,
+                body=(
+                    f"The page [[{name}]] has a source or was created by the ingest "
+                    f"pipeline, but its body contains no inline `[[raw/...]]` citations. "
+                    f"The adversary agent cannot verify any claims on this page because "
+                    f"it finds no citation-backed sentences to check. Add inline "
+                    f"`[[raw/<filename>]]` citations to the sentences you want verified."
+                ),
+                created=Issue.now_iso(),
+                detected_by="auditor",
+                metadata={},
+            )
+        )
+
+    return CheckResult(check="uncited-source", issues=issues)
+
+
 def find_synthesis_without_resonance(vault_root: Path, config: WikiConfig) -> CheckResult:
     """Synthesis pages older than synthesis_lint_months with no resonance talk entries.
 
