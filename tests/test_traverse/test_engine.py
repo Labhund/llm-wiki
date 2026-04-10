@@ -401,3 +401,53 @@ def test_traversal_result_synthesis_action_defaults_none():
         log=log,
     )
     assert result.synthesis_action is None
+
+
+@pytest.mark.asyncio
+async def test_engine_sets_synthesis_action_on_result(tmp_path):
+    """TraversalEngine._finish sets synthesis_action from LLM JSON action envelope."""
+    # Minimal vault with one page
+    wiki_dir = tmp_path / "wiki"
+    wiki_dir.mkdir()
+    (tmp_path / "raw").mkdir()
+    (wiki_dir / "foo.md").write_text(
+        "---\ntitle: Foo\ncreated_by: ingest\n---\n\n%% section: overview %%\n\nFoo is about bar.\n",
+        encoding="utf-8",
+    )
+    vault = Vault.scan(tmp_path)
+    config = WikiConfig()
+
+    call_count = 0
+
+    async def mock_complete(messages, temperature=0.7, priority="query", label="unknown", **kw):
+        nonlocal call_count
+        call_count += 1
+        if call_count == 1:
+            # Turn 0 traverse: declare done immediately
+            from llm_wiki.traverse.llm_client import LLMResponse
+            return LLMResponse(
+                content='{"salient_points": "Foo [[foo]].", "remaining_questions": [], '
+                        '"next_candidates": [], "hypothesis": "foo is bar", "answer_complete": true}',
+                input_tokens=50, output_tokens=30,
+            )
+        else:
+            # Synthesize: create action + prose
+            from llm_wiki.traverse.llm_client import LLMResponse
+            return LLMResponse(
+                content='{"action": "create", "title": "Foo", "sources": ["wiki/foo.md"]}\n\n'
+                        'Foo is about bar [[foo]].',
+                input_tokens=80, output_tokens=40,
+            )
+
+    llm = object.__new__(MockLLMClient)
+    llm.complete = mock_complete
+    llm.model = "mock/test"
+
+    engine = TraversalEngine(vault, llm, config, vault_root=tmp_path)
+    result = await engine.query("What is foo?")
+
+    assert result.synthesis_action is not None
+    assert result.synthesis_action["action"] == "create"
+    assert result.synthesis_action["title"] == "Foo"
+    assert "Foo is about bar" in result.answer
+    assert "foo" in result.citations

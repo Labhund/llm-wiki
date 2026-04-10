@@ -6,6 +6,7 @@ from dataclasses import dataclass
 from pathlib import Path
 
 from llm_wiki.config import WikiConfig
+from llm_wiki.search.backend import SearchResult
 from llm_wiki.traverse.llm_client import LLMClient
 from llm_wiki.traverse.log import TraversalLog, TurnLog
 from llm_wiki.traverse.parsing import parse_traverse_response, validate_traverse_response
@@ -14,6 +15,7 @@ from llm_wiki.traverse.prompts import (
     compose_traverse_messages,
     load_prompt,
 )
+from llm_wiki.traverse.synthesis import extract_prose_after_action, parse_synthesis_action
 from llm_wiki.traverse.working_memory import NextCandidate, PageRead, WorkingMemory
 from llm_wiki.vault import Vault
 
@@ -53,7 +55,7 @@ class TraversalEngine:
         self._log_dir = log_dir
 
     def _collect_synthesis_candidates(
-        self, search_results: list
+        self, search_results: list[SearchResult]
     ) -> list[tuple[str, str, str]]:
         """Extract synthesis pages from BM25 search results for the synthesize prompt.
 
@@ -282,8 +284,6 @@ class TraversalEngine:
         synthesis_candidates: list[tuple[str, str, str]] | None = None,
     ) -> TraversalResult:
         """Synthesize final answer, persist log, build result."""
-        from llm_wiki.traverse.synthesis import extract_prose_after_action, parse_synthesis_action
-
         messages = compose_synthesize_messages(
             question, memory, synthesize_prompt,
             synthesis_candidates=synthesis_candidates or [],
