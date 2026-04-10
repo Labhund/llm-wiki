@@ -18,7 +18,7 @@
 | `src/llm_wiki/ingest/chunker.py` | **New** — `chunk_text()` |
 | `src/llm_wiki/ingest/grounding.py` | **New** — `GroundingResult`, `ground_passage()`, `_bigram_f1()` |
 | `src/llm_wiki/ingest/proposals.py` | **New** — `Proposal`, `ProposalPassage`, `write_proposal()`, `read_proposal_meta()`, `read_proposal_body()`, `update_proposal_status()`, `list_pending_proposals()` |
-| `src/llm_wiki/ingest/prompts.py` | Add `compose_overview_messages`, `compose_passage_collection_messages`, `compose_content_synthesis_messages`, `parse_overview_extraction`, `parse_passage_collection` |
+| `src/llm_wiki/ingest/prompts.py` | Add `compose_overview_messages`, `compose_passage_collection_messages`, `compose_content_synthesis_messages`, `parse_overview_extraction`, `parse_passage_collection`, `parse_content_synthesis` |
 | `src/llm_wiki/ingest/agent.py` | Add `action`/`section_names` to `ConceptPlan`; fix `_sections_to_body`; add `ingest_as_proposals()` |
 | `src/llm_wiki/ingest/page_writer.py` | Add `patch_token_estimates()`, call in `_create_page` and `_append_source` |
 | `src/llm_wiki/audit/checks.py` | Fix `find_broken_citations`; add `find_pending_proposals()` |
@@ -270,11 +270,9 @@ Replace the existing `_sections_to_body` static method:
 ```python
 @staticmethod
 def _sections_to_body(sections: list) -> str:
-    import re as _re
     parts = []
     for s in sections:
-        slug = _re.sub(r"[^a-z0-9]+", "-", s.heading.lower()).strip("-")
-        parts.append(f"%% section: {slug} %%")
+        parts.append(f"%% section: {s.name} %%")
         parts.append(f"## {s.heading}")
         parts.append("")
         parts.append(s.content)
@@ -1080,11 +1078,13 @@ git commit -m "feat: add proposal data model, writer, and reader"
 
 ```python
 # Add to tests/test_ingest/test_prompts.py
+import json
 from llm_wiki.ingest.prompts import (
     compose_overview_messages,
     compose_passage_collection_messages,
     parse_overview_extraction,
     parse_passage_collection,
+    parse_content_synthesis,
 )
 from llm_wiki.ingest.agent import ConceptPlan
 
@@ -1138,7 +1138,17 @@ def test_parse_passage_collection_ignores_unknown_concepts():
     result = parse_passage_collection(text, concept_names=["boltz-2"])
     assert "unknown" not in result
 
-import json  # ensure json is imported at top of test file
+def test_parse_content_synthesis_valid():
+    text = json.dumps({"sections": [
+        {"name": "overview", "heading": "Overview", "content": "[[boltz-2]] text [[raw/paper.pdf]]."}
+    ]})
+    result = parse_content_synthesis(text)
+    assert len(result) == 1
+    assert result[0].name == "overview"
+    assert "boltz-2" in result[0].content
+
+def test_parse_content_synthesis_invalid_returns_empty():
+    assert parse_content_synthesis("not json") == []
 ```
 
 - [ ] **Step 2: Run tests — expect FAIL**
@@ -1190,22 +1200,22 @@ and use the EXACT existing slug
 
 ## Existing Wiki Pages (check slugs before naming new concepts)
 
-{manifest}
+<<<MANIFEST>>>
 
 ## Structural Contract (Non-Negotiable)
 
 Respond with a SINGLE JSON object:
 
-{{
+{
   "concepts": [
-    {{
+    {
       "name": "exact-slug",
       "title": "Human Readable Title",
       "action": "create",
       "section_names": ["overview", "architecture", "benchmarks"]
-    }}
+    }
   ]
-}}"""
+}"""
 
 
 _PASSAGE_COLLECTION_SYSTEM = """\
@@ -1221,10 +1231,10 @@ If a concept does not appear in this chunk, return an empty list for it.
 
 Respond with a SINGLE JSON object mapping concept slugs to passage lists:
 
-{{
+{
   "concept-slug": ["exact verbatim passage from text", ...],
   "other-concept": []
-}}"""
+}"""
 
 
 _CONTENT_SYNTHESIS_SYSTEM = """\
@@ -1233,18 +1243,18 @@ You are writing wiki content for a specific concept using verbatim source passag
 ## Wikilink Rules (Non-Negotiable)
 
 1. Reference to a concept in the EXISTING WIKI or BATCH lists below → [[slug]] inline
-2. Every factual claim → [[{source_ref}]] at end of sentence, no exceptions
+2. Every factual claim → [[<<<SOURCE_REF>>>]] at end of sentence, no exceptions
 3. General term NOT in either list → plain text, no brackets
 4. NEVER invent slugs. Only use slugs from the two lists below.
 5. [[raw/...]] = factual citation. [[slug]] = conceptual link. Never conflate.
 
 ## Existing wiki pages (use [[slug]] for these)
 
-{manifest}
+<<<MANIFEST>>>
 
 ## Concepts in this ingest batch (also use [[slug]])
 
-{batch_slugs}
+<<<BATCH_SLUGS>>>
 
 ## Content Rules
 
@@ -1257,15 +1267,15 @@ You are writing wiki content for a specific concept using verbatim source passag
 
 Respond with a SINGLE JSON object:
 
-{{
+{
   "sections": [
-    {{
+    {
       "name": "section-slug",
       "heading": "Section Heading",
-      "content": "Markdown with [[wikilinks]] and [[{source_ref}]] citations."
-    }}
+      "content": "Markdown with [[wikilinks]] and [[<<<SOURCE_REF>>>]] citations."
+    }
   ]
-}}"""
+}"""
 
 
 def compose_overview_messages(
@@ -1275,7 +1285,7 @@ def compose_overview_messages(
 ) -> list[dict[str, str]]:
     """Build messages for the overview concept-identification pass."""
     manifest = "\n".join(manifest_lines) if manifest_lines else "(empty wiki)"
-    system = _OVERVIEW_SYSTEM.format(manifest=manifest)
+    system = _OVERVIEW_SYSTEM.replace("<<<MANIFEST>>>", manifest)
     user = f"## Source Reference\n{source_ref}\n\n## Document Opening\n{chunk_text}"
     return [
         {"role": "system", "content": system},
@@ -1308,10 +1318,11 @@ def compose_content_synthesis_messages(
     batch_slugs = "\n".join(
         f"- {c.name}: {c.title}" for c in batch_concepts
     )
-    system = _CONTENT_SYNTHESIS_SYSTEM.format(
-        source_ref=source_ref,
-        manifest=manifest,
-        batch_slugs=batch_slugs or "(none)",
+    system = (
+        _CONTENT_SYNTHESIS_SYSTEM
+        .replace("<<<SOURCE_REF>>>", source_ref)
+        .replace("<<<MANIFEST>>>", manifest)
+        .replace("<<<BATCH_SLUGS>>>", batch_slugs or "(none)")
     )
     passages_text = "\n\n".join(f"- {p}" for p in passages)
     section_hint = (
@@ -1365,6 +1376,25 @@ def parse_passage_collection(text: str, concept_names: list[str]) -> dict[str, l
         return result
     except (ValueError, KeyError, TypeError):
         return {}
+
+
+def parse_content_synthesis(text: str) -> "list[PageSection]":
+    """Parse content synthesis response → list of PageSection objects."""
+    from llm_wiki.ingest.page_writer import PageSection
+    try:
+        data = _parse_json_response(text)
+        sections = data.get("sections") or [] if isinstance(data, dict) else []
+        return [
+            PageSection(
+                name=s["name"],
+                heading=s.get("heading", s["name"].replace("-", " ").title()),
+                content=s.get("content", ""),
+            )
+            for s in sections
+            if isinstance(s, dict) and isinstance(s.get("name"), str) and s["name"]
+        ]
+    except (ValueError, KeyError, TypeError):
+        return []
 ```
 
 - [ ] **Step 5: Run tests — expect PASS**
@@ -1462,6 +1492,8 @@ pytest tests/test_ingest/test_integration.py::test_ingest_as_proposals_creates_p
 Add imports at top of `agent.py`:
 
 ```python
+import re as _re
+import datetime
 from llm_wiki.ingest.chunker import chunk_text
 from llm_wiki.ingest.grounding import ground_passage, GroundingResult
 from llm_wiki.ingest.proposals import (
@@ -1473,7 +1505,7 @@ from llm_wiki.ingest.prompts import (
     compose_content_synthesis_messages,
     parse_overview_extraction,
     parse_passage_collection,
-    parse_page_content,
+    parse_content_synthesis,
 )
 ```
 
@@ -1571,7 +1603,7 @@ async def ingest_as_proposals(
                     existing.append(p)
 
     source_slug = source_path.stem.lower()
-    source_slug = __import__("re").sub(r"[^a-z0-9-]", "-", source_slug).strip("-")
+    source_slug = _re.sub(r"[^a-z0-9-]", "-", source_slug).strip("-")
     ocr_sourced = extraction.extraction_method == "image_ocr"
 
     # Content synthesis + proposal write per concept
@@ -1589,7 +1621,7 @@ async def ingest_as_proposals(
             batch_concepts=concepts,
         )
         synth_resp = await self._llm.complete(synth_msgs, temperature=0.3, priority="ingest")
-        sections = parse_page_content(synth_resp.content)
+        sections = parse_content_synthesis(synth_resp.content)
         if not sections:
             logger.warning("No sections generated for %r — skipping", concept.name)
             continue
@@ -1615,7 +1647,7 @@ async def ingest_as_proposals(
             target_page=concept.name,
             action=concept.action,
             proposed_by=author,
-            created=__import__("datetime").datetime.now(__import__("datetime").timezone.utc).isoformat(),
+            created=datetime.datetime.now(datetime.timezone.utc).isoformat(),
             extraction_method=extraction.extraction_method,
             sections=sections,
             passages=proposal_passages,
@@ -1654,11 +1686,13 @@ git commit -m "feat: add IngestAgent.ingest_as_proposals() multi-chunk pipeline"
 
 The CLI already sends an `ingest` request to the daemon. We need the daemon to call `ingest_as_proposals` and return proposal paths rather than page names. The simplest approach: add a `"proposal_mode": true` flag the CLI sends, which the daemon routes to the new code path.
 
-- [ ] **Step 1: Check `server.py` ingest handler location**
+- [ ] **Step 1: Read `server.py` to establish ingest handler location and agent attribute name**
 
 ```
-grep -n "_handle_ingest\|ingest" src/llm_wiki/daemon/server.py | head -30
+grep -n "_handle_ingest\|ingest\|_ingest_agent\|IngestAgent" src/llm_wiki/daemon/server.py | head -30
 ```
+
+Note the exact attribute name the server uses for the ingest agent (e.g., `self._ingest_agent`, `self._agent`, `self.ingest_agent`) — you need this for Step 4.
 
 - [ ] **Step 2: Write failing test for daemon proposal-mode routing**
 
@@ -1757,15 +1791,7 @@ async def _handle_ingest_proposals(self, request: dict) -> dict:
     }
 ```
 
-- [ ] **Step 5: Read `server.py` to confirm `_ingest_agent` attribute name and adjust if different**
-
-```
-grep -n "ingest_agent\|IngestAgent" src/llm_wiki/daemon/server.py | head -10
-```
-
-Adjust the attribute name in `_handle_ingest_proposals` to match what the server actually uses.
-
-- [ ] **Step 6: Run full test suite — expect PASS**
+- [ ] **Step 5: Run full test suite — expect PASS**
 
 ```
 pytest tests/ -v --tb=short -q
@@ -1812,19 +1838,29 @@ def _make_proposal(tmp_path, action="update", score=0.9) -> Path:
     )
     return write_proposal(proposals_dir, p, source_slug="paper")
 
-def test_find_pending_proposals_update_high_score_produces_no_issues(tmp_path):
-    """Clean update with high score → auto-merge, no issues raised."""
+def test_find_pending_proposals_update_high_score_returns_merge_ready_issue(tmp_path):
+    """Clean update with high score → merge-ready issue (no page mutation in check)."""
+    from llm_wiki.audit.checks import find_pending_proposals
     wiki_dir = tmp_path / "wiki"
     wiki_dir.mkdir(parents=True)
-    # Create the target page
     target = wiki_dir / "boltz-2.md"
     target.write_text("---\ntitle: Boltz-2\n---\n\nExisting content.\n")
     _make_proposal(tmp_path, action="update", score=0.9)
     result = find_pending_proposals(tmp_path, wiki_dir=wiki_dir)
     assert result.check == "pending-proposals"
-    # High-score update → auto-merged, no issues
-    assert len(result.issues) == 0
-    # Target page should have new content
+    # Check is read-only — returns a merge-ready issue, does NOT mutate the page
+    assert any(i.type == "merge-ready" for i in result.issues)
+    assert target.read_text() == "---\ntitle: Boltz-2\n---\n\nExisting content.\n"
+
+def test_execute_proposal_merges_applies_high_score_updates(tmp_path):
+    """execute_proposal_merges() applies merge-ready proposals to target pages."""
+    from llm_wiki.audit.checks import execute_proposal_merges
+    wiki_dir = tmp_path / "wiki"
+    wiki_dir.mkdir(parents=True)
+    target = wiki_dir / "boltz-2.md"
+    target.write_text("---\ntitle: Boltz-2\n---\n\nExisting content.\n")
+    _make_proposal(tmp_path, action="update", score=0.9)
+    execute_proposal_merges(tmp_path, wiki_dir=wiki_dir)
     merged = target.read_text()
     assert "overview" in merged.lower() or "Overview" in merged
 
@@ -1866,7 +1902,7 @@ from llm_wiki.ingest.proposals import (
 )
 ```
 
-Add the function:
+Add two functions — `find_pending_proposals` (read-only check) and `execute_proposal_merges` (called by the auditor scheduler after `audit()`):
 
 ```python
 def find_pending_proposals(
@@ -1875,15 +1911,14 @@ def find_pending_proposals(
     auto_merge_threshold: float = 0.75,
     flag_threshold: float = 0.50,
 ) -> CheckResult:
-    """Review pending proposals: auto-merge clean updates, issue creates/failures.
+    """Read-only check: classify pending proposals and return issues.
 
-    Auto-merge path (action=update, all verifiable scores ≥ auto_merge_threshold):
-      - Append proposal body to target page (skipping duplicate sections)
-      - Mark proposal status=merged
+    This function NEVER mutates wiki pages — it is safe to call from lint.
 
-    Issue path:
-      - action=create → issue type='proposal' for interactive review
-      - any verifiable score < flag_threshold → 'proposal-verification-failed'
+    Issue types returned:
+      - 'merge-ready':                 action=update, all verifiable scores ≥ auto_merge_threshold
+      - 'proposal':                    action=create (requires human review), or target missing
+      - 'proposal-verification-failed': any verifiable score < flag_threshold
     """
     import json, re as _re
     proposals_dir = vault_root / "inbox" / "proposals"
@@ -1902,7 +1937,6 @@ def find_pending_proposals(
         target_page = meta.get("target_page", "")
         source = meta.get("source", "")
 
-        # Parse evidence scores
         raw = proposal_path.read_text(encoding="utf-8")
         ev_match = _ev_re.search(raw)
         scores: list[float] = []
@@ -1925,7 +1959,7 @@ def find_pending_proposals(
                 page=target_page,
                 body=(
                     f"The ingest pipeline proposes creating [[{target_page}]] from "
-                    f"`{source}`. Review the proposal at `{proposal_path.relative_to(vault_root)}` "
+                    f"`{source}`. Review `{proposal_path.relative_to(vault_root)}` "
                     f"and approve with `llm-wiki proposals approve` or reject with "
                     f"`llm-wiki proposals reject`."
                 ),
@@ -1935,7 +1969,6 @@ def find_pending_proposals(
             ))
             continue
 
-        # action == "update"
         if min_score < flag_threshold:
             issues.append(Issue(
                 id=Issue.make_id("proposal-verification-failed", target_page, source),
@@ -1955,37 +1988,78 @@ def find_pending_proposals(
             ))
             continue
 
-        if min_score >= auto_merge_threshold:
-            # Auto-merge: append proposal body to target page
-            target_path = wiki_dir / f"{target_page}.md"
-            if not target_path.exists():
-                # Target page was deleted or never created — flag
-                issues.append(Issue(
-                    id=Issue.make_id("proposal", target_page, source),
-                    type="proposal",
-                    status="open",
-                    severity="minor",
-                    title=f"Proposal target page not found: '{target_page}'",
-                    page=target_page,
-                    body=f"Proposal at `{proposal_path.relative_to(vault_root)}` targets [[{target_page}]] which does not exist.",
-                    created=Issue.now_iso(),
-                    detected_by="auditor",
-                    metadata={"proposal_path": str(proposal_path)},
-                ))
-                continue
+        target_path = wiki_dir / f"{target_page}.md"
+        if not target_path.exists():
+            issues.append(Issue(
+                id=Issue.make_id("proposal", target_page, source),
+                type="proposal",
+                status="open",
+                severity="minor",
+                title=f"Proposal target page not found: '{target_page}'",
+                page=target_page,
+                body=f"Proposal at `{proposal_path.relative_to(vault_root)}` targets [[{target_page}]] which does not exist.",
+                created=Issue.now_iso(),
+                detected_by="auditor",
+                metadata={"proposal_path": str(proposal_path)},
+            ))
+            continue
 
-            body = read_proposal_body(proposal_path)
-            existing = target_path.read_text(encoding="utf-8")
-            if body and body not in existing:
-                target_path.write_text(
-                    existing.rstrip() + "\n\n" + body + "\n",
-                    encoding="utf-8",
-                )
-                from llm_wiki.ingest.page_writer import patch_token_estimates
-                patch_token_estimates(target_path)
-            update_proposal_status(proposal_path, "merged")
+        # Clean update above both thresholds — flag as merge-ready
+        issues.append(Issue(
+            id=Issue.make_id("merge-ready", target_page, source),
+            type="merge-ready",
+            status="open",
+            severity="info",
+            title=f"Proposal ready to merge: '{target_page}' (score {min_score:.2f})",
+            page=target_page,
+            body=f"Proposal at `{proposal_path.relative_to(vault_root)}` is verified and ready to merge.",
+            created=Issue.now_iso(),
+            detected_by="auditor",
+            metadata={"proposal_path": str(proposal_path), "min_score": min_score},
+        ))
 
     return CheckResult(check="pending-proposals", issues=issues)
+
+
+def execute_proposal_merges(
+    vault_root: Path,
+    wiki_dir: Path | None = None,
+    auto_merge_threshold: float = 0.75,
+) -> list[str]:
+    """Apply merge-ready proposals to their target wiki pages.
+
+    Called by the auditor scheduler AFTER audit() — NOT called during lint.
+    Returns list of target page slugs that were updated.
+    """
+    if wiki_dir is None:
+        wiki_dir = vault_root / "wiki"
+
+    result = find_pending_proposals(
+        vault_root, wiki_dir=wiki_dir,
+        auto_merge_threshold=auto_merge_threshold,
+    )
+    merged: list[str] = []
+
+    for issue in result.issues:
+        if issue.type != "merge-ready":
+            continue
+        proposal_path = Path(issue.metadata["proposal_path"])
+        target_page = issue.page
+        target_path = wiki_dir / f"{target_page}.md"
+
+        body = read_proposal_body(proposal_path)
+        existing = target_path.read_text(encoding="utf-8")
+        if body and body not in existing:
+            target_path.write_text(
+                existing.rstrip() + "\n\n" + body + "\n",
+                encoding="utf-8",
+            )
+            from llm_wiki.ingest.page_writer import patch_token_estimates
+            patch_token_estimates(target_path)
+        update_proposal_status(proposal_path, "merged")
+        merged.append(target_page)
+
+    return merged
 ```
 
 - [ ] **Step 4: Register in `auditor.py`**
@@ -1994,19 +2068,20 @@ In `src/llm_wiki/audit/auditor.py`, add to the imports:
 
 ```python
 from llm_wiki.audit.checks import (
+    execute_proposal_merges,    # ← add
     find_broken_citations,
     find_broken_wikilinks,
     find_inbox_staleness,
     find_missing_markers,
     find_orphans,
-    find_pending_proposals,    # ← add
+    find_pending_proposals,     # ← add
     find_source_gaps,
     find_stale_resonance,
     find_synthesis_without_resonance,
 )
 ```
 
-In `Auditor.audit()`, add to the `results` list:
+In `Auditor.audit()`, add `find_pending_proposals` to the `results` list (read-only):
 
 ```python
         results = [
@@ -2018,13 +2093,25 @@ In `Auditor.audit()`, add to the `results` list:
             find_stale_resonance(self._vault_root, self._config),
             find_synthesis_without_resonance(self._vault_root, self._config),
             find_inbox_staleness(self._vault_root),
-            find_pending_proposals(             # ← add
+            find_pending_proposals(              # ← add (read-only)
                 self._vault_root,
                 auto_merge_threshold=self._config.ingest.grounding_auto_merge,
                 flag_threshold=self._config.ingest.grounding_flag,
             ),
         ]
 ```
+
+In the auditor's scheduler method (search for the method that calls `audit()` on a timer — likely `run_cycle` or `_run`), add a call to `execute_proposal_merges` AFTER `audit()` completes:
+
+```python
+# After: audit_result = await self.audit()  (or however audit() is called)
+execute_proposal_merges(
+    self._vault_root,
+    auto_merge_threshold=self._config.ingest.grounding_auto_merge,
+)
+```
+
+This keeps `find_pending_proposals` safe to call from `llm-wiki lint` (pure read), while the scheduled auditor run applies the actual merges.
 
 - [ ] **Step 5: Run tests — expect PASS**
 
@@ -2263,7 +2350,7 @@ llm-wiki issues list
 llm-wiki read boltz-2
 ```
 
-Should contain new sections from the boltz2.pdf paper with `[[raw/raw/boltz2.pdf]]` citations and `[[slug]]` wikilinks.
+Should contain new sections from the boltz2.pdf paper with `[[raw/boltz2.pdf]]` citations and `[[slug]]` wikilinks.
 
 - [ ] **Step 4: Final commit**
 
