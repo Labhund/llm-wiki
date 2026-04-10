@@ -917,3 +917,88 @@ def execute_proposal_merges(
         merged.append(target_page)
 
     return merged
+
+
+# Matches [[...]] wikilinks (no nested brackets). Captures the inner target
+# excluding any | alias suffix.
+_WIKILINK_RE = re.compile(r"\[\[([^\]|]+)(?:\|[^\]]+)?\]\]")
+
+
+def find_index_out_of_sync(vault: Vault) -> CheckResult:
+    """Detect drift between wiki/index.md and the vault manifest.
+
+    Two failure modes:
+      1. Missing entry (minor):  a page slug in the manifest is absent from the
+         index body — i.e. there is no [[slug]] anywhere in index.md.
+      2. Broken link (moderate): a [[target]] in index.md does not match any
+         known page slug — e.g. old path-format links like [[wiki/rfdiffusion.md]].
+
+    Pure Python — no LLM.
+    Gracefully skips if wiki/index.md does not yet exist.
+    """
+    index_path = vault._root / "wiki" / "index.md"
+    if not index_path.exists():
+        return CheckResult(check="index-out-of-sync", issues=[])
+
+    body = index_path.read_text(encoding="utf-8")
+
+    # All [[target]] slugs referenced in the index
+    index_targets: list[str] = [m.group(1) for m in _WIKILINK_RE.finditer(body)]
+
+    # Known page slugs (excludes index itself — Vault.scan already skips index.md)
+    known_slugs: set[str] = set(vault.manifest_entries().keys())
+
+    issues: list[Issue] = []
+
+    # 1. Missing entries: every known slug must appear in the index
+    index_targets_set = set(index_targets)
+    for slug in sorted(known_slugs):
+        if slug in index_targets_set:
+            continue
+        issues.append(
+            Issue(
+                id=Issue.make_id("index-out-of-sync", slug, "missing"),
+                type="index-out-of-sync",
+                status="open",
+                severity="minor",
+                title=f"Page '{slug}' is not listed in wiki/index.md",
+                page=slug,
+                body=(
+                    f"The page [[{slug}]] exists in the vault but has no entry in "
+                    f"`wiki/index.md`. The librarian will add it on its next run, or "
+                    f"you can add `[[{slug}]]` manually."
+                ),
+                created=Issue.now_iso(),
+                detected_by="auditor",
+                metadata={"slug": slug},
+            )
+        )
+
+    # 2. Broken links: every [[target]] in the index must be a known slug
+    seen_targets: set[str] = set()
+    for target in index_targets:
+        if target in seen_targets:
+            continue
+        seen_targets.add(target)
+        if target in known_slugs:
+            continue
+        issues.append(
+            Issue(
+                id=Issue.make_id("index-out-of-sync", "index", target),
+                type="index-out-of-sync",
+                status="open",
+                severity="moderate",
+                title=f"wiki/index.md has a broken link: [[{target}]]",
+                page="index",
+                body=(
+                    f"`wiki/index.md` contains `[[{target}]]` but no page with that "
+                    f"slug exists in the vault. This may be an old path-format link or "
+                    f"a stale reference to a deleted page. Remove or correct the link."
+                ),
+                created=Issue.now_iso(),
+                detected_by="auditor",
+                metadata={"target": target},
+            )
+        )
+
+    return CheckResult(check="index-out-of-sync", issues=issues)

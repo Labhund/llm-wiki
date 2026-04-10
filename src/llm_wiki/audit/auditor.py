@@ -7,6 +7,7 @@ from llm_wiki.audit.checks import (
     execute_proposal_merges,
     find_broken_citations,
     find_broken_wikilinks,
+    find_index_out_of_sync,
     find_inbox_staleness,
     find_missing_frontmatter,
     find_missing_markers,
@@ -77,6 +78,7 @@ class Auditor:
                 auto_merge_threshold=self._config.ingest.grounding_auto_merge,
                 flag_threshold=self._config.ingest.grounding_flag,
             ),
+            find_index_out_of_sync(self._vault),
         ]
 
         by_check: dict[str, int] = {}
