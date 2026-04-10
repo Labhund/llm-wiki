@@ -72,11 +72,19 @@ If cancelled while waiting for semaphore (CancelledError before acquire):
   → _pending decremented in outer finally block
 ```
 
+Implementation note: use an `acquired: bool = False` flag set to `True` immediately after semaphore entry. The outer `finally` decrements `_pending` only if `not acquired`. Without this, a cancel while waiting would decrement `_pending` twice — once inside the `async with` block (which was never entered) and once in the outer `finally`. The bare `async with self._semaphore:` pattern makes this split impossible to express safely.
+
 ### `IntervalScheduler` changes
 
-- New field: `_running: set[str]` — worker names currently executing.
-- Set at top of `_run_once()`, cleared in `finally` (so errors don't leave workers stuck as "running").
-- New property: `running_workers` returns a copy of the set.
+- New fields:
+  - `_running: set[str]` — worker names currently executing.
+  - `_running_since: dict[str, float]` — `time.monotonic()` timestamp when each worker entered `_run_once()`.
+- Both set at top of `_run_once()`, cleared in `finally` (so errors don't leave workers stuck as "running").
+- New properties:
+  - `running_workers` returns a copy of `_running`.
+  - `running_elapsed_s(name: str) -> float | None` — elapsed seconds since the worker started its current run, or `None` if not running.
+
+The workers section in `ps` output uses `running_elapsed_s` for the elapsed column, not the LLM job elapsed time. This covers the case where a worker is in its run cycle doing synchronous work before any LLM call is queued.
 
 ---
 
@@ -146,7 +154,7 @@ Handler is synchronous (no async work). Reads directly from `_llm_queue` and `_s
 PROCESSES  2 active · 1 pending · 84,230 tokens used
 
 WORKERS
-  adversary    running   verifying protein-dj                     12s
+  adversary    running   verify protein-dj                        12s
   auditor      idle      last run 6m ago
   librarian    idle      last run 1h ago
   compliance   idle      last run 1m ago
@@ -164,7 +172,8 @@ LLM QUEUE  (2/2 slots, 1 pending)
 
 - `last run N ago` — human-readable relative time from `last_run` ISO string. Buckets: seconds, minutes, hours.
 - Elapsed time column in the jobs section — rendered as `<n>s` (always seconds; jobs running for minutes indicate a stall worth noticing).
-- Workers section: label split at `:`, source prefix dropped (redundant with name column), action + detail shown, detail truncated with `…` if > 30 chars.
+- Workers section: label split at `:`, source prefix dropped (redundant with name column), action + detail joined with a space (no conjugation — raw label segment), detail truncated with `…` if the combined string exceeds 30 chars.
+- Workers section elapsed: sourced from `scheduler.running_elapsed_s()`, not from any LLM job. Shows `—` if the worker is idle or `running_elapsed_s()` returns `None`.
 - Jobs section: full label rendered, source kept (provides context without the name column).
 - Tokens formatted with comma separator (`84,230`).
 
@@ -175,7 +184,7 @@ LLM QUEUE  (2/2 slots, 1 pending)
 | File | Change |
 |------|--------|
 | `daemon/llm_queue.py` | Add `ActiveJob`, extend `submit()`, add `active_jobs`/`pending_count`/`slots_total` properties |
-| `daemon/scheduler.py` | Add `_running: set[str]`, set/clear in `_run_once()`, add `running_workers` property |
+| `daemon/scheduler.py` | Add `_running: set[str]` + `_running_since: dict[str, float]`, set/clear in `_run_once()`, add `running_workers` and `running_elapsed_s()` |
 | `daemon/server.py` | Add `_handle_process_list()`, wire into `_route()` |
 | `daemon/protocol.py` | No change needed (route type is just a string) |
 | `cli/main.py` | Add `ps` subcommand |
