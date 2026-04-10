@@ -760,60 +760,113 @@ def run_wizard(vault_path: Path) -> None:
 
     # Load existing config
     existing: dict[str, Any] = {}
+    run_llm = run_embed = run_agent = True
+
     if config_path.exists():
         with open(config_path) as f:
             existing = yaml.safe_load(f) or {}
-        _warn("Existing config found — wizard will update it.")
-        if not _yes_no("Continue?", default=True):
-            _info("Aborted.")
-            return
+        _warn("Existing config found.")
+        print()
+        run_llm, run_embed, run_agent = _section_choice(existing)
+
+    # ── LLM Backends ─────────────────────────────────────────────────────────
+    existing_llm = existing.get("llm", {})
+    existing_backends = existing_llm.get("backends", {})
+
+    if run_llm:
+        _header("LLM Backends")
+        _info("llm-wiki routes tasks across two model tiers:")
+        _info("")
+        _info("  Smart model — depth work: research queries, document ingestion,")
+        _info("                adversarial fact-checking. Use your most capable model.")
+        _info("")
+        _info("  Fast model  — high-frequency background: librarian, compliance,")
+        _info("                commit summaries. Throughput matters more than depth.")
+        _info("")
+        _info("You can use the same model for both — just skip the fast model step.")
         print()
 
-    # ── Model tier framing ────────────────────────────────────────────────────
-    _header("LLM Backends")
-    _info("llm-wiki routes tasks across two model tiers:")
-    _info("")
-    _info("  Smart model — depth work: research queries, document ingestion,")
-    _info("                adversarial fact-checking. Use your most capable model.")
-    _info("")
-    _info("  Fast model  — high-frequency background: librarian, compliance,")
-    _info("                commit summaries. Throughput matters more than depth.")
-    _info("")
-    _info("You can use the same model for both — just skip the fast model step.")
-    print()
-    _info("Which provider do you want for your smart model?")
-    print()
+        # Smart model — keep or reconfigure
+        existing_smart = existing_backends.get("smart", {})
+        if existing_smart and not _yes_no(
+            f"Change smart model  (current: {existing_smart.get('model', '?')})?",
+            default=False,
+        ):
+            backend_name = "local" if existing_smart.get("api_base") else "openai"
+            backend_cfg = existing_smart
+            _ok(f"Keeping smart model  ({backend_cfg['model']})")
+        else:
+            _info("Which provider do you want for your smart model?")
+            print()
+            provider_idx = _choice("Provider:", _PROVIDERS, default=0)
+            _header(_PROVIDERS[provider_idx].split("  ")[0].strip())
+            backend_name, backend_cfg = _PROVIDER_SETUP[provider_idx]()
+            _ok(f"Smart model configured  ({backend_cfg['model']})")
 
-    provider_idx = _choice("Provider:", _PROVIDERS, default=0)
-    _header(_PROVIDERS[provider_idx].split("  ")[0].strip())
+        backends: dict[str, dict] = {"smart": backend_cfg}
+        default_backend = "smart"
 
-    backend_name, backend_cfg = _PROVIDER_SETUP[provider_idx]()
-    backends: dict[str, dict] = {"smart": backend_cfg}
-    default_backend = "smart"
+        # Capture OpenAI key for embeddings reuse (only for cloud OpenAI, not local proxy)
+        openai_key = ""
+        if backend_name == "openai":
+            openai_key = backend_cfg.get("api_key", "")
 
-    _ok(f"Smart model configured  ({backend_cfg['model']})")
+        # Fast model — keep or reconfigure
+        print()
+        _header("Fast / Cheap Model  (optional)")
+        existing_fast = existing_backends.get("fast", {})
+        role_overrides: dict[str, str] = {}
+        if existing_fast and not _yes_no(
+            f"Change fast model  (current: {existing_fast.get('model', '?')})?",
+            default=False,
+        ):
+            backends["fast"] = existing_fast
+            role_overrides = {role: "smart" for role in _SMART_ROLES}
+            role_overrides.update({role: "fast" for role in _FAST_ROLES})
+            _ok(f"Keeping fast model  ({existing_fast['model']})")
+        else:
+            fast_result = _setup_fast_backend("smart", backend_cfg)
+            if fast_result:
+                fast_name, fast_cfg = fast_result
+                backends[fast_name] = fast_cfg
+                role_overrides = {role: "smart" for role in _SMART_ROLES}
+                role_overrides.update({role: fast_name for role in _FAST_ROLES})
+                _ok(f"Fast model configured  ({fast_cfg['model']})")
 
-    # Capture OpenAI key for embeddings reuse
-    openai_key = ""
-    if backend_name == "openai":
-        openai_key = backend_cfg.get("api_key", "")
-
-    # ── Fast / cheap model ────────────────────────────────────────────────────
-    print()
-    _header("Fast / Cheap Model  (optional)")
-    fast_result = _setup_fast_backend("smart", backend_cfg)
-    role_overrides: dict[str, str] = {}
-    if fast_result:
-        fast_name, fast_cfg = fast_result
-        backends[fast_name] = fast_cfg
-        role_overrides = {role: "smart" for role in _SMART_ROLES}
-        role_overrides.update({role: fast_name for role in _FAST_ROLES})
-        _ok(f"Fast model configured  ({fast_cfg['model']})")
+    else:
+        # LLM section skipped — load from existing
+        backends = {k: v for k, v in existing_backends.items() if k != "embeddings"}
+        if not backends:
+            backends = {"smart": {}}
+        backend_cfg = backends.get("smart", {})
+        default_backend = "smart"
+        openai_key = ""
+        role_overrides = {}
+        if "fast" in backends:
+            role_overrides = {role: "smart" for role in _SMART_ROLES}
+            role_overrides.update({role: "fast" for role in _FAST_ROLES})
 
     # ── Embeddings ────────────────────────────────────────────────────────────
-    print()
-    _header("Embeddings")
-    embed_model, embed_enabled, embed_key = _setup_embeddings(openai_key)
+    if run_embed:
+        print()
+        _header("Embeddings")
+        existing_embed_model = existing_llm.get("embeddings", "")
+        existing_embed_enabled = existing.get("search", {}).get("embeddings_enabled", True)
+        if existing_embed_model and not _yes_no(
+            f"Change embeddings  (current: {existing_embed_model}, "
+            f"{'enabled' if existing_embed_enabled else 'disabled'})?",
+            default=False,
+        ):
+            embed_model = existing_embed_model
+            embed_enabled = existing_embed_enabled
+            embed_key = ""
+            _ok(f"Keeping embeddings  ({embed_model})")
+        else:
+            embed_model, embed_enabled, embed_key = _setup_embeddings(openai_key)
+    else:
+        embed_model = existing_llm.get("embeddings", "")
+        embed_enabled = existing.get("search", {}).get("embeddings_enabled", True)
+        embed_key = ""
 
     # ── Build config dict ─────────────────────────────────────────────────────
     config: dict[str, Any] = existing.copy()
@@ -845,9 +898,12 @@ def run_wizard(vault_path: Path) -> None:
         yaml.dump(config, f, default_flow_style=False, allow_unicode=True, sort_keys=False)
 
     # ── Agent framework integration ───────────────────────────────────────────
-    print()
-    _header("Agent Framework Integration")
-    framework_result = _setup_agent_framework()
+    if run_agent:
+        print()
+        _header("Agent Framework Integration")
+        framework_result = _setup_agent_framework()
+    else:
+        framework_result = None
 
     # ── Summary ───────────────────────────────────────────────────────────────
     _header("Setup Complete")
