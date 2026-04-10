@@ -515,10 +515,6 @@ _INLINE_RAW_CITATION_RE = re.compile(r"\[\[raw/[^\]|]+(?:\|[^\]]+)?\]\]")
 # created_by values that indicate machine-generated pages requiring inline citations.
 _NEEDS_CITATION = {"ingest", "proposal"}
 
-# Frontmatter end delimiter: a line that is exactly "---" (after the opening "---").
-_FM_END_RE = re.compile(r"^---\s*$", re.MULTILINE)
-
-
 def _body_only(raw_content: str) -> str:
     """Return just the body of raw_content, stripping the YAML frontmatter block.
 
