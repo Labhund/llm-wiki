@@ -1,11 +1,354 @@
 """Interactive setup wizard for llm-wiki — guides users through LLM backend and API key configuration."""
 from __future__ import annotations
 
+import hashlib as _hashlib
+import json
+import os
 import sys
 from pathlib import Path
 from typing import Any
 
 import yaml
+
+
+def _skills_source() -> Path:
+    """Locate the bundled skills/llm-wiki/ directory.
+
+    Works for both editable (pip install -e .) and non-editable installs.
+    Raises RuntimeError with a clear message if the package is broken.
+    """
+    # Editable install: src/llm_wiki/cli/configure.py → ../../skills/llm-wiki
+    candidate = Path(__file__).parent.parent / "skills" / "llm-wiki"
+    if candidate.is_dir():
+        return candidate
+    # Non-editable install: use importlib.resources
+    try:
+        import importlib.resources
+        ref = importlib.resources.files("llm_wiki") / "skills" / "llm-wiki"
+        p = Path(str(ref))
+        if p.is_dir():
+            return p
+    except Exception:
+        pass
+    raise RuntimeError(
+        "Could not locate bundled skills directory.\n"
+        "Run: pip install -e . to ensure the package is properly installed."
+    )
+
+
+_MCP_BANNER = (
+    "> **MCP supersedes this skill.** If `wiki_search`, `wiki_read`, `wiki_query` tools are\n"
+    "> available (llm-wiki MCP server connected), use those instead. This skill is retained\n"
+    "> as conceptual reference only.\n"
+)
+
+
+def _parse_skill_name(md_path: Path) -> str | None:
+    """Extract the 'name' field from YAML frontmatter. Returns None if absent."""
+    content = md_path.read_text()
+    if not content.startswith("---"):
+        return None
+    end = content.find("---", 3)
+    if end < 0:
+        return None
+    try:
+        meta = yaml.safe_load(content[3:end].strip())
+        if not isinstance(meta, dict):
+            return None
+        name = meta.get("name")
+        return name if isinstance(name, str) else None
+    except yaml.YAMLError:
+        return None
+
+
+def _skill_dest(name: str, hermes_home: Path) -> Path:
+    """Map a skill name (slash-separated) to its SKILL.md path under hermes_home/skills/."""
+    parts = name.split("/")
+    return hermes_home / "skills" / Path(*parts) / "SKILL.md"
+
+
+def _update_manifest(manifest_path: Path, skill_name: str, content: bytes) -> None:
+    """Upsert a skillname:md5 entry in the Hermes bundled manifest."""
+    md5 = _hashlib.md5(content).hexdigest()
+    entry = f"{skill_name}:{md5}"
+    if manifest_path.exists():
+        lines = [l for l in manifest_path.read_text().splitlines()
+                 if l.strip() and not l.startswith(f"{skill_name}:")]
+    else:
+        lines = []
+    lines.append(entry)
+    manifest_path.parent.mkdir(parents=True, exist_ok=True)
+    manifest_path.write_text("\n".join(lines) + "\n")
+
+
+def _patch_legacy_skill(skill_path: Path) -> bool:
+    """Prepend MCP supersession banner after frontmatter. Returns True if patched."""
+    content = skill_path.read_text()
+    if _MCP_BANNER in content:
+        return False
+    if not content.startswith("---"):
+        return False
+    end = content.find("---", 3)
+    if end < 0:
+        return False
+    insert_at = end + 3
+    new_content = content[:insert_at] + "\n\n" + _MCP_BANNER + "\n" + content[insert_at:].lstrip("\n\r")
+    skill_path.write_text(new_content)
+    return True
+
+
+def _install_skills_to_hermes(hermes_home: Path) -> int:
+    """Copy all bundled skills to hermes_home/skills/. Returns count installed."""
+    src_root = _skills_source()
+    manifest_path = hermes_home / "skills" / ".bundled_manifest"
+    count = 0
+    for md_path in sorted(src_root.rglob("*.md")):
+        name = _parse_skill_name(md_path)
+        if not name:
+            continue
+        dest = _skill_dest(name, hermes_home)
+        dest.parent.mkdir(parents=True, exist_ok=True)
+        content = md_path.read_bytes()
+        dest.write_bytes(content)
+        _update_manifest(manifest_path, name, content)
+        count += 1
+    return count
+
+
+def _patch_legacy_skills(hermes_home: Path) -> int:
+    """Patch all llm-wiki* skills in hermes_home/skills/research/ with MCP banner.
+    Returns count of skills patched (0 if all already patched)."""
+    research_dir = hermes_home / "skills" / "research"
+    if not research_dir.is_dir():
+        return 0
+    patched = 0
+    for skill_dir in research_dir.iterdir():
+        if not skill_dir.name.startswith("llm-wiki"):
+            continue
+        skill_file = skill_dir / "SKILL.md"
+        if skill_file.exists() and _patch_legacy_skill(skill_file):
+            patched += 1
+    return patched
+
+
+def _merge_hermes_mcp(config_path: Path, vault_path: Path) -> None:
+    """Merge llm-wiki MCP server entry into Hermes config.yaml."""
+    with open(config_path) as f:
+        config = yaml.safe_load(f) or {}
+    config.setdefault("mcp_servers", {})["llm-wiki"] = {
+        "command": "llm-wiki",
+        "args": ["mcp"],
+        "env": {"LLM_WIKI_VAULT": str(vault_path)},
+        "timeout": 120,
+        "connect_timeout": 30,
+    }
+    with open(config_path, "w") as f:
+        yaml.dump(config, f, default_flow_style=False, allow_unicode=True, sort_keys=False)
+
+
+def _setup_hermes() -> dict[str, Any] | None:
+    """Interactive Hermes integration setup. Returns result dict or None on abort."""
+    # ── Detect Hermes home ────────────────────────────────────────────────────
+    default_hermes = Path(os.environ.get("HERMES_HOME", str(Path.home() / ".hermes")))
+    hermes_home_str = _prompt("Hermes home directory", str(default_hermes))
+    hermes_home = Path(hermes_home_str).expanduser()
+    if not hermes_home.is_dir():
+        _err(f"Directory not found: {hermes_home}")
+        _info("Is Hermes installed? Check https://github.com/NousResearch/hermes-agent")
+        return None
+
+    # ── Vault path ────────────────────────────────────────────────────────────
+    env_vault = os.environ.get("LLM_WIKI_VAULT", "")
+    if env_vault:
+        default_vault = env_vault
+        _info("  [from $LLM_WIKI_VAULT — override if stale]")
+    else:
+        default_vault = str(Path.home() / "wiki")
+    vault_str = _prompt("Vault path", default_vault)
+    vault_path = Path(vault_str).expanduser()
+
+    # ── Vault initialisation ──────────────────────────────────────────────────
+    vault_created = False
+    if not vault_path.exists():
+        _info(f"Creating vault at {vault_path}…")
+        for sub in ("raw", "wiki", "schema", "inbox"):
+            (vault_path / sub).mkdir(parents=True, exist_ok=True)
+        vault_created = True
+
+    if not (vault_path / "raw").is_dir():
+        for sub in ("raw", "wiki", "schema", "inbox"):
+            (vault_path / sub).mkdir(parents=True, exist_ok=True)
+        vault_created = True
+
+    if vault_created:
+        _info("Initialising vault index…")
+        from llm_wiki.vault import Vault
+        try:
+            Vault.scan(vault_path)
+            _ok("Vault initialised")
+        except Exception as e:
+            _warn(f"Vault init warning: {e}")
+
+    # ── Skill installation ────────────────────────────────────────────────────
+    _info("Installing companion skills…")
+    try:
+        count = _install_skills_to_hermes(hermes_home)
+        _ok(f"{count} skills installed")
+    except RuntimeError as e:
+        _err(str(e))
+        return None
+
+    # ── Legacy skill patching ─────────────────────────────────────────────────
+    patched = _patch_legacy_skills(hermes_home)
+    if patched:
+        _ok(f"{patched} legacy skill(s) patched with MCP routing banner")
+
+    # ── MCP registration ──────────────────────────────────────────────────────
+    hermes_config = hermes_home / "config.yaml"
+    if hermes_config.exists():
+        _merge_hermes_mcp(hermes_config, vault_path)
+        _ok("MCP server registered in Hermes config")
+    else:
+        _warn("Hermes config.yaml not found — skipping MCP registration")
+        _info(f"Add manually under mcp_servers: in {hermes_config}")
+
+    # ── Config check ──────────────────────────────────────────────────────────
+    wiki_config = vault_path / "schema" / "config.yaml"
+    config_missing = not wiki_config.exists() or wiki_config.stat().st_size == 0
+
+    _ok("Hermes integration complete")
+    _info("Restart Hermes to load the new skills.")
+
+    return {
+        "framework": "hermes",
+        "vault_path": vault_path,
+        "skills_installed": count,
+        "config_missing": config_missing,
+    }
+
+
+def _merge_claude_code_mcp(mcp_path: Path, vault_path: Path) -> None:
+    """Merge llm-wiki MCP entry into a Claude Code mcp.json file."""
+    existing: dict = {}
+    if mcp_path.exists():
+        try:
+            existing = json.loads(mcp_path.read_text())
+        except json.JSONDecodeError:
+            pass
+    existing.setdefault("mcpServers", {})["llm-wiki"] = {
+        "command": "llm-wiki",
+        "args": ["mcp"],
+        "env": {"LLM_WIKI_VAULT": str(vault_path)},
+    }
+    mcp_path.parent.mkdir(parents=True, exist_ok=True)
+    mcp_path.write_text(json.dumps(existing, indent=2) + "\n")
+
+
+def _setup_claude_code() -> dict[str, Any] | None:
+    """Interactive Claude Code integration setup."""
+    # ── Vault path ────────────────────────────────────────────────────────────
+    env_vault = os.environ.get("LLM_WIKI_VAULT", "")
+    if env_vault:
+        default_vault = env_vault
+        _info("  [from $LLM_WIKI_VAULT — override if stale]")
+    else:
+        default_vault = str(Path.home() / "wiki")
+    vault_str = _prompt("Vault path", default_vault)
+    vault_path = Path(vault_str).expanduser()
+
+    # ── Vault initialisation ──────────────────────────────────────────────────
+    if not (vault_path / "raw").is_dir():
+        _info(f"Creating vault at {vault_path}…")
+        for sub in ("raw", "wiki", "schema", "inbox"):
+            (vault_path / sub).mkdir(parents=True, exist_ok=True)
+        _info("Initialising vault index…")
+        from llm_wiki.vault import Vault
+        try:
+            Vault.scan(vault_path)
+            _ok("Vault initialised")
+        except Exception as e:
+            _warn(f"Vault init warning: {e}")
+
+    # ── MCP config location ───────────────────────────────────────────────────
+    global_mcp = Path.home() / ".claude" / "mcp.json"
+    use_global = _yes_no(f"Write to global config ({global_mcp})?", default=True)
+    mcp_path = global_mcp if use_global else Path.cwd() / ".claude" / "mcp.json"
+
+    _merge_claude_code_mcp(mcp_path, vault_path)
+    _ok(f"MCP server registered in {mcp_path}")
+
+    wiki_config = vault_path / "schema" / "config.yaml"
+    config_missing = not wiki_config.exists() or wiki_config.stat().st_size == 0
+
+    _info("Reload Claude Code (or restart your IDE) to connect the MCP server.")
+
+    return {
+        "framework": "claude_code",
+        "vault_path": vault_path,
+        "config_missing": config_missing,
+    }
+
+
+_FRAMEWORK_CHOICES = [
+    "Hermes",
+    "Claude Code",
+    "Let my agent figure it out",
+    "Skip  (I'll register manually)",
+]
+
+
+def _setup_agent_framework() -> dict[str, Any] | None:
+    """Prompt for agent framework and run appropriate setup. Returns result or None."""
+    _info("Register the llm-wiki MCP server with your agent framework.")
+    print()
+    idx = _choice("Agent framework:", _FRAMEWORK_CHOICES, default=0)
+
+    if idx == 0:
+        _header("Hermes Integration")
+        return _setup_hermes()
+
+    if idx == 1:
+        _header("Claude Code Integration")
+        return _setup_claude_code()
+
+    if idx == 2:
+        print()
+        _info("Tell your agent:")
+        print()
+        print(_col('    "Set up llm-wiki for me."', _C.YELLOW))
+        print()
+        _info("It will load the llm-wiki-setup skill and walk you through vault")
+        _info("creation, daemon configuration, MCP registration, and skill")
+        _info("installation interactively — with explicit consent at each step.")
+        print()
+        return {"framework": "agent_guided"}
+
+    # Skip
+    print()
+    _info("Add this to your agent's MCP server config:")
+    print()
+    _info("  Hermes (~/.hermes/config.yaml under mcp_servers:):")
+    print(_col(
+        "    llm-wiki:\n"
+        "      command: llm-wiki\n"
+        "      args: [mcp]\n"
+        "      env:\n"
+        "        LLM_WIKI_VAULT: ~/wiki\n"
+        "      timeout: 120\n"
+        "      connect_timeout: 30",
+        _C.DIM,
+    ))
+    print()
+    _info("  Claude Code (~/.claude/mcp.json under mcpServers:):")
+    print(_col(
+        '    "llm-wiki": {\n'
+        '      "command": "llm-wiki",\n'
+        '      "args": ["mcp"],\n'
+        '      "env": {"LLM_WIKI_VAULT": "~/wiki"}\n'
+        '    }',
+        _C.DIM,
+    ))
+    return {"framework": "manual"}
 
 
 # ── ANSI colors ───────────────────────────────────────────────────────────────
@@ -200,22 +543,28 @@ _PROVIDERS = [
 _PROVIDER_NAMES = ["local", "openai", "anthropic", "openrouter", "custom"]
 
 
-def _pick_or_type(choices: list[str], default: int = 0) -> str:
+def _pick_or_type(choices: list[str], label: str = "Select model:", default: int = 0) -> str:
     """Choose from list; last entry is always 'other (type manually)'."""
-    idx = _choice("Select model:", choices, default)
+    idx = _choice(label, choices, default)
     if idx == len(choices) - 1:
+        _info("LiteLLM format examples:")
+        _info("  openai/gpt-4o                     (OpenAI)")
+        _info("  anthropic/claude-haiku-4-5         (Anthropic)")
+        _info("  openrouter/google/gemini-2.5-pro   (OpenRouter)")
+        _info("  openai/my-local-model              (local endpoint)")
+        print()
         return _prompt("Model name")
     return choices[idx]
 
 
-def _setup_local() -> tuple[str, dict[str, Any]]:
+def _setup_local(label: str = "Choose your smart model:") -> tuple[str, dict[str, Any]]:
     _info("Common base URLs:")
     _info("  ollama:       http://localhost:11434/v1")
     _info("  vllm:         http://localhost:8000/v1")
     _info("  LiteLLM proxy: http://localhost:4000/v1")
     print()
     api_base = _prompt("Base URL", "http://localhost:11434/v1")
-    raw_model = _pick_or_type(_LOCAL_MODELS)
+    raw_model = _pick_or_type(_LOCAL_MODELS, label=label)
     # Strip any openai/ prefix the user might have typed; we'll add it
     model = raw_model.lstrip("openai/") if raw_model.startswith("openai/") else raw_model
     model_str = f"openai/{model}"
@@ -226,28 +575,28 @@ def _setup_local() -> tuple[str, dict[str, Any]]:
     return "local", backend
 
 
-def _setup_openai() -> tuple[str, dict[str, Any]]:
+def _setup_openai(label: str = "Choose your smart model:") -> tuple[str, dict[str, Any]]:
     _info("Get your key at: https://platform.openai.com/api-keys")
     print()
     api_key = _prompt("OpenAI API key", password=True)
-    model = _pick_or_type(_OPENAI_MODELS)
+    model = _pick_or_type(_OPENAI_MODELS, label=label)
     return "openai", {"model": model, "api_key": api_key}
 
 
-def _setup_anthropic() -> tuple[str, dict[str, Any]]:
+def _setup_anthropic(label: str = "Choose your smart model:") -> tuple[str, dict[str, Any]]:
     _info("Get your key at: https://console.anthropic.com/")
     print()
     api_key = _prompt("Anthropic API key", password=True)
-    model = _pick_or_type(_ANTHROPIC_MODELS)
+    model = _pick_or_type(_ANTHROPIC_MODELS, label=label)
     return "anthropic", {"model": model, "api_key": api_key}
 
 
-def _setup_openrouter() -> tuple[str, dict[str, Any]]:
+def _setup_openrouter(label: str = "Choose your smart model:") -> tuple[str, dict[str, Any]]:
     _info("Get your key at: https://openrouter.ai/keys")
     _info("OpenRouter gives you access to 200+ models with a single key.")
     print()
     api_key = _prompt("OpenRouter API key", password=True)
-    model_short = _pick_or_type(_OPENROUTER_MODELS)
+    model_short = _pick_or_type(_OPENROUTER_MODELS, label=label)
     # Prefix with openrouter/ for LiteLLM routing unless user already did
     if not model_short.startswith("openrouter/"):
         model_str = f"openrouter/{model_short}"
@@ -260,7 +609,9 @@ def _setup_openrouter() -> tuple[str, dict[str, Any]]:
     }
 
 
-def _setup_custom() -> tuple[str, dict[str, Any]]:
+def _setup_custom(label: str = "Choose your smart model:") -> tuple[str, dict[str, Any]]:
+    # label accepted for API uniformity with other _setup_* funcs; unused here
+    # (_setup_custom uses a free-text prompt, no model picker)
     _info("Any OpenAI-compatible endpoint works (vLLM, Together AI, Groq, etc.)")
     print()
     api_base = _prompt("Base URL (e.g. https://api.groq.com/openai/v1)")
@@ -295,7 +646,7 @@ def _setup_fast_backend(smart_name: str, smart_cfg: dict) -> tuple[str, dict] | 
     _header("Fast / Cheap Model")
     provider_idx = _choice("Provider:", _PROVIDERS, default=0)
     _header(_PROVIDERS[provider_idx].split("  ")[0].strip())
-    _, backend_cfg = _PROVIDER_SETUP[provider_idx]()
+    _, backend_cfg = _PROVIDER_SETUP[provider_idx](label="Choose your fast model:")
     return "fast", backend_cfg
 
 
@@ -376,10 +727,19 @@ def run_wizard(vault_path: Path) -> None:
             return
         print()
 
-    # ── LLM Backend ──────────────────────────────────────────────────────────
-    _header("LLM Backend")
-    _info("llm-wiki uses LiteLLM to route requests to any model provider.")
-    _info("Which provider do you want to use?")
+    # ── Model tier framing ────────────────────────────────────────────────────
+    _header("LLM Backends")
+    _info("llm-wiki routes tasks across two model tiers:")
+    _info("")
+    _info("  Smart model — depth work: research queries, document ingestion,")
+    _info("                adversarial fact-checking. Use your most capable model.")
+    _info("")
+    _info("  Fast model  — high-frequency background: librarian, compliance,")
+    _info("                commit summaries. Throughput matters more than depth.")
+    _info("")
+    _info("You can use the same model for both — just skip the fast model step.")
+    print()
+    _info("Which provider do you want for your smart model?")
     print()
 
     provider_idx = _choice("Provider:", _PROVIDERS, default=0)
@@ -442,21 +802,45 @@ def run_wizard(vault_path: Path) -> None:
     with open(config_path, "w") as f:
         yaml.dump(config, f, default_flow_style=False, allow_unicode=True, sort_keys=False)
 
+    # ── Agent framework integration ───────────────────────────────────────────
+    print()
+    _header("Agent Framework Integration")
+    framework_result = _setup_agent_framework()
+
     # ── Summary ───────────────────────────────────────────────────────────────
     _header("Setup Complete")
 
     has_fast = "fast" in backends
+    framework = framework_result.get("framework") if framework_result else "skipped"
+    config_missing = framework_result.get("config_missing", False) if framework_result else False
+
+    # Framework display label
+    framework_label = {
+        None: "Not configured",
+        "hermes": f"Hermes  ({framework_result.get('skills_installed', 0)} skills installed)",
+        "claude_code": "Claude Code  (MCP registered)",
+        "agent_guided": "Agent-guided  (see instructions above)",
+        "manual": "Manual  (see snippets above)",
+        "skipped": "Not configured",
+    }.get(framework, framework)
+
     features = [
         (f"Smart model  ({backend_cfg['model']})", True, None),
-        (f"Fast model  ({backends['fast']['model']})" if has_fast
-         else "Fast model  (using smart model for all tasks)",
-         has_fast, "run wizard again to configure"),
+        (
+            f"Fast model  ({backends['fast']['model']})" if has_fast
+            else "Fast model  (using smart model for all tasks)",
+            has_fast,
+            "run wizard again to configure",
+        ),
         ("Embeddings / semantic search", embed_enabled,
          "disable with search.embeddings_enabled: false"),
+        (f"Agent framework  {framework_label}",
+         framework not in ("skipped", "manual"),
+         "run wizard again to configure"),
     ]
 
     enabled = sum(1 for _, ok, _ in features if ok)
-    _info(f"{enabled}/{len(features)} features configured:")
+    _info(f"{enabled}/{len(features)} configured:")
     print()
     for name, ok, hint in features:
         if ok:
@@ -464,6 +848,11 @@ def run_wizard(vault_path: Path) -> None:
         else:
             dim = f"  {_col(f'({hint})', _C.DIM)}" if hint else ""
             print(f"   {_col('✗', _C.RED)} {name}{dim}")
+
+    if config_missing:
+        print()
+        _warn("No LLM backend configured yet.")
+        _info("Run: llm-wiki configure  to set up your models before starting the daemon.")
 
     print()
     _ok(f"Config written to {config_path}")
