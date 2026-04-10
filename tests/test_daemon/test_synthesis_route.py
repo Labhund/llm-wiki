@@ -221,3 +221,77 @@ async def test_dispatch_synthesis_action_update_fallback_creates(server, wiki_di
         await server._dispatch_synthesis_action("q?", result, resp)
     pages = list((wiki_dir / "wiki").glob("*.md"))
     assert len(pages) == 1  # fallback created the page
+
+
+@pytest.mark.asyncio
+async def test_synthesis_page_written_after_cited_query(tmp_path):
+    """End-to-end: query with citations → synthesis page appears in wiki/."""
+    from llm_wiki.config import WikiConfig
+    from llm_wiki.traverse.engine import TraversalEngine
+    from llm_wiki.traverse.llm_client import LLMClient, LLMResponse
+    from llm_wiki.vault import Vault
+
+    # Set up a minimal vault with one ingest page
+    wiki_dir = tmp_path / "wiki"
+    wiki_dir.mkdir()
+    (tmp_path / "raw").mkdir()
+    ingest_page = wiki_dir / "boltz-2.md"
+    ingest_page.write_text(
+        "---\ntitle: Boltz-2\ncreated_by: ingest\n---\n\n"
+        "%% section: overview %%\n\nBoltz-2 uses diffusion for structure prediction.\n",
+        encoding="utf-8",
+    )
+
+    vault = Vault.scan(tmp_path)
+    config = WikiConfig()
+
+    # Mock LLM: traverse turn 0 returns done; synthesize returns create action + prose
+    call_count = 0
+
+    async def mock_complete(messages, temperature=0.7, priority="query", label="unknown", **kw):
+        nonlocal call_count
+        call_count += 1
+        if call_count == 1:
+            return LLMResponse(
+                content='{"salient_points": "Boltz-2 uses diffusion [[boltz-2]].", '
+                        '"remaining_questions": [], "next_candidates": [], '
+                        '"hypothesis": "diffusion model", "answer_complete": true}',
+                input_tokens=100, output_tokens=50,
+            )
+        else:
+            return LLMResponse(
+                content='{"action": "create", "title": "Boltz-2 Structure Prediction", '
+                        '"sources": ["wiki/boltz-2.md"]}\n\n'
+                        'Boltz-2 uses a diffusion approach [[boltz-2]].',
+                input_tokens=200, output_tokens=80,
+            )
+
+    llm = object.__new__(LLMClient)
+    llm.complete = mock_complete
+    llm._model = "mock/test"
+
+    engine = TraversalEngine(vault, llm, config, vault_root=tmp_path)
+    result = await engine.query("How does Boltz-2 work?")
+
+    assert result.synthesis_action is not None
+    assert result.synthesis_action["action"] == "create"
+    assert "Boltz-2 uses a diffusion" in result.answer
+
+    # Simulate server write (what _handle_query does after getting result)
+    from llm_wiki.daemon.server import DaemonServer
+    srv = object.__new__(DaemonServer)
+    srv._vault_root = tmp_path
+    srv._config = config
+    srv._vault = vault
+    srv._title_to_slug = {}
+
+    with patch.object(type(srv), "rescan", new_callable=AsyncMock):
+        resp = {"answer": result.answer, "citations": result.citations}
+        await srv._dispatch_synthesis_action("How does Boltz-2 work?", result, resp)
+
+    synthesis_pages = [p for p in wiki_dir.glob("*.md") if p.stem != "boltz-2"]
+    assert len(synthesis_pages) == 1
+    content = synthesis_pages[0].read_text()
+    assert "type: synthesis" in content
+    assert "Boltz-2 uses a diffusion" in content
+    assert "created_by: query" in content
