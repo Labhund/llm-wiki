@@ -28,6 +28,9 @@ class ConceptPlan:
     name: str                                   # URL-safe slug: "srna-embeddings"
     title: str                                  # Human-readable: "sRNA Embeddings"
     passages: list[str] = field(default_factory=list)
+    action: str = "create"                      # "create" | "update"
+    section_names: list[str] = field(default_factory=list)
+    cluster: str = ""                           # target wiki/ subdirectory; "" = root
 
 
 @dataclass
