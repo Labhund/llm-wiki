@@ -2,11 +2,19 @@ from __future__ import annotations
 
 import json
 import re
+from dataclasses import dataclass, field
 from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:
     from llm_wiki.ingest.agent import ConceptPlan
     from llm_wiki.ingest.page_writer import PageSection
+
+
+@dataclass
+class SynthesisResult:
+    """Result of parsing a content-synthesis LLM response."""
+    sections: "list[PageSection]" = field(default_factory=list)
+    summary: str = ""
 
 
 _CONCEPT_EXTRACTION_SYSTEM = """\
@@ -133,6 +141,7 @@ def parse_concept_extraction(text: str) -> list[ConceptPlan]:
                 name=c["name"],
                 title=c.get("title", c["name"]),
                 passages=c.get("passages") if isinstance(c.get("passages"), list) else [],
+                cluster=c.get("cluster", "") or "",
             )
             for c in concepts
             if isinstance(c, dict) and isinstance(c.get("name"), str) and c.get("name")
@@ -241,6 +250,7 @@ You are writing wiki content for a specific concept using verbatim source passag
 Respond with a SINGLE JSON object:
 
 {
+  "summary": "One sentence (≤20 words) describing the concept.",
   "sections": [
     {
       "name": "section-slug",
@@ -365,23 +375,29 @@ def parse_passage_collection(text: str, concept_names: list[str]) -> dict[str, l
         return {}
 
 
-def parse_content_synthesis(text: str) -> "list[PageSection]":
-    """Parse content synthesis response → list of PageSection objects."""
+def parse_content_synthesis(text: str) -> SynthesisResult:
+    """Parse content synthesis response → SynthesisResult with sections and summary."""
     from llm_wiki.ingest.page_writer import PageSection
     try:
         data = _parse_json_response(text)
-        sections = data.get("sections") or [] if isinstance(data, dict) else []
-        return [
+        if not isinstance(data, dict):
+            return SynthesisResult()
+        sections_raw = data.get("sections") or []
+        sections = [
             PageSection(
                 name=s["name"],
                 heading=s.get("heading", s["name"].replace("-", " ").title()),
                 content=s.get("content", ""),
             )
-            for s in sections
+            for s in sections_raw
             if isinstance(s, dict) and isinstance(s.get("name"), str) and s["name"]
         ]
+        summary = data.get("summary") or ""
+        if not isinstance(summary, str):
+            summary = ""
+        return SynthesisResult(sections=sections, summary=summary)
     except (ValueError, KeyError, TypeError):
-        return []
+        return SynthesisResult()
 
 
 def parse_page_content(text: str) -> list[PageSection]:

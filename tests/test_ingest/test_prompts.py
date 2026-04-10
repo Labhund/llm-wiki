@@ -170,10 +170,11 @@ def test_parse_content_synthesis_valid():
         {"name": "overview", "heading": "Overview", "content": "[[boltz-2]] text [[raw/paper.pdf]]."}
     ]})
     result = parse_content_synthesis(text)
-    assert len(result) == 1
-    assert result[0].name == "overview"
-    assert "boltz-2" in result[0].content
+    assert len(result.sections) == 1
+    assert result.sections[0].name == "overview"
+    assert "boltz-2" in result.sections[0].content
 
 
 def test_parse_content_synthesis_invalid_returns_empty():
-    assert parse_content_synthesis("not json") == []
+    result = parse_content_synthesis("not json")
+    assert result.sections == []
