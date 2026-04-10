@@ -79,7 +79,7 @@ class AdversaryAgent:
             page = self._vault.read_page(name)
             if page is None:
                 continue
-            if page.frontmatter.get("status") == "synthesis":
+            if page.frontmatter.get("type") == "synthesis":
                 continue  # resonance agent handles synthesis pages; adversary skips them
             all_claims.extend(extract_claims(page))
 

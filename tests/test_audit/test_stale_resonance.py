@@ -73,7 +73,7 @@ def test_synthesis_without_resonance_flags_old_synthesis_page(tmp_path: Path):
     old_date = (datetime.date.today() - datetime.timedelta(days=200)).isoformat()
     page_path = wiki_dir / "syn-page.md"
     page_path.write_text(
-        f"---\nstatus: synthesis\ningested: {old_date}\n---\nContent.\n"
+        f"---\ntype: synthesis\ningested: {old_date}\n---\nContent.\n"
     )
 
     config = WikiConfig()
@@ -88,7 +88,7 @@ def test_synthesis_without_resonance_skipped_when_disabled(tmp_path: Path):
     old_date = (datetime.date.today() - datetime.timedelta(days=200)).isoformat()
     page_path = wiki_dir / "syn-page.md"
     page_path.write_text(
-        f"---\nstatus: synthesis\ningested: {old_date}\n---\nContent.\n"
+        f"---\ntype: synthesis\ningested: {old_date}\n---\nContent.\n"
     )
 
     config = WikiConfig()
@@ -102,7 +102,7 @@ def test_synthesis_without_resonance_skips_if_resonance_talk_exists(tmp_path: Pa
     old_date = (datetime.date.today() - datetime.timedelta(days=200)).isoformat()
     page_path = wiki_dir / "syn-page.md"
     page_path.write_text(
-        f"---\nstatus: synthesis\ningested: {old_date}\n---\nContent.\n"
+        f"---\ntype: synthesis\ningested: {old_date}\n---\nContent.\n"
     )
     _write_resonance_entry(page_path, days_old=10)
 

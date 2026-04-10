@@ -14,9 +14,9 @@ def _make_reviewer(tmp_path: Path) -> ComplianceReviewer:
 
 
 def test_synthesis_page_skips_citation_check(tmp_path: Path):
-    """A page with status: synthesis must not get a missing-citation issue."""
+    """A page with type: synthesis must not get a missing-citation issue."""
     reviewer = _make_reviewer(tmp_path)
-    content = "---\nstatus: synthesis\n---\nA claim with absolutely no citation here.\n"
+    content = "---\ntype: synthesis\n---\nA claim with absolutely no citation here.\n"
     page = tmp_path / "wiki" / "syn-page.md"
     page.write_text(content)
     result = reviewer.review_change(page, None, content)
@@ -26,7 +26,7 @@ def test_synthesis_page_skips_citation_check(tmp_path: Path):
 def test_synthesis_page_still_gets_structural_drift_check(tmp_path: Path):
     """Synthesis pages still get %% markers auto-inserted on structural drift."""
     reviewer = _make_reviewer(tmp_path)
-    content = "---\nstatus: synthesis\n---\n## My Heading\n\nSome uncited content.\n"
+    content = "---\ntype: synthesis\n---\n## My Heading\n\nSome uncited content.\n"
     page = tmp_path / "wiki" / "syn-drift.md"
     page.write_text(content)
     result = reviewer.review_change(page, None, content)

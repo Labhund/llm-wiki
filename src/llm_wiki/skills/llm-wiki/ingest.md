@@ -189,7 +189,7 @@ When ingest analysis produces a genuinely original insight — a connection, pat
 
 ```yaml
 ---
-status: synthesis
+type: synthesis
 title: Your Synthesis Title
 ---
 ```

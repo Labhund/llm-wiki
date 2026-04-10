@@ -10,11 +10,11 @@ from llm_wiki.issues.queue import IssueQueue
 from llm_wiki.page import Page
 
 
-def _make_page(slug: str, status: str | None, has_claim: bool, tmp_path: Path) -> Page:
+def _make_page(slug: str, type_: str | None, has_claim: bool, tmp_path: Path) -> Page:
     body = ""
     if has_claim:
         body = "A verifiable claim [[raw/source.pdf]].\n"
-    fm = f"---\nstatus: {status}\n---\n" if status else "---\ntitle: Normal\n---\n"
+    fm = f"---\ntype: {type_}\n---\n" if type_ else "---\ntitle: Normal\n---\n"
     path = tmp_path / "wiki" / f"{slug}.md"
     path.parent.mkdir(exist_ok=True)
     path.write_text(fm + body)
@@ -23,7 +23,7 @@ def _make_page(slug: str, status: str | None, has_claim: bool, tmp_path: Path) -
 
 @pytest.mark.asyncio
 async def test_adversary_skips_synthesis_page_claims(tmp_path: Path):
-    """Claims from status:synthesis pages must never be processed."""
+    """Claims from type:synthesis pages must never be processed."""
     wiki_dir = tmp_path / "wiki"
     wiki_dir.mkdir(exist_ok=True)
 

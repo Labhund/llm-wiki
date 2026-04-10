@@ -629,7 +629,7 @@ def find_synthesis_without_resonance(vault_root: Path, config: WikiConfig) -> Ch
         except yaml.YAMLError:
             continue
 
-        if fm.get("status") != "synthesis":
+        if fm.get("type") != "synthesis":
             continue
 
         ingested_str = fm.get("ingested")

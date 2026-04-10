@@ -65,7 +65,23 @@ notes, say so — do not invent it.
 
 - Every factual claim MUST cite a wiki page: [[page-name]] or [[page-name#section]]
 - Do not invent information not in your research notes
-- Be thorough enough that the answer stands alone; be no longer than it needs to be"""
+- Be thorough enough that the answer stands alone; be no longer than it needs to be
+
+## Synthesis Cache
+
+When existing synthesis pages are provided in the prompt, respond with a JSON \
+action object as the VERY FIRST thing in your response (before any prose):
+
+- {\"action\": \"accept\", \"page\": \"<slug>\"} — existing page fully answers the query; \
+emit NO prose after the JSON (the server will return the existing page verbatim)
+- {\"action\": \"update\", \"page\": \"<slug>\", \"title\": \"<title>\", \
+\"sources\": [\"wiki/page.md\"]} — existing page found but new information surfaced; \
+write the updated page body as prose after the JSON
+- {\"action\": \"create\", \"title\": \"<title>\", \"sources\": [\"wiki/page.md\"]} — no \
+relevant existing page; write the new page body as prose after the JSON
+
+If no existing synthesis pages are provided, or if the answer has no wiki citations, \
+omit the JSON action entirely and write only prose."""
 
 
 def load_prompt(vault_root: Path | None, name: str) -> str:
@@ -117,13 +133,31 @@ def compose_synthesize_messages(
     query: str,
     memory: WorkingMemory,
     system_prompt: str,
+    *,
+    synthesis_candidates: list[tuple[str, str, str]] | None = None,
 ) -> list[dict[str, str]]:
-    """Build the message list for final synthesis."""
+    """Build the message list for final synthesis.
+
+    synthesis_candidates: list of (slug, original_query, page_content) tuples
+    for synthesis pages found in the BM25 search results.
+    """
     notes = memory.to_context_text() or "No research notes available."
     user_content = (
         f"## Question\n{query}\n\n"
         f"## Research Notes\n{notes}"
     )
+
+    if synthesis_candidates:
+        pages_block = "\n\n".join(
+            f"### [[{slug}]]\noriginal query: {orig_query}\n\n{content}"
+            for slug, orig_query, content in synthesis_candidates
+        )
+        user_content += (
+            f"\n\n## Existing Synthesis Pages\n"
+            f"The following synthesis pages were found that may already answer this query.\n"
+            f"Inspect them carefully before generating a new answer.\n\n"
+            f"{pages_block}"
+        )
 
     return [
         {"role": "system", "content": system_prompt},

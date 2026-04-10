@@ -401,7 +401,7 @@ class ComplianceReviewer:
 
     @staticmethod
     def _is_synthesis_page(content: str) -> bool:
-        """True iff the page frontmatter contains `status: synthesis`."""
+        """True iff the page frontmatter contains `type: synthesis`."""
         if not content.startswith("---\n"):
             return False
         try:
@@ -414,4 +414,4 @@ class ComplianceReviewer:
             fm = yaml.safe_load(fm_text) or {}
         except yaml.YAMLError:
             return False
-        return fm.get("status") == "synthesis"
+        return fm.get("type") == "synthesis"
