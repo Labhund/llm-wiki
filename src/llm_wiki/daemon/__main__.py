@@ -57,6 +57,10 @@ async def run(vault_root: Path) -> None:
     loop = asyncio.get_event_loop()
     for sig in (signal.SIGTERM, signal.SIGINT):
         loop.add_signal_handler(sig, handle_signal)
+    # Ignore SIGHUP — terminal close should not kill the background daemon.
+    # start_new_session=True puts us in our own session but some terminal
+    # emulators (e.g. Ghostty) still route SIGHUP to their child processes.
+    signal.signal(signal.SIGHUP, signal.SIG_IGN)
 
     logger.info("Daemon ready (PID %d, vault %s)", os.getpid(), vault_root)
 
