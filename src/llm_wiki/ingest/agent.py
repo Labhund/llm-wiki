@@ -307,20 +307,34 @@ class IngestAgent:
         self,
         source_path: Path,
         vault_root: Path,
-        proposals_dir: Path,
+        proposals_dir: "Path | None",
         manifest_lines: list[str],
         *,
         author: str = "cli",
         dry_run: bool = False,
+        connection_id: str = "cli",
+        write_service: "PageWriteService | None" = None,
+        on_progress: "Callable[[dict], Awaitable[None]] | None" = None,
     ) -> IngestResult:
-        """Multi-chunk wiki-aware ingest that writes proposals instead of direct pages.
+        """Multi-chunk wiki-aware ingest: deep-read synthesis per concept.
+
+        Output mode is determined by the combination of arguments:
+        - ``write_service`` provided → write pages directly (streaming live ingest)
+        - ``proposals_dir`` provided → write proposal files for librarian review
+        - Both provided → write_service takes precedence
+        - Neither → concepts are identified but nothing is written (dry_run implies this)
 
         Args:
             source_path:    Absolute path to source (must be inside vault_root/raw/).
             vault_root:     Vault root directory.
             proposals_dir:  Where to write proposal files (inbox/proposals/).
+                            Pass None when using write_service for direct writes.
             manifest_lines: Existing wiki manifest, one "slug  title" line each.
-            author:         Who triggered the ingest (for proposal metadata).
+            author:         Who triggered the ingest (for proposal/page metadata).
+            dry_run:        Stop after overview pass — returns concept plan only.
+            connection_id:  Session ID forwarded to write_service.
+            write_service:  If provided, write pages directly via supervised surface.
+            on_progress:    Async callback for streaming progress frames.
         """
         from llm_wiki.ingest.source_meta import init_companion, write_companion_body
 
@@ -330,6 +344,9 @@ class IngestAgent:
             source_ref = str(source_path.relative_to(vault_root))
         except ValueError:
             source_ref = source_path.name
+
+        if on_progress:
+            await on_progress({"stage": "extracting"})
 
         extraction = await extract_text(source_path, ingest_config=self._config.ingest)
         if not extraction.success:
@@ -375,6 +392,9 @@ class IngestAgent:
             logger.info("No concepts identified in %s", source_path)
             return result
 
+        if on_progress:
+            await on_progress({"stage": "concepts_found", "count": len(concepts)})
+
         # Dry-run: stop after overview — one LLM call on chunk[0], same prompt as live ingest
         if dry_run:
             result.dry_run = True
@@ -389,6 +409,9 @@ class IngestAgent:
                 ))
             return result
 
+        if on_progress:
+            await on_progress({"stage": "building_context", "total_chunks": len(chunks)})
+
         # Build paper context: full text if it fits, rolling digest if too large
         paper_context = await self._build_paper_context(
             extraction.content,
@@ -400,8 +423,8 @@ class IngestAgent:
         ocr_sourced = extraction.extraction_method == "image_ocr"
         synth_temp = self._config.ingest.synthesis_temperature
 
-        # Deep-read synthesis + proposal write per concept
-        for concept in concepts:
+        # Deep-read synthesis + write per concept
+        for i, concept in enumerate(concepts):
             synth_msgs = compose_deep_read_synthesis_messages(
                 concept=concept,
                 paper_context=paper_context,
@@ -419,43 +442,59 @@ class IngestAgent:
                 logger.warning("No sections generated for %r — skipping", concept.name)
                 continue
 
-            # Ground key sentences from the synthesized content against the source.
-            # We sample the first sentence of each non-references section as a claim
-            # and measure bigram F1 against the full paper — no verbatim passages required.
-            proposal_passages: list[ProposalPassage] = []
-            for idx, section in enumerate(s for s in sections if s.name != "references"):
-                first_sentence = section.content.split(".")[0].strip() if section.content else ""
-                if not first_sentence:
-                    continue
-                gr = ground_passage(first_sentence, extraction.content, ocr_sourced=ocr_sourced)
-                proposal_passages.append(ProposalPassage(
-                    id=f"p{idx + 1}",
-                    text=first_sentence,
-                    claim=first_sentence[:120],
-                    score=gr.score,
-                    method=gr.method,
-                    verifiable=gr.verifiable,
-                    ocr_sourced=gr.ocr_sourced,
-                ))
-
-            proposal = Proposal(
-                source=source_ref,
-                target_page=concept.name,
-                action=concept.action,
-                proposed_by=author,
-                created=datetime.datetime.now(datetime.timezone.utc).isoformat(),
-                extraction_method=extraction.extraction_method,
-                sections=sections,
-                passages=proposal_passages,
-                quality_warning=result.extraction_warning,
-                target_cluster=concept.cluster,
-            )
-            write_proposal(proposals_dir, proposal, source_slug=source_slug)
-
-            if concept.action == "create":
-                result.pages_created.append(concept.name)
+            if write_service is not None:
+                # Direct write via supervised write surface (streaming live ingest)
+                await self._write_via_service(
+                    write_service, wiki_dir, concept, sections, source_ref,
+                    author=author, connection_id=connection_id, result=result,
+                )
+                if on_progress:
+                    action = "created" if concept.name in result.pages_created else "updated"
+                    await on_progress({
+                        "stage": "concept_done",
+                        "name": concept.name,
+                        "title": concept.title,
+                        "action": action,
+                        "num": i + 1,
+                        "total": len(concepts),
+                    })
             else:
-                result.pages_updated.append(concept.name)
+                # Proposal write path — include grounding evidence for librarian review
+                proposal_passages: list[ProposalPassage] = []
+                for idx, section in enumerate(s for s in sections if s.name != "references"):
+                    first_sentence = section.content.split(".")[0].strip() if section.content else ""
+                    if not first_sentence:
+                        continue
+                    gr = ground_passage(first_sentence, extraction.content, ocr_sourced=ocr_sourced)
+                    proposal_passages.append(ProposalPassage(
+                        id=f"p{idx + 1}",
+                        text=first_sentence,
+                        claim=first_sentence[:120],
+                        score=gr.score,
+                        method=gr.method,
+                        verifiable=gr.verifiable,
+                        ocr_sourced=gr.ocr_sourced,
+                    ))
+
+                proposal = Proposal(
+                    source=source_ref,
+                    target_page=concept.name,
+                    action=concept.action,
+                    proposed_by=author,
+                    created=datetime.datetime.now(datetime.timezone.utc).isoformat(),
+                    extraction_method=extraction.extraction_method,
+                    sections=sections,
+                    passages=proposal_passages,
+                    quality_warning=result.extraction_warning,
+                    target_cluster=concept.cluster,
+                )
+                if proposals_dir is not None:
+                    write_proposal(proposals_dir, proposal, source_slug=source_slug)
+
+                if concept.action == "create":
+                    result.pages_created.append(concept.name)
+                else:
+                    result.pages_updated.append(concept.name)
 
         return result
 

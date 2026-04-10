@@ -1581,7 +1581,12 @@ class DaemonServer:
         request: dict,
         writer: asyncio.StreamWriter,
     ) -> None:
-        """Handle a streaming ingest request, writing frames directly to writer."""
+        """Handle a streaming ingest request, writing frames directly to writer.
+
+        Uses the deep-read proposals pipeline (ingest_as_proposals) with
+        write_service wired in for direct page writes — same synthesis quality
+        as the proposals path, none of the old shallow extraction path.
+        """
         if "source_path" not in request:
             await write_message(writer, {
                 "type": "error", "status": "error",
@@ -1597,11 +1602,11 @@ class DaemonServer:
 
         from llm_wiki.ingest.agent import IngestAgent
         from llm_wiki.traverse.llm_client import LLMClient
+        from llm_wiki.vault import Vault
 
         author = request.get("author", "cli")
         connection_id = request["connection_id"]
         source_path = Path(request["source_path"])
-        source_type = request.get("source_type", "paper")
         backend = self._config.llm.resolve("ingest")
         llm = LLMClient(
             self._llm_queue,
@@ -1610,6 +1615,12 @@ class DaemonServer:
             api_key=backend.api_key,
         )
         agent = IngestAgent(llm, self._config)
+
+        vault = Vault.scan(self._vault_root, self._config)
+        manifest_lines = [
+            f"{name}  '{entry.title}'"
+            for name, entry in vault.manifest_entries().items()
+        ]
 
         concepts_written = 0
 
@@ -1620,13 +1631,14 @@ class DaemonServer:
                 concepts_written += 1
 
         try:
-            result = await agent.ingest(
-                source_path, self._vault_root,
+            result = await agent.ingest_as_proposals(
+                source_path=source_path,
+                vault_root=self._vault_root,
+                proposals_dir=None,
+                manifest_lines=manifest_lines,
                 author=author,
                 connection_id=connection_id,
                 write_service=self._page_write_service,
-                dry_run=False,
-                source_type=source_type,
                 on_progress=on_progress,
             )
         except Exception as exc:
