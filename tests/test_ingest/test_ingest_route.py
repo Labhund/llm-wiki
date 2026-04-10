@@ -66,3 +66,85 @@ async def test_ingest_route_missing_connection_id_returns_error(server_with_inge
     })
     assert resp["status"] == "error"
     assert "connection_id" in resp["message"]
+
+
+async def _stream_request(sock_path: Path, msg: dict) -> list[dict]:
+    """Read all frames from a streaming ingest request."""
+    reader, writer = await asyncio.open_unix_connection(str(sock_path))
+    frames = []
+    try:
+        await write_message(writer, msg)
+        while True:
+            frame = await read_message(reader)
+            frames.append(frame)
+            if frame.get("type") in ("done", "error"):
+                break
+    finally:
+        writer.close()
+        await writer.wait_closed()
+    return frames
+
+
+@pytest.mark.asyncio
+async def test_ingest_stream_route_sends_progress_and_done(server_with_ingest, monkeypatch):
+    """Streaming ingest sends progress frames then a done frame."""
+    server, sock_path = server_with_ingest
+
+    async def fake_ingest(self_agent, source_path, vault_root, *, on_progress=None, **kwargs):
+        if on_progress:
+            await on_progress({"stage": "extracting"})
+            await on_progress({"stage": "concepts_found", "count": 2})
+            await on_progress({
+                "stage": "concept_done", "name": "foo", "title": "Foo",
+                "action": "created", "num": 1, "total": 2,
+            })
+            await on_progress({
+                "stage": "concept_done", "name": "bar", "title": "Bar",
+                "action": "updated", "num": 2, "total": 2,
+            })
+        from llm_wiki.ingest.agent import IngestResult
+        from pathlib import Path as _Path
+        result = IngestResult(
+            source_path=_Path(source_path),
+            pages_created=["foo"],
+            pages_updated=["bar"],
+        )
+        return result
+
+    monkeypatch.setattr("llm_wiki.ingest.agent.IngestAgent.ingest", fake_ingest)
+
+    frames = await _stream_request(sock_path, {
+        "type": "ingest",
+        "source_path": "/any/path.md",
+        "author": "test",
+        "connection_id": "test-conn",
+        "stream": True,
+    })
+
+    types = [f["type"] for f in frames]
+    assert types == ["progress", "progress", "progress", "progress", "done"]
+    assert frames[0]["stage"] == "extracting"
+    assert frames[1]["stage"] == "concepts_found"
+    assert frames[1]["count"] == 2
+    assert frames[2]["stage"] == "concept_done"
+    assert frames[2]["name"] == "foo"
+    assert frames[4]["status"] == "ok"
+    assert frames[4]["pages_created"] == 1
+    assert frames[4]["pages_updated"] == 1
+
+
+@pytest.mark.asyncio
+async def test_ingest_stream_route_missing_source_path_returns_error(server_with_ingest):
+    """Streaming ingest validates required fields, sends error frame."""
+    server, sock_path = server_with_ingest
+
+    frames = await _stream_request(sock_path, {
+        "type": "ingest",
+        "connection_id": "test-conn",
+        "stream": True,
+        # source_path missing
+    })
+
+    assert len(frames) == 1
+    assert frames[0]["status"] == "error"
+    assert "source_path" in frames[0]["message"]

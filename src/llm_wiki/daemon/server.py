@@ -433,6 +433,9 @@ class DaemonServer:
     ) -> None:
         try:
             request = await read_message(reader)
+            if request.get("type") == "ingest" and request.get("stream"):
+                await self._handle_ingest_stream(request, writer)
+                return
             response = await self._route(request)
             await write_message(writer, response)
         except Exception as exc:
@@ -1231,8 +1234,15 @@ class DaemonServer:
                 "message": "DRY RUN — no pages written",
             }
 
-        # Live ingest response (unchanged)
-        # Apply response cap (mcp.ingest_response_max_pages)
+        # Live ingest response
+        return self._ingest_result_to_response(result)
+
+    def _ingest_result_to_response(self, result: "IngestResult") -> dict:
+        """Build the live-ingest response dict from an IngestResult.
+
+        Shared by _handle_ingest (sync response) and _handle_ingest_stream
+        (done frame). The streaming path adds "type": "done" on top.
+        """
         cap = self._config.mcp.ingest_response_max_pages
         all_pages = result.pages_created + result.pages_updated
         truncated = len(all_pages) > cap
@@ -1253,7 +1263,6 @@ class DaemonServer:
                 "code": "extraction-quality",
                 "message": result.extraction_warning,
             })
-
         response = {
             "status": "ok",
             "pages_created": len(result.pages_created),
@@ -1268,6 +1277,78 @@ class DaemonServer:
         if warnings:
             response["warnings"] = warnings
         return response
+
+    async def _handle_ingest_stream(
+        self,
+        request: dict,
+        writer: asyncio.StreamWriter,
+    ) -> None:
+        """Handle a streaming ingest request, writing frames directly to writer."""
+        if "source_path" not in request:
+            await write_message(writer, {
+                "type": "error", "status": "error",
+                "message": "Missing required field: source_path",
+            })
+            return
+        if "connection_id" not in request:
+            await write_message(writer, {
+                "type": "error", "status": "error",
+                "message": "Missing required field: connection_id",
+            })
+            return
+
+        from llm_wiki.ingest.agent import IngestAgent
+        from llm_wiki.traverse.llm_client import LLMClient
+
+        author = request.get("author", "cli")
+        connection_id = request["connection_id"]
+        source_path = Path(request["source_path"])
+        source_type = request.get("source_type", "paper")
+        backend = self._config.llm.resolve("ingest")
+        llm = LLMClient(
+            self._llm_queue,
+            model=backend.model,
+            api_base=backend.api_base,
+            api_key=backend.api_key,
+        )
+        agent = IngestAgent(llm, self._config)
+
+        concepts_written = 0
+
+        async def on_progress(frame: dict) -> None:
+            nonlocal concepts_written
+            await write_message(writer, {"type": "progress", **frame})
+            if frame.get("stage") == "concept_done":
+                concepts_written += 1
+
+        try:
+            result = await agent.ingest(
+                source_path, self._vault_root,
+                author=author,
+                connection_id=connection_id,
+                write_service=self._page_write_service,
+                dry_run=False,
+                source_type=source_type,
+                on_progress=on_progress,
+            )
+        except Exception as exc:
+            logger.exception("Streaming ingest failed after %d concepts", concepts_written)
+            await write_message(writer, {
+                "type": "error",
+                "status": "error",
+                "message": str(exc),
+                "concepts_written": concepts_written,
+            })
+            return
+        finally:
+            try:
+                await self.rescan()
+            except Exception:
+                logger.warning("Failed to rescan vault after streaming ingest")
+
+        done_frame = self._ingest_result_to_response(result)
+        done_frame["type"] = "done"
+        await write_message(writer, done_frame)
 
 
 def _serialize_result(r: SearchResult) -> dict:
