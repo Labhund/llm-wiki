@@ -276,6 +276,8 @@ class DaemonServer:
             except Exception:
                 logger.exception("execute_proposal_merges failed — audit result unaffected")
 
+        _maint_timeout = float(self._config.maintenance.maintenance_llm_timeout)
+
         async def run_librarian() -> None:
             from llm_wiki.issues.queue import IssueQueue
             from llm_wiki.librarian.agent import LibrarianAgent
@@ -288,6 +290,7 @@ class DaemonServer:
                 model=backend.model,
                 api_base=backend.api_base,
                 api_key=backend.api_key,
+                timeout=_maint_timeout,
             )
             agent = LibrarianAgent(self._vault, self._vault_root, llm, queue, self._config)
             result = await agent.run()
@@ -308,6 +311,7 @@ class DaemonServer:
                 model=backend.model,
                 api_base=backend.api_base,
                 api_key=backend.api_key,
+                timeout=_maint_timeout,
             )
             agent = LibrarianAgent(self._vault, self._vault_root, llm, queue, self._config)
             count = await agent.recalc_authority()
@@ -325,6 +329,7 @@ class DaemonServer:
                 model=backend.model,
                 api_base=backend.api_base,
                 api_key=backend.api_key,
+                timeout=_maint_timeout,
             )
             agent = AdversaryAgent(self._vault, self._vault_root, llm, queue, self._config)
             result = await agent.run()
@@ -346,6 +351,7 @@ class DaemonServer:
                 model=backend.model,
                 api_base=backend.api_base,
                 api_key=backend.api_key,
+                timeout=_maint_timeout,
             )
             agent = LibrarianAgent(self._vault, self._vault_root, llm, queue, self._config)
             count = await agent.refresh_talk_summaries()

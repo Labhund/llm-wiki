@@ -132,6 +132,7 @@ class MaintenanceConfig:
     talk_summary_min_new_entries: int = 5
     talk_summary_min_interval_seconds: int = 3600
     failure_escalation_threshold: int = 3
+    maintenance_llm_timeout: int = 120  # seconds per LLM attempt; None disables
     # Cluster D — synthesis + resonance
     synthesis_lint_enabled: bool = False
     synthesis_lint_months: int = 6
