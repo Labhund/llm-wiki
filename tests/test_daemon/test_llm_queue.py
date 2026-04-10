@@ -3,7 +3,7 @@ import time
 
 import pytest
 
-from llm_wiki.daemon.llm_queue import LimitExceededError, LLMQueue
+from llm_wiki.daemon.llm_queue import ActiveJob, LimitExceededError, LLMQueue
 
 
 @pytest.mark.asyncio
@@ -151,3 +151,93 @@ async def test_no_limit_enforcement_when_limits_not_set():
 
     result = await queue.submit(dummy, priority="maintenance")
     assert result == "ok"
+
+
+@pytest.mark.asyncio
+async def test_active_jobs_contains_label():
+    """active_jobs exposes the label of an in-flight job."""
+    queue = LLMQueue(max_concurrent=2)
+    started = asyncio.Event()
+    finish = asyncio.Event()
+
+    async def blocking():
+        started.set()
+        await finish.wait()
+
+    task = asyncio.create_task(
+        queue.submit(blocking, priority="maintenance", label="adversary:verify:protein-dj")
+    )
+    await started.wait()
+
+    jobs = queue.active_jobs
+    assert len(jobs) == 1
+    assert jobs[0].label == "adversary:verify:protein-dj"
+    assert jobs[0].priority == "maintenance"
+    assert jobs[0].elapsed_s >= 0.0
+
+    finish.set()
+    await task
+    assert queue.active_jobs == []
+
+
+@pytest.mark.asyncio
+async def test_pending_count_while_waiting():
+    """pending_count reflects tasks waiting for a semaphore slot."""
+    queue = LLMQueue(max_concurrent=1)
+    started = asyncio.Event()
+    finish = asyncio.Event()
+
+    async def blocking():
+        started.set()
+        await finish.wait()
+
+    # First task takes the slot; second must wait
+    t1 = asyncio.create_task(queue.submit(blocking, label="job-1"))
+    await started.wait()
+
+    t2 = asyncio.create_task(queue.submit(blocking, label="job-2"))
+    await asyncio.sleep(0)  # yield so t2 registers as pending
+
+    assert queue.pending_count == 1
+    assert queue.active_jobs[0].label == "job-1"
+
+    finish.set()
+    await t1
+    await t2
+
+
+@pytest.mark.asyncio
+async def test_slots_total():
+    queue = LLMQueue(max_concurrent=3)
+    assert queue.slots_total == 3
+
+
+@pytest.mark.asyncio
+async def test_pending_count_restored_on_cancel_before_acquire():
+    """CancelledError while waiting for semaphore does not leave pending stuck."""
+    queue = LLMQueue(max_concurrent=1)
+    hold = asyncio.Event()
+
+    async def holder():
+        await hold.wait()
+
+    # Fill the slot
+    hold_task = asyncio.create_task(queue.submit(holder))
+    await asyncio.sleep(0)
+
+    # Start waiter (will block on semaphore)
+    wait_task = asyncio.create_task(queue.submit(holder, label="pending-job"))
+    await asyncio.sleep(0)
+    assert queue.pending_count == 1
+
+    # Cancel the waiter before it acquires
+    wait_task.cancel()
+    try:
+        await wait_task
+    except asyncio.CancelledError:
+        pass
+
+    assert queue.pending_count == 0
+
+    hold.set()
+    await hold_task

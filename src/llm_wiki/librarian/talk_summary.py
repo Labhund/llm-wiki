@@ -123,6 +123,7 @@ class TalkSummaryStore:
 async def summarize_open_entries(
     entries: list[TalkEntry],
     llm: "LLMClient | None",
+    page_name: str = "",
 ) -> str:
     """Summarize a talk page's open (unresolved) entries in 2 sentences.
 
@@ -145,6 +146,7 @@ async def summarize_open_entries(
         messages = compose_talk_summary_messages(entries)
         response = await llm.complete(
             messages, temperature=0.0, priority="maintenance",
+            label=f"librarian:talk-summary:{page_name}",
         )
         summary = parse_talk_summary(response.content)
         if summary:

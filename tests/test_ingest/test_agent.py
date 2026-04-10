@@ -20,7 +20,7 @@ class MockLLMClient:
         self.priorities: list[str] = []
 
     async def complete(
-        self, messages: list[dict], temperature: float = 0.7, priority: str = "query"
+        self, messages: list[dict], temperature: float = 0.7, priority: str = "query", **kwargs
     ) -> LLMResponse:
         self.calls.append(messages)
         self.priorities.append(priority)

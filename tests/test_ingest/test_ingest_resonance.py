@@ -19,7 +19,7 @@ class MockLLMClient:
         self._idx = 0
 
     async def complete(
-        self, messages: list[dict], temperature: float = 0.7, priority: str = "query"
+        self, messages: list[dict], temperature: float = 0.7, priority: str = "query", **kwargs
     ) -> LLMResponse:
         if self._idx >= len(self._responses):
             raise RuntimeError("MockLLMClient: no more scripted responses")

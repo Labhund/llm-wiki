@@ -158,7 +158,10 @@ class IngestAgent:
             source_ref=source_ref,
             budget=budget,
         )
-        response = await self._llm.complete(messages, temperature=0.3, priority="ingest")
+        response = await self._llm.complete(
+            messages, temperature=0.3, priority="ingest",
+            label=f"ingest:extract:{source_path.name}",
+        )
         concepts = parse_concept_extraction(response.content)
 
         if on_progress:
@@ -190,7 +193,8 @@ class IngestAgent:
                 source_ref=source_ref,
             )
             page_response = await self._llm.complete(
-                page_messages, temperature=0.5, priority="ingest"
+                page_messages, temperature=0.5, priority="ingest",
+                label=f"ingest:write:{concept.name}",
             )
             sections = parse_page_content(page_response.content)
             if not sections:
@@ -351,7 +355,10 @@ class IngestAgent:
             source_ref=source_ref,
             cluster_dir_names=existing_clusters,
         )
-        overview_resp = await self._llm.complete(overview_msgs, temperature=0.2, priority="ingest")
+        overview_resp = await self._llm.complete(
+            overview_msgs, temperature=0.2, priority="ingest",
+            label=f"ingest:overview:{source_path.name}",
+        )
         concepts = parse_overview_extraction(overview_resp.content)
 
         if not concepts:
@@ -370,7 +377,10 @@ class IngestAgent:
                 chunk_text=chunk,
                 concepts=still_need,
             )
-            coll_resp = await self._llm.complete(coll_msgs, temperature=0.1, priority="ingest")
+            coll_resp = await self._llm.complete(
+                coll_msgs, temperature=0.1, priority="ingest",
+                label=f"ingest:passages:{source_path.name}",
+            )
             found = parse_passage_collection(
                 coll_resp.content,
                 concept_names=[c.name for c in still_need],
@@ -398,7 +408,10 @@ class IngestAgent:
                 manifest_lines=manifest_lines,
                 batch_concepts=concepts,
             )
-            synth_resp = await self._llm.complete(synth_msgs, temperature=0.3, priority="ingest")
+            synth_resp = await self._llm.complete(
+                synth_msgs, temperature=0.3, priority="ingest",
+                label=f"ingest:synthesize:{concept.name}",
+            )
             sections = parse_content_synthesis(synth_resp.content)
             if not sections:
                 logger.warning("No sections generated for %r — skipping", concept.name)

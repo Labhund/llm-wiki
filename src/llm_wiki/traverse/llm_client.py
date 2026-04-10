@@ -74,6 +74,7 @@ class LLMClient:
         messages: list[dict[str, str]],
         temperature: float = 0.7,
         priority: str = "query",
+        label: str = "unknown",
     ) -> LLMResponse:
         """Send a completion request through the concurrency-limited queue."""
 
@@ -117,4 +118,4 @@ class LLMClient:
                     await asyncio.sleep(delay)
             raise last_exc  # type: ignore[misc]  # unreachable
 
-        return await self._queue.submit(_call, priority=priority)
+        return await self._queue.submit(_call, priority=priority, label=label)
