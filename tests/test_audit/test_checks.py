@@ -660,3 +660,13 @@ def test_execute_proposal_merges_update_not_affected(tmp_path):
     updated = target.read_text()
     assert "Existing content." in updated
     assert "created_by: ingest" in updated  # frontmatter not rewritten for updates
+
+
+def test_find_pending_proposals_create_always_issues(tmp_path):
+    """action=create always raises an issue for human review."""
+    from llm_wiki.audit.checks import find_pending_proposals
+    wiki_dir = tmp_path / "wiki"
+    wiki_dir.mkdir(parents=True)
+    _make_proposal(tmp_path, action="create", score=0.95)
+    result = find_pending_proposals(tmp_path, wiki_dir=wiki_dir)
+    assert any(i.type == "proposal" for i in result.issues)
