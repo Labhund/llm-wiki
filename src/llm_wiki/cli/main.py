@@ -212,8 +212,26 @@ def cli() -> None:
 )
 def configure(vault_path: Path) -> None:
     """Interactive wizard — configure LLM backends and API keys."""
+    import signal as _signal
     from llm_wiki.cli.configure import run_wizard
+
     run_wizard(vault_path)
+
+    # Restart daemon if it was running so the new config is picked up immediately.
+    pid_path = pidfile_path_for(vault_path)
+    sock_path = socket_path_for(vault_path)
+    pid = read_pidfile(pid_path)
+    if pid is not None and is_process_alive(pid):
+        os.kill(pid, _signal.SIGTERM)
+        for _ in range(30):
+            time.sleep(0.1)
+            if not is_process_alive(pid):
+                break
+        else:
+            os.kill(pid, _signal.SIGKILL)
+        cleanup_stale(sock_path, pid_path)
+        _get_client(vault_path)
+        click.echo("Daemon restarted with new config.")
 
 
 @cli.command()
