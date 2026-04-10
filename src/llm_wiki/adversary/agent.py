@@ -73,6 +73,8 @@ class AdversaryAgent:
         if not entries:
             return result
 
+        raw_prefix = self._config.vault.raw_dir.rstrip("/")
+
         # 1. Extract claims from every non-synthesis page
         all_claims: list[Claim] = []
         for name in entries:
@@ -81,7 +83,7 @@ class AdversaryAgent:
                 continue
             if page.frontmatter.get("type") == "synthesis":
                 continue  # resonance agent handles synthesis pages; adversary skips them
-            all_claims.extend(extract_claims(page))
+            all_claims.extend(extract_claims(page, raw_dir=raw_prefix))
 
         if not all_claims:
             return result
@@ -92,18 +94,18 @@ class AdversaryAgent:
 
         # Build unread sources set for adversary upweighting
         unread_sources: set[str] = set()
-        raw_dir = self._vault_root / "raw"
+        raw_dir = self._vault_root / raw_prefix
         if raw_dir.is_dir():
             from llm_wiki.ingest.source_meta import read_frontmatter
             for md_file in raw_dir.glob("*.md"):
                 fm = read_frontmatter(md_file)
                 if fm.get("reading_status") == "unread":
                     # Add both the companion path and the likely binary path
-                    unread_sources.add(f"raw/{md_file.name}")
+                    unread_sources.add(f"{raw_prefix}/{md_file.name}")
                     for ext in (".pdf", ".docx", ".png", ".jpg", ".jpeg", ".gif", ".bmp", ".tiff"):
                         binary = md_file.with_suffix(ext)
                         if binary.exists():
-                            unread_sources.add(f"raw/{binary.name}")
+                            unread_sources.add(f"{raw_prefix}/{binary.name}")
 
         sampled = sample_claims(
             all_claims, entries, n=n, rng=self._rng, now=now,

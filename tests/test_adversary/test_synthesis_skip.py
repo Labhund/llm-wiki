@@ -62,9 +62,9 @@ async def test_adversary_skips_synthesis_page_claims(tmp_path: Path):
         "llm_wiki.adversary.claim_extractor", fromlist=["extract_claims"]
     ).extract_claims
 
-    def tracking_extract(page: Page) -> list[Claim]:
+    def tracking_extract(page: Page, raw_dir: str = "raw") -> list[Claim]:
         processed_pages.append(page.path.stem)
-        return original_extract(page)
+        return original_extract(page, raw_dir=raw_dir)
 
     with patch("llm_wiki.adversary.agent.extract_claims", side_effect=tracking_extract):
         await agent.run()

@@ -5,7 +5,7 @@ from pathlib import Path
 import pytest
 
 from llm_wiki.adversary.agent import AdversaryAgent, AdversaryResult
-from llm_wiki.config import MaintenanceConfig, WikiConfig
+from llm_wiki.config import MaintenanceConfig, VaultConfig, WikiConfig
 from llm_wiki.issues.queue import IssueQueue
 from llm_wiki.librarian.overrides import ManifestOverrides
 from llm_wiki.talk.page import TalkPage
@@ -265,3 +265,41 @@ async def test_adversary_failed_verdict_files_critical_issue(tmp_path: Path, _cl
     for issue in failed_issues:
         assert issue.severity == "critical", \
             f"expected critical, got {issue.severity}"
+
+
+@pytest.mark.asyncio
+async def test_adversary_respects_configured_raw_dir(tmp_path: Path, _clean_state):
+    """When vault.raw_dir is 'sources/', claims citing [[sources/...]] are found
+    and the unread-source upweighting scans sources/ not raw/."""
+    # Set up vault with sources/ instead of raw/
+    sources_dir = tmp_path / "sources"
+    sources_dir.mkdir()
+    (sources_dir / "smith-2026.md").write_text(
+        "# Smith 2026\n\nThe k-means algorithm uses k=10 clusters.\n"
+    )
+    wiki_dir = tmp_path / "wiki"
+    wiki_dir.mkdir()
+    (wiki_dir / "k-means.md").write_text(
+        "---\ntitle: K-Means\n---\n\n"
+        "%% section: method %%\n## Method\n\n"
+        "The algorithm uses k=10 clusters [[sources/smith-2026.md]].\n"
+    )
+    _clean_state.append(_state_dir_for(tmp_path))
+
+    config = WikiConfig(
+        maintenance=MaintenanceConfig(adversary_claims_per_run=5),
+        vault=VaultConfig(raw_dir="sources/"),
+    )
+    stub = _StubLLM(
+        '{"verdict": "validated", "confidence": 0.9, "explanation": "Matches."}'
+    )
+    vault = Vault.scan(tmp_path)
+    queue = IssueQueue(tmp_path / "wiki")
+    agent = AdversaryAgent(vault, tmp_path, stub, queue, config)
+
+    result = await agent.run()
+
+    # The claim was found and verified (LLM was called)
+    assert result.claims_checked == 1
+    assert len(result.validated) == 1
+    assert len(stub.calls) == 1
