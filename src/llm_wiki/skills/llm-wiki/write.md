@@ -50,13 +50,13 @@ When creating multiple related pages: use a one-level topic subdirectory (`topic
 
 ## Synthesis Pages
 
-Pages that represent original analysis rather than extracted source claims use `status: synthesis` in frontmatter. Synthesis pages:
+Pages that represent original analysis rather than extracted source claims use `type: synthesis` in frontmatter. Synthesis pages:
 - Do not require external `[[raw/...]]` citations (the analysis session is the source)
 - Are skipped by the adversary's verification pass
 - Are targets for resonance matching — the system will compare incoming sources against them
 - Use `wiki_talk_post` on the synthesis page when a related source arrives
 
-Set `status: synthesis` at page creation. Do not set it on extracted pages — use it only when the content is genuinely the agent's synthesis, not a source summary.
+Set `type: synthesis` at page creation. Do not set it on extracted pages — use it only when the content is genuinely the agent's synthesis, not a source summary.
 
 ## Before Writing
 

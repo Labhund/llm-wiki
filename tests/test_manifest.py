@@ -69,7 +69,7 @@ def test_build_entry_sets_is_synthesis_for_synthesis_page(tmp_path: Path):
 
 
 def test_build_entry_is_synthesis_false_for_extracted_page(tmp_path: Path):
-    """build_entry sets is_synthesis=False when status is absent or not synthesis."""
+    """build_entry sets is_synthesis=False when type is absent or not synthesis."""
     p = tmp_path / "ordinary.md"
     p.write_text("---\ntitle: Ordinary Page\n---\nSome content.\n")
     page = Page.parse(p)
@@ -104,6 +104,7 @@ def test_build_entry_marks_type_synthesis(tmp_path):
 
 
 def test_build_entry_not_synthesis_for_concept(tmp_path):
+    """build_entry sets is_synthesis=False when type is concept."""
     p = tmp_path / "wiki" / "foo.md"
     p.parent.mkdir(parents=True)
     p.write_text("---\ntitle: Foo\ntype: concept\n---\n\nBody.\n", encoding="utf-8")
