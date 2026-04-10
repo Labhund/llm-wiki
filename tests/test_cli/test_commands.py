@@ -278,3 +278,43 @@ def test_ingest_dry_run_output(daemon_for_cli, monkeypatch, tmp_path):
     assert "2 concepts total" in result.output
     assert "section" not in result.output
     assert "content_chars" not in result.output
+
+
+def test_ingest_streaming_output(daemon_for_cli, monkeypatch, tmp_path):
+    """CLI ingest prints [PROGRESS], [DONE], [SUMMARY] lines (non-TTY mode)."""
+    from llm_wiki.daemon.client import DaemonClient
+
+    def fake_stream(self, msg, on_frame):
+        on_frame({"type": "progress", "stage": "extracting"})
+        on_frame({"type": "progress", "stage": "concepts_found", "count": 2})
+        on_frame({
+            "type": "progress", "stage": "concept_done",
+            "name": "boltz-diffusion", "title": "Boltz Diffusion", "action": "created",
+            "num": 1, "total": 2,
+        })
+        on_frame({
+            "type": "progress", "stage": "concept_done",
+            "name": "structure-prediction", "title": "Structure Prediction", "action": "updated",
+            "num": 2, "total": 2,
+        })
+        on_frame({
+            "type": "done", "status": "ok",
+            "pages_created": 1, "pages_updated": 1,
+            "created": ["boltz-diffusion"], "updated": ["structure-prediction"],
+            "concepts_found": 2,
+        })
+
+    monkeypatch.setattr(DaemonClient, "stream_ingest_sync", fake_stream)
+
+    vault_path = daemon_for_cli
+    source = vault_path / "paper.md"
+    source.write_text("# Test paper")
+
+    runner = CliRunner()
+    result = runner.invoke(cli, ["ingest", str(source), "--vault", str(vault_path)])
+
+    assert result.exit_code == 0, result.output
+    assert "[PROGRESS] concepts_found: 2" in result.output
+    assert "[DONE] boltz-diffusion (created)" in result.output
+    assert "[DONE] structure-prediction (updated)" in result.output
+    assert "[SUMMARY] 1 created, 1 updated" in result.output

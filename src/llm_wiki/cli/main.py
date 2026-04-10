@@ -1,9 +1,11 @@
 from __future__ import annotations
 
+import itertools
 import os
 import subprocess
 import sys
 import tempfile
+import threading
 import time
 from pathlib import Path
 
@@ -74,6 +76,59 @@ def _get_client(vault_path: Path, auto_start: bool = True) -> DaemonClient:
         if stderr_fd >= 0:
             os.close(stderr_fd)
         stderr_path.unlink(missing_ok=True)
+
+
+class _Spinner:
+    """Braille spinner for TTY progress display.
+
+    Uses a threading.RLock so concept lines can be printed atomically
+    without interleaving with spinner writes.
+    """
+
+    FRAMES = "⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏"
+
+    def __init__(self) -> None:
+        self._label = ""
+        self._running = False
+        self._lock = threading.RLock()
+        self._thread: threading.Thread | None = None
+        self._line_width = 0
+
+    def start(self, label: str = "") -> None:
+        self._label = label
+        self._running = True
+        self._thread = threading.Thread(target=self._spin, daemon=True)
+        self._thread.start()
+
+    def update(self, label: str) -> None:
+        with self._lock:
+            self._label = label
+
+    def print_line(self, line: str) -> None:
+        """Clear spinner, print a line, let spinner resume."""
+        with self._lock:
+            sys.stdout.write("\r" + " " * (self._line_width + 2) + "\r")
+            sys.stdout.flush()
+            print(line)
+
+    def stop(self) -> None:
+        self._running = False
+        if self._thread:
+            self._thread.join(timeout=1)
+        with self._lock:
+            sys.stdout.write("\r" + " " * (self._line_width + 2) + "\r")
+            sys.stdout.flush()
+
+    def _spin(self) -> None:
+        for frame in itertools.cycle(self.FRAMES):
+            if not self._running:
+                break
+            with self._lock:
+                line = f"{frame}  {self._label}"
+                self._line_width = len(line)
+                sys.stdout.write(f"\r{line}")
+                sys.stdout.flush()
+            time.sleep(0.08)
 
 
 @click.group()
@@ -305,17 +360,18 @@ def ingest(source_path: Path, vault_path: Path, dry_run: bool) -> None:
     """Ingest a source document — extracts concepts and creates wiki pages."""
     import uuid as _uuid
     client = _get_client(vault_path)
-    resp = client.request({
+    msg: dict = {
         "type": "ingest",
         "source_path": str(source_path.resolve()),
         "author": "cli",
         "connection_id": _uuid.uuid4().hex,
         "dry_run": dry_run,
-    })
-    if resp["status"] != "ok":
-        raise click.ClickException(resp.get("message", "Ingest failed"))
+    }
 
     if dry_run:
+        resp = client.request(msg)
+        if resp["status"] != "ok":
+            raise click.ClickException(resp.get("message", "Ingest failed"))
         click.echo("DRY RUN — no pages written")
         click.echo(f"Source: {resp['source_path']} ({resp['source_chars']} chars)")
         if resp.get("extraction_warning"):
@@ -326,15 +382,56 @@ def ingest(source_path: Path, vault_path: Path, dry_run: bool) -> None:
         click.echo(f"{resp['concepts_found']} concepts total")
         return
 
-    created = resp.get("created", [])
-    updated = resp.get("updated", [])
-    click.echo(f"Ingested: {resp['concepts_found']} concept(s) identified.")
-    if created:
-        click.echo(f"  Created: {', '.join(created)}")
-    if updated:
-        click.echo(f"  Updated: {', '.join(updated)}")
-    if not created and not updated:
-        click.echo("  No pages created — no concepts identified in source.")
+    # Live streaming ingest
+    msg["stream"] = True
+    is_tty = sys.stdout.isatty()
+    spinner: _Spinner | None = _Spinner() if is_tty else None
+    error_seen: list[str] = []
+
+    def on_frame(frame: dict) -> None:
+        ftype = frame.get("type")
+        stage = frame.get("stage", "")
+
+        if ftype == "progress":
+            if stage == "extracting":
+                if spinner:
+                    spinner.start("Extracting...")
+                # no output line for extracting — spinner alone is enough on TTY
+            elif stage == "concepts_found":
+                count = frame["count"]
+                if spinner:
+                    spinner.update(f"Found {count} concept(s) — writing pages...")
+                click.echo(f"[PROGRESS] concepts_found: {count}")
+            elif stage == "concept_done":
+                name = frame["name"]
+                action = frame["action"]
+                line = f"[DONE] {name} ({action})"
+                if spinner:
+                    spinner.print_line(line)
+                else:
+                    click.echo(line)
+
+        elif ftype == "done":
+            if spinner:
+                spinner.stop()
+            created = frame.get("pages_created", 0)
+            updated = frame.get("pages_updated", 0)
+            click.echo(f"[SUMMARY] {created} created, {updated} updated")
+            if frame.get("warnings"):
+                for w in frame["warnings"]:
+                    click.echo(f"  Warning: {w['message']}")
+
+        elif ftype == "error":
+            if spinner:
+                spinner.stop()
+            msg_text = frame.get("message", "Unknown error")
+            written = frame.get("concepts_written", 0)
+            error_seen.append(f"{msg_text} ({written} concept(s) written before error)")
+
+    client.stream_ingest_sync(msg, on_frame)
+
+    if error_seen:
+        raise click.ClickException(error_seen[0])
 
 
 @cli.group()
