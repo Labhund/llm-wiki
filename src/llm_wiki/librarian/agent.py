@@ -243,8 +243,6 @@ class LibrarianAgent:
         Returns:
             Number of page files that were modified.
         """
-        from llm_wiki.page import _split_frontmatter
-
         wiki_dir = self._vault_root / "wiki"
         if not wiki_dir.exists():
             return 0

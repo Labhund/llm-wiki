@@ -847,7 +847,6 @@ def execute_proposal_merges(
         find_wiki_page,
     )
     from llm_wiki.ingest.page_writer import patch_token_estimates
-    import yaml as _yaml
 
     if wiki_dir is None:
         wiki_dir = vault_root / "wiki"
@@ -903,7 +902,7 @@ def execute_proposal_merges(
                     ("tags", []),
                 ]
                 fm_lines = [
-                    _yaml.dump({k: v}, default_flow_style=False).strip()
+                    yaml.dump({k: v}, default_flow_style=False).strip()
                     for k, v in fm_pairs
                 ]
                 frontmatter = "---\n" + "\n".join(fm_lines) + "\n---"
