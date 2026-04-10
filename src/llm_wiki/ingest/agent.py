@@ -40,6 +40,21 @@ if TYPE_CHECKING:
 logger = logging.getLogger(__name__)
 
 
+def _is_anthropic_model(model: str) -> bool:
+    """Return True when the model string identifies an Anthropic/Claude model.
+
+    Covers bare names (``claude-3-5-sonnet``), litellm prefixes
+    (``anthropic/claude-*``), and OpenRouter paths
+    (``openrouter/anthropic/claude-*``).
+    """
+    lower = model.lower()
+    return (
+        lower.startswith("claude-")
+        or lower.startswith("anthropic/")
+        or "/claude-" in lower
+    )
+
+
 @dataclass
 class ConceptPlan:
     """A concept identified from source content."""
@@ -422,6 +437,7 @@ class IngestAgent:
         source_slug = _re.sub(r"[^a-z0-9-]", "-", source_path.stem.lower()).strip("-")
         ocr_sourced = extraction.extraction_method == "image_ocr"
         synth_temp = self._config.ingest.synthesis_temperature
+        use_cache_control = _is_anthropic_model(self._llm.model)
 
         # Deep-read synthesis + write per concept
         for i, concept in enumerate(concepts):
@@ -431,6 +447,7 @@ class IngestAgent:
                 source_ref=source_ref,
                 manifest_lines=manifest_lines,
                 batch_concepts=concepts,
+                cache_control=use_cache_control,
             )
             synth_resp = await self._llm.complete(
                 synth_msgs, temperature=synth_temp, priority="ingest",
