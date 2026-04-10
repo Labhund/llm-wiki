@@ -60,9 +60,9 @@ def test_cluster_summary():
 
 
 def test_build_entry_sets_is_synthesis_for_synthesis_page(tmp_path: Path):
-    """build_entry sets is_synthesis=True when frontmatter has status: synthesis."""
+    """build_entry sets is_synthesis=True when frontmatter has type: synthesis."""
     p = tmp_path / "my-synthesis.md"
-    p.write_text("---\ntitle: My Synthesis\nstatus: synthesis\n---\nSome content.\n")
+    p.write_text("---\ntitle: My Synthesis\ntype: synthesis\n---\nSome content.\n")
     page = Page.parse(p)
     entry = build_entry(page, cluster="analysis")
     assert entry.is_synthesis is True
@@ -80,7 +80,7 @@ def test_build_entry_is_synthesis_false_for_extracted_page(tmp_path: Path):
 def test_manifest_text_includes_synthesis_marker(tmp_path: Path):
     """to_manifest_text() includes '| synthesis' for synthesis pages and omits it otherwise."""
     synth_path = tmp_path / "synth.md"
-    synth_path.write_text("---\ntitle: Synth\nstatus: synthesis\n---\nContent.\n")
+    synth_path.write_text("---\ntitle: Synth\ntype: synthesis\n---\nContent.\n")
     synth_entry = build_entry(Page.parse(synth_path), cluster="analysis")
     assert "| synthesis" in synth_entry.to_manifest_text()
 
@@ -88,3 +88,25 @@ def test_manifest_text_includes_synthesis_marker(tmp_path: Path):
     ordinary_path.write_text("---\ntitle: Ordinary\n---\nContent.\n")
     ordinary_entry = build_entry(Page.parse(ordinary_path), cluster="bio")
     assert "| synthesis" not in ordinary_entry.to_manifest_text()
+
+
+def test_build_entry_marks_type_synthesis(tmp_path):
+    """ManifestEntry.is_synthesis is True when frontmatter has type: synthesis."""
+    p = tmp_path / "wiki" / "q-test.md"
+    p.parent.mkdir(parents=True)
+    p.write_text(
+        "---\ntitle: Test\ntype: synthesis\nquery: test\ncreated_by: query\n---\n\n%% section: answer %%\n\nAnswer [[foo]].\n",
+        encoding="utf-8",
+    )
+    page = Page.parse(p)
+    entry = build_entry(page, cluster="root")
+    assert entry.is_synthesis is True
+
+
+def test_build_entry_not_synthesis_for_concept(tmp_path):
+    p = tmp_path / "wiki" / "foo.md"
+    p.parent.mkdir(parents=True)
+    p.write_text("---\ntitle: Foo\ntype: concept\n---\n\nBody.\n", encoding="utf-8")
+    page = Page.parse(p)
+    entry = build_entry(page, cluster="root")
+    assert entry.is_synthesis is False

@@ -96,7 +96,7 @@ def build_entry(page: Page, cluster: str) -> ManifestEntry:
         sections=sections,
         links_to=page.wikilinks,
         links_from=[],  # Computed after all pages indexed
-        is_synthesis=page.frontmatter.get("status") == "synthesis",
+        is_synthesis=page.frontmatter.get("type") == "synthesis",
     )
 
 
