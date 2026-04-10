@@ -506,12 +506,36 @@ def test_execute_proposal_merges_applies_high_score_updates(tmp_path):
     assert "overview" in merged.lower() or "Overview" in merged
 
 
-def test_find_pending_proposals_create_always_issues(tmp_path):
-    """action=create always raises an issue for human review."""
+def test_find_pending_proposals_create_high_score_merge_ready(tmp_path):
+    """action=create with score >= auto_merge_threshold → merge-ready (auto-create)."""
     from llm_wiki.audit.checks import find_pending_proposals
     wiki_dir = tmp_path / "wiki"
     wiki_dir.mkdir(parents=True)
+    # Page does not exist yet (that's correct for a create proposal)
     _make_proposal(tmp_path, action="create", score=0.95)
+    result = find_pending_proposals(tmp_path, wiki_dir=wiki_dir)
+    assert any(i.type == "merge-ready" for i in result.issues), (
+        "High-confidence create proposals should be auto-merge-ready"
+    )
+
+
+def test_find_pending_proposals_create_low_score_requires_review(tmp_path):
+    """action=create with score < flag_threshold → proposal-verification-failed."""
+    from llm_wiki.audit.checks import find_pending_proposals
+    wiki_dir = tmp_path / "wiki"
+    wiki_dir.mkdir(parents=True)
+    _make_proposal(tmp_path, action="create", score=0.3)
+    result = find_pending_proposals(tmp_path, wiki_dir=wiki_dir)
+    assert any(i.type == "proposal-verification-failed" for i in result.issues)
+
+
+def test_find_pending_proposals_create_mid_score_proposal(tmp_path):
+    """action=create with flag_threshold <= score < auto_merge_threshold → proposal."""
+    from llm_wiki.audit.checks import find_pending_proposals
+    wiki_dir = tmp_path / "wiki"
+    wiki_dir.mkdir(parents=True)
+    # score=0.6 is between flag_threshold (0.50) and auto_merge_threshold (0.75)
+    _make_proposal(tmp_path, action="create", score=0.6)
     result = find_pending_proposals(tmp_path, wiki_dir=wiki_dir)
     assert any(i.type == "proposal" for i in result.issues)
 
@@ -526,3 +550,112 @@ def test_find_pending_proposals_low_score_issues(tmp_path):
     _make_proposal(tmp_path, action="update", score=0.3)
     result = find_pending_proposals(tmp_path, wiki_dir=wiki_dir)
     assert any(i.type == "proposal-verification-failed" for i in result.issues)
+
+
+# ---------------------------------------------------------------------------
+# execute_proposal_merges — create path writes complete frontmatter
+# ---------------------------------------------------------------------------
+
+
+def _make_create_proposal_with_cluster(tmp_path, cluster="bio") -> Path:
+    """Helper: create proposal with action=create, a cluster, and high score."""
+    proposals_dir = tmp_path / "inbox" / "proposals"
+    p = Proposal(
+        source="raw/paper.pdf",
+        target_page="new-concept",
+        action="create",
+        proposed_by="ingest",
+        created="2026-04-10T12:00:00",
+        extraction_method="pdf",
+        sections=[PageSection(name="overview", heading="Overview",
+                              content="New concept overview text.")],
+        passages=[ProposalPassage(id="p1", text="new concept text", claim="text",
+                                  score=0.9, method="ngram", verifiable=True,
+                                  ocr_sourced=False)],
+        target_cluster=cluster,
+    )
+    return write_proposal(proposals_dir, p, source_slug="paper")
+
+
+def test_execute_proposal_merges_create_writes_complete_frontmatter(tmp_path):
+    """A create proposal auto-merged by execute_proposal_merges has all required frontmatter fields."""
+    import yaml
+    from llm_wiki.audit.checks import execute_proposal_merges
+    wiki_dir = tmp_path / "wiki"
+    wiki_dir.mkdir(parents=True)
+    _make_create_proposal_with_cluster(tmp_path, cluster="bio")
+
+    execute_proposal_merges(tmp_path, wiki_dir=wiki_dir)
+
+    created_path = wiki_dir / "bio" / "new-concept.md"
+    assert created_path.exists(), "Page should be created in the cluster subdirectory"
+
+    raw = created_path.read_text(encoding="utf-8")
+    # Extract frontmatter
+    assert raw.startswith("---\n"), "Page must start with YAML frontmatter"
+    fm_end = raw.index("\n---\n", 4)
+    fm = yaml.safe_load(raw[4:fm_end])
+
+    # All required fields must be present
+    for field in ("title", "created", "updated", "type", "status", "ingested",
+                  "cluster", "source", "created_by", "tags"):
+        assert field in fm, f"Frontmatter missing required field: {field!r}"
+
+    assert fm["created_by"] == "proposal", (
+        "Pages created via proposal auto-merge must use created_by: proposal, not ingest"
+    )
+    assert fm["cluster"] == "bio", "cluster must come from proposal.target_cluster"
+    assert fm["type"] == "concept"
+    assert fm["status"] == "stub"
+    assert "[[raw/paper.pdf]]" == fm["source"], (
+        "source must be vault-root wikilink [[raw/<filename>]]"
+    )
+    assert isinstance(fm["tags"], list)
+
+
+def test_execute_proposal_merges_create_created_by_is_proposal(tmp_path):
+    """created_by field must be 'proposal' so auditors can distinguish auto-merged pages."""
+    import yaml
+    from llm_wiki.audit.checks import execute_proposal_merges
+    wiki_dir = tmp_path / "wiki"
+    wiki_dir.mkdir(parents=True)
+    _make_create_proposal_with_cluster(tmp_path, cluster="")  # no cluster → root
+
+    execute_proposal_merges(tmp_path, wiki_dir=wiki_dir)
+
+    created_path = wiki_dir / "new-concept.md"
+    assert created_path.exists()
+    raw = created_path.read_text(encoding="utf-8")
+    fm_end = raw.index("\n---\n", 4)
+    fm = yaml.safe_load(raw[4:fm_end])
+    assert fm["created_by"] == "proposal"
+
+
+def test_execute_proposal_merges_create_no_cluster_writes_to_root(tmp_path):
+    """A create proposal with no cluster places the page at wiki root."""
+    from llm_wiki.audit.checks import execute_proposal_merges
+    wiki_dir = tmp_path / "wiki"
+    wiki_dir.mkdir(parents=True)
+    _make_create_proposal_with_cluster(tmp_path, cluster="")
+
+    execute_proposal_merges(tmp_path, wiki_dir=wiki_dir)
+
+    assert (wiki_dir / "new-concept.md").exists()
+    assert not (wiki_dir / "new-concept" / "new-concept.md").exists()
+
+
+def test_execute_proposal_merges_update_not_affected(tmp_path):
+    """An update proposal still appends body text without changing frontmatter structure."""
+    from llm_wiki.audit.checks import execute_proposal_merges
+    wiki_dir = tmp_path / "wiki"
+    wiki_dir.mkdir(parents=True)
+    target = wiki_dir / "boltz-2.md"
+    original = "---\ntitle: Boltz-2\ncreated_by: ingest\n---\n\nExisting content.\n"
+    target.write_text(original)
+    _make_proposal(tmp_path, action="update", score=0.9)
+
+    execute_proposal_merges(tmp_path, wiki_dir=wiki_dir)
+
+    updated = target.read_text()
+    assert "Existing content." in updated
+    assert "created_by: ingest" in updated  # frontmatter not rewritten for updates

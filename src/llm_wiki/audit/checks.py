@@ -566,8 +566,10 @@ def find_pending_proposals(
     This function NEVER mutates wiki pages — it is safe to call from lint.
 
     Issue types returned:
-      - 'merge-ready':                  action=update, all verifiable scores >= auto_merge_threshold
-      - 'proposal':                     action=create (requires human review), or target missing
+      - 'merge-ready':                  scores >= auto_merge_threshold; action=update (page
+                                        exists) OR action=create (page absent, auto-created)
+      - 'proposal':                     flag_threshold <= score < auto_merge_threshold, or
+                                        action=update with missing target page
       - 'proposal-verification-failed': any verifiable score < flag_threshold
     """
     import json as _json
@@ -606,23 +608,57 @@ def find_pending_proposals(
         min_score = min(scores) if scores else 1.0
 
         if action == "create":
-            issues.append(Issue(
-                id=Issue.make_id("proposal", target_page, source),
-                type="proposal",
-                status="open",
-                severity="minor",
-                title=f"New page proposal: '{target_page}' from {source}",
-                page=target_page,
-                body=(
-                    f"The ingest pipeline proposes creating [[{target_page}]] from "
-                    f"`{source}`. Review `{proposal_path.relative_to(vault_root)}` "
-                    f"and approve with `llm-wiki proposals approve` or reject with "
-                    f"`llm-wiki proposals reject`."
-                ),
-                created=Issue.now_iso(),
-                detected_by="auditor",
-                metadata={"proposal_path": str(proposal_path), "source": source},
-            ))
+            # Low-confidence creates always need human review
+            if min_score < flag_threshold:
+                issues.append(Issue(
+                    id=Issue.make_id("proposal-verification-failed", target_page, source),
+                    type="proposal-verification-failed",
+                    status="open",
+                    severity="moderate",
+                    title=f"Create proposal for '{target_page}' has low grounding score ({min_score:.2f})",
+                    page=target_page,
+                    body=(
+                        f"The proposal to create [[{target_page}]] from `{source}` "
+                        f"has a minimum passage verification score of {min_score:.2f} "
+                        f"(threshold: {flag_threshold}). Review `{proposal_path.relative_to(vault_root)}`."
+                    ),
+                    created=Issue.now_iso(),
+                    detected_by="auditor",
+                    metadata={"proposal_path": str(proposal_path), "min_score": min_score},
+                ))
+            elif min_score < auto_merge_threshold:
+                # Mid-confidence creates require human approval
+                issues.append(Issue(
+                    id=Issue.make_id("proposal", target_page, source),
+                    type="proposal",
+                    status="open",
+                    severity="minor",
+                    title=f"New page proposal: '{target_page}' from {source}",
+                    page=target_page,
+                    body=(
+                        f"The ingest pipeline proposes creating [[{target_page}]] from "
+                        f"`{source}`. Review `{proposal_path.relative_to(vault_root)}` "
+                        f"and approve with `llm-wiki proposals approve` or reject with "
+                        f"`llm-wiki proposals reject`."
+                    ),
+                    created=Issue.now_iso(),
+                    detected_by="auditor",
+                    metadata={"proposal_path": str(proposal_path), "source": source},
+                ))
+            else:
+                # High-confidence creates auto-merge (page will be created by executor)
+                issues.append(Issue(
+                    id=Issue.make_id("merge-ready", target_page, source),
+                    type="merge-ready",
+                    status="open",
+                    severity="minor",
+                    title=f"Create proposal ready to merge: '{target_page}' (score {min_score:.2f})",
+                    page=target_page,
+                    body=f"Proposal at `{proposal_path.relative_to(vault_root)}` is verified and ready to auto-create.",
+                    created=Issue.now_iso(),
+                    detected_by="auditor",
+                    metadata={"proposal_path": str(proposal_path), "min_score": min_score},
+                ))
             continue
 
         if min_score < flag_threshold:
@@ -694,6 +730,7 @@ def execute_proposal_merges(
         find_wiki_page,
     )
     from llm_wiki.ingest.page_writer import patch_token_estimates
+    import yaml as _yaml
 
     if wiki_dir is None:
         wiki_dir = vault_root / "wiki"
@@ -732,7 +769,31 @@ def execute_proposal_merges(
             cluster_dir.mkdir(parents=True, exist_ok=True)
             target_path = cluster_dir / f"{target_page}.md"
             if not target_path.exists() and body:
-                target_path.write_text(body + "\n", encoding="utf-8")
+                today = datetime.date.today().isoformat()
+                title = target_page.replace("-", " ").title()
+                source_ref = meta.get("source", "")
+                fm_pairs = [
+                    ("title", title),
+                    ("created", today),
+                    ("updated", today),
+                    ("type", "concept"),
+                    ("status", "stub"),
+                    ("ingested", today),
+                    ("cluster", target_cluster),
+                    ("summary", ""),
+                    ("source", f"[[{source_ref}]]"),
+                    ("created_by", "proposal"),
+                    ("tags", []),
+                ]
+                fm_lines = [
+                    _yaml.dump({k: v}, default_flow_style=False).strip()
+                    for k, v in fm_pairs
+                ]
+                frontmatter = "---\n" + "\n".join(fm_lines) + "\n---"
+                target_path.write_text(
+                    frontmatter + "\n\n" + body + "\n",
+                    encoding="utf-8",
+                )
                 patch_token_estimates(target_path)
 
         update_proposal_status(proposal_path, "merged")
