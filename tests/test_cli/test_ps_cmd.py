@@ -7,7 +7,7 @@ from pathlib import Path
 import pytest
 from click.testing import CliRunner
 
-from llm_wiki.cli.main import cli
+from llm_wiki.cli.main import cli, _worker_display_action
 from llm_wiki.daemon.lifecycle import socket_path_for
 from llm_wiki.daemon.server import DaemonServer
 
@@ -71,3 +71,31 @@ def test_ps_no_daemon(tmp_path):
     vault_path.mkdir()
     result = runner.invoke(cli, ["ps", "--vault", str(vault_path)])
     assert result.exit_code != 0
+
+
+def test_ps_idle_queue_message(daemon_for_cli):
+    """`llm-wiki ps` shows 'No active LLM calls.' when queue is idle."""
+    vault_path = daemon_for_cli
+    runner = CliRunner()
+    result = runner.invoke(cli, ["ps", "--vault", str(vault_path)])
+    assert result.exit_code == 0, result.output
+    assert "No active LLM calls." in result.output
+
+
+def test_worker_display_action_extracts_action_detail():
+    jobs = [{"label": "adversary:verify:protein-dj"}]
+    result = _worker_display_action("adversary", jobs)
+    assert result == "verify protein-dj"
+
+
+def test_worker_display_action_no_match_returns_empty():
+    jobs = [{"label": "librarian:refine-manifest"}]
+    result = _worker_display_action("adversary", jobs)
+    assert result == ""
+
+
+def test_worker_display_action_truncates_long_string():
+    jobs = [{"label": "adversary:very-long-action:very-long-detail-exceeds-limit"}]
+    result = _worker_display_action("adversary", jobs)
+    assert len(result) <= 30
+    assert result.endswith("…")

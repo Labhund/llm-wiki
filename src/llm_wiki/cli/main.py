@@ -337,7 +337,8 @@ def ps(vault_path: Path) -> None:
     )
     if jobs:
         for job in jobs:
-            label: str = job.get("label", "unknown")
+            raw_label: str = job.get("label", "unknown")
+            label = " · ".join(raw_label.split(":"))
             priority: str = job.get("priority", "")
             elapsed: int = int(job.get("elapsed_s", 0))
             click.echo(f"  [{job['id']}]  {label:<42} {priority:<14} {elapsed}s")
