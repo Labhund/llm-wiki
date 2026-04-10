@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import logging
 import re
+import unicodedata
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -22,6 +23,21 @@ from llm_wiki.vault import Vault
 logger = logging.getLogger(__name__)
 
 _CITATION_RE = re.compile(r"\[\[([^\]|]+?)(?:#[^\]]+?)?\]\]")
+_SYNTHESIS_SEARCH_LIMIT = 30   # broader than general search; ensures synthesis pages aren't crowded out
+_PUNCT_RE = re.compile(r"[^\w\s]")
+_WS_RE = re.compile(r"\s+")
+
+
+def _normalize_query(q: str) -> str:
+    """Normalize a query for near-identical comparison (case, punctuation, whitespace).
+
+    Hyphens are converted to spaces before punctuation stripping so that
+    "boltz-2" and "boltz 2" collapse to the same token sequence.
+    """
+    q = unicodedata.normalize("NFKC", q).lower()
+    q = q.replace("-", " ")       # treat hyphens as word separators, not deletions
+    q = _PUNCT_RE.sub("", q)
+    return _WS_RE.sub(" ", q).strip()
 
 
 @dataclass
@@ -53,6 +69,20 @@ class TraversalEngine:
         self._config = config
         self._vault_root = vault_root
         self._log_dir = log_dir
+
+    @staticmethod
+    def _maybe_early_accept(
+        question: str, candidates: list[tuple[str, str, str]]
+    ) -> str | None:
+        """Return the slug of a synthesis page whose original query is near-identical
+        to *question*, else None.  A match here means we can skip traversal entirely
+        and return the cached answer verbatim (case C).
+        """
+        norm_q = _normalize_query(question)
+        for slug, orig_query, _content in candidates:
+            if _normalize_query(orig_query) == norm_q:
+                return slug
+        return None
 
     def _collect_synthesis_candidates(
         self, search_results: list[SearchResult]
@@ -89,7 +119,28 @@ class TraversalEngine:
         try:
             # -- Turn 0: Search -> manifest -> LLM picks starting pages --
             search_results = self._vault.search(question, limit=10)
-            synthesis_candidates = self._collect_synthesis_candidates(search_results)
+            # Broader synthesis-only search: synthesis pages can be crowded out of the
+            # general top-10 by concept pages, so we run a separate wider pass to ensure
+            # near-identical prior queries are always found.
+            _synthesis_pool = self._vault.search(question, limit=_SYNTHESIS_SEARCH_LIMIT)
+            synthesis_candidates = self._collect_synthesis_candidates(_synthesis_pool)
+
+            # Case C: near-identical query → return cached answer, zero traversal cost.
+            early_slug = self._maybe_early_accept(question, synthesis_candidates)
+            if early_slug is not None:
+                logger.info("Synthesis cache early-accept: %s", early_slug)
+                log.outcome = "complete"
+                log.total_tokens_used = 0
+                self._persist_log(log)
+                return TraversalResult(
+                    answer="",
+                    citations=[],
+                    outcome="complete",
+                    needs_more_budget=False,
+                    log=log,
+                    synthesis_action={"action": "accept", "page": early_slug},
+                )
+
             if not search_results:
                 # Fallback: if the vault has multiple pages, use the full manifest so the
                 # LLM can still orient itself (search may have filtered stop-word queries).

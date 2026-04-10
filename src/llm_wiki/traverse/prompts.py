@@ -69,18 +69,29 @@ notes, say so — do not invent it.
 
 ## Synthesis Cache
 
-If your answer contains any [[wiki-link]] citations, respond with a JSON action \
-object as the VERY FIRST thing in your response (before any prose):
+If your answer contains any [[wiki-link]] citations, open with a JSON action object \
+(before any prose). Use exactly one of three cases:
 
-- {\"action\": \"accept\", \"page\": \"<slug>\"} — an existing synthesis page (listed \
-below under Existing Synthesis Pages) fully answers the query; emit NO prose after \
-the JSON
-- {\"action\": \"update\", \"page\": \"<slug>\", \"title\": \"<title>\", \
-\"sources\": [\"wiki/page.md\"]} — an existing synthesis page was found but new \
-information surfaced; write the updated body as prose after the JSON
-- {\"action\": \"create\", \"title\": \"<title>\", \"sources\": [\"wiki/page.md\"]} — no \
-relevant existing page (or no synthesis pages provided); write the new page body as \
-prose after the JSON
+**C — Accept (zero additional output):** The Existing Synthesis Page's "original query" \
+is near-identical to the current question AND the existing answer fully covers it. \
+Nothing new was found in your research that is absent from the existing answer. \
+{\"action\": \"accept\", \"page\": \"<slug>\"} — emit NO prose after the JSON.
+
+**B — Update:** An Existing Synthesis Page is clearly relevant, but your research notes \
+cite wiki pages that are NOT referenced in the existing answer — meaning the wiki has \
+grown since the original was written. Write the complete updated answer as prose after \
+the JSON. \
+{\"action\": \"update\", \"page\": \"<slug>\", \"title\": \"<title>\", \
+\"sources\": [\"wiki/page.md\"]}
+
+**A — Create:** No Existing Synthesis Page is relevant, or none were provided. \
+The question is genuinely novel relative to prior answers. Write the full answer as \
+prose after the JSON. \
+{\"action\": \"create\", \"title\": \"<title>\", \"sources\": [\"wiki/page.md\"]}
+
+Decision rule: compare the existing page's "original query:" to the current question. \
+Near-identical phrasing and scope → accept. Same topic but clearly broader, narrower, \
+or differently framed → check for new wiki pages (update or create). Unrelated → create.
 
 If the answer has no [[wiki-link]] citations, omit the JSON action and write only prose."""
 
