@@ -12,8 +12,8 @@ from llm_wiki.traverse.llm_client import LLMClient, LLMResponse, _should_retry
 def _make_client():
     """Create an LLMClient with a simple pass-through mock queue."""
     queue = MagicMock()
-    # queue.submit(fn, priority=...) should call fn() directly
-    async def submit(fn, priority="query"):
+    # queue.submit(fn, priority=..., label=...) should call fn() directly
+    async def submit(fn, priority="query", label="unknown", **kwargs):
         return await fn()
     queue.submit = submit
     queue.record_tokens = MagicMock()
@@ -211,3 +211,31 @@ async def test_complete_routes_through_queue_semaphore():
 
     assert result.content == "OK"
     assert peak_active == [1]  # semaphore was held during the call
+
+
+@pytest.mark.asyncio
+async def test_complete_passes_label_to_queue(monkeypatch):
+    """LLMClient.complete() passes the label parameter to queue.submit()."""
+    captured_labels: list[str] = []
+    original_submit = LLMQueue.submit
+
+    async def capturing_submit(self, fn, priority="maintenance", label="unknown", **kwargs):
+        captured_labels.append(label)
+        return await original_submit(self, fn, priority=priority, label=label, **kwargs)
+
+    monkeypatch.setattr(LLMQueue, "submit", capturing_submit)
+
+    queue = LLMQueue(max_concurrent=2)
+    client = LLMClient(queue, model="test-model")
+
+    # Patch litellm to avoid real network call
+    mock_resp = _make_mock_response("response", 10)
+    with patch("llm_wiki.traverse.llm_client.litellm") as mock_litellm:
+        mock_litellm.acompletion = AsyncMock(return_value=mock_resp)
+
+        await client.complete(
+            [{"role": "user", "content": "hello"}],
+            label="adversary:verify:test-page",
+        )
+
+    assert "adversary:verify:test-page" in captured_labels
