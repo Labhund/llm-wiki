@@ -435,6 +435,79 @@ def find_stale_resonance(vault_root: Path, config: WikiConfig) -> CheckResult:
     return CheckResult(check="stale-resonance", issues=issues)
 
 
+def find_missing_frontmatter(vault: Vault) -> CheckResult:
+    """Pages missing required structural frontmatter fields.
+
+    Checks every wiki page for the following fields:
+      - created, updated, type, status  → minor if absent
+      - source (only when created_by is 'ingest' or 'proposal') → moderate if absent
+
+    Pages without created_by (hand-written pages) are NOT flagged for missing source.
+    Pure Python — no LLM. Implements PHILOSOPHY Principle 13.
+    """
+    # Fields that are always required (minor severity)
+    _REQUIRED_MINOR = ("created", "updated", "type", "status")
+    # created_by values that require a source field (moderate severity)
+    _NEEDS_SOURCE = {"ingest", "proposal"}
+
+    issues: list[Issue] = []
+
+    for name, _entry in vault.manifest_entries().items():
+        page = vault.read_page(name)
+        if page is None:
+            continue
+        fm = page.frontmatter
+
+        missing_minor: list[str] = [f for f in _REQUIRED_MINOR if f not in fm]
+
+        missing_moderate: list[str] = []
+        created_by = fm.get("created_by")
+        if created_by in _NEEDS_SOURCE and "source" not in fm:
+            missing_moderate.append("source")
+
+        if not missing_minor and not missing_moderate:
+            continue
+
+        all_missing = missing_minor + missing_moderate
+        missing_label = ", ".join(all_missing)
+
+        # Overall severity: moderate if any moderate field is missing, else minor
+        severity = "moderate" if missing_moderate else "minor"
+
+        # Build a helpful body explaining each field's purpose
+        field_descriptions: list[str] = []
+        field_purposes = {
+            "created": "creation date (ISO 8601) for audit trails",
+            "updated": "last-updated date for staleness detection",
+            "type": "page type (concept/synthesis/etc.) for search filtering",
+            "status": "maturity status (stub/draft/etc.) for quality assessment",
+            "source": "citation back to the raw/ source file that seeded this page",
+        }
+        for f in all_missing:
+            desc = field_purposes.get(f, f)
+            field_descriptions.append(f"`{f}`: {desc}")
+
+        issues.append(
+            Issue(
+                id=Issue.make_id("missing-frontmatter", name, "|".join(sorted(all_missing))),
+                type="missing-frontmatter",
+                status="open",
+                severity=severity,
+                title=f"[{name}] missing frontmatter: {missing_label}",
+                page=name,
+                body=(
+                    f"The page [[{name}]] is missing required frontmatter fields:\n\n"
+                    + "\n".join(f"- {d}" for d in field_descriptions)
+                ),
+                created=Issue.now_iso(),
+                detected_by="auditor",
+                metadata={"missing_fields": all_missing},
+            )
+        )
+
+    return CheckResult(check="missing-frontmatter", issues=issues)
+
+
 def find_synthesis_without_resonance(vault_root: Path, config: WikiConfig) -> CheckResult:
     """Synthesis pages older than synthesis_lint_months with no resonance talk entries.
 
