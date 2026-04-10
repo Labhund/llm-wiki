@@ -227,6 +227,7 @@ def init(vault_path: Path) -> None:
         (vault_path / "raw").mkdir(exist_ok=True)
         (vault_path / "inbox").mkdir(exist_ok=True)
         click.echo(f"Initialised new vault at {vault_path}.")
+    # Create markers before Vault.scan — scan validates their presence before creating wiki/ internally
     vault = Vault.scan(vault_path)
     click.echo(
         f"Indexed {vault.page_count} pages "

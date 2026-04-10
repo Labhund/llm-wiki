@@ -431,7 +431,7 @@ def test_init_bootstraps_fresh_directory(tmp_path):
     """init on an empty directory creates skeleton dirs and reports success."""
     runner = CliRunner()
     result = runner.invoke(cli, ["init", str(tmp_path)])
-    assert result.exit_code == 0, result.output
+    assert result.exit_code == 0, f"output={result.output!r} exception={result.exception!r}"
     assert (tmp_path / "wiki").is_dir()
     assert (tmp_path / "raw").is_dir()
     assert (tmp_path / "inbox").is_dir()
