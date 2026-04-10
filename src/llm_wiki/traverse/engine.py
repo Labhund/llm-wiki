@@ -87,7 +87,8 @@ class TraversalEngine:
             # Capture tokens_used for the Turn 0 call as a delta (consistent with Turn N).
             tokens_before_turn0 = memory.budget_used
             turn_data = await self._llm_turn(
-                question, memory, manifest_text, traverse_prompt
+                question, memory, manifest_text, traverse_prompt,
+                label="query:traverse:step-0",
             )
             self._apply_turn(memory, turn_data)
             log.add_turn(TurnLog(
@@ -137,7 +138,8 @@ class TraversalEngine:
 
                 tokens_before = memory.budget_used
                 turn_data = await self._llm_turn(
-                    question, memory, content, traverse_prompt
+                    question, memory, content, traverse_prompt,
+                    label=f"query:traverse:step-{turn_num}",
                 )
 
                 page_read = PageRead(
@@ -184,12 +186,13 @@ class TraversalEngine:
         memory: WorkingMemory,
         content: str,
         system_prompt: str,
+        label: str = "query:traverse",
     ) -> dict:
         """Run one LLM traversal turn. Returns parsed turn data dict."""
         messages = compose_traverse_messages(
             question, memory, content, system_prompt
         )
-        response = await self._llm.complete(messages)
+        response = await self._llm.complete(messages, label=label)
         memory.budget_used += response.tokens_used
 
         try:
@@ -256,7 +259,7 @@ class TraversalEngine:
     ) -> TraversalResult:
         """Synthesize final answer, persist log, build result."""
         messages = compose_synthesize_messages(question, memory, synthesize_prompt)
-        response = await self._llm.complete(messages, temperature=0.3)
+        response = await self._llm.complete(messages, temperature=0.3, label="query:synthesize")
         memory.budget_used += response.tokens_used
 
         answer = response.content

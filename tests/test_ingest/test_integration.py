@@ -21,7 +21,7 @@ class MockLLMClient:
         self._responses = list(responses)
         self._idx = 0
 
-    async def complete(self, messages, temperature=0.7, priority="query") -> LLMResponse:
+    async def complete(self, messages, temperature=0.7, priority="query", **kwargs) -> LLMResponse:
         if self._idx >= len(self._responses):
             raise RuntimeError("no more responses")
         content = self._responses[self._idx]

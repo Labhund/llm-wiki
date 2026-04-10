@@ -19,7 +19,7 @@ class _StubLLM:
         self.response = response_text
         self.calls: list = []
 
-    async def complete(self, messages, temperature: float = 0.7, priority: str = "query"):
+    async def complete(self, messages, temperature: float = 0.7, priority: str = "query", **kwargs):
         from llm_wiki.traverse.llm_client import LLMResponse
         self.calls.append((messages, priority))
         return LLMResponse(content=self.response, input_tokens=100, output_tokens=0)

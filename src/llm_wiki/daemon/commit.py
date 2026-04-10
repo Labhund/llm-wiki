@@ -110,6 +110,7 @@ class CommitService:
                 messages = compose_commit_summary_messages(session.author, entries)
                 response = await self._llm.complete(
                     messages, temperature=0.0, priority="maintenance",
+                    label=f"commit:summarize:{session.author}",
                 )
                 subject, bullets = parse_commit_summary(response.content)
                 if subject:

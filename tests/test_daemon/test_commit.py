@@ -84,7 +84,7 @@ async def test_commit_service_settle_with_llm_uses_summary(tmp_path):
     page.write_text("body.\n")
 
     class MockLLM:
-        async def complete(self, messages, temperature=0.0, priority="maintenance"):
+        async def complete(self, messages, temperature=0.0, priority="maintenance", **kwargs):
             return LLMResponse(
                 content=(
                     "fix learning rate per source table 3\n\n"

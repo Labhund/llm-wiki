@@ -206,7 +206,7 @@ class LibrarianAgent:
                         continue
 
             try:
-                summary = await summarize_open_entries(open_entries, self._llm)
+                summary = await summarize_open_entries(open_entries, self._llm, page_name=page_name)
             except Exception:
                 logger.exception("Failed to summarize talk page %s", page_name)
                 continue
@@ -255,7 +255,8 @@ class LibrarianAgent:
         )
 
         response = await self._llm.complete(
-            messages, temperature=0.4, priority="maintenance"
+            messages, temperature=0.4, priority="maintenance",
+            label="librarian:refine-manifest",
         )
         tags, summary = parse_refinement(response.content)
 

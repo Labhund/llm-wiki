@@ -18,7 +18,7 @@ class _StubLLM:
     def __init__(self, response_text: str) -> None:
         self.response = response_text
 
-    async def complete(self, messages, temperature: float = 0.7, priority: str = "query"):
+    async def complete(self, messages, temperature: float = 0.7, priority: str = "query", **kwargs):
         from llm_wiki.traverse.llm_client import LLMResponse
         return LLMResponse(content=self.response, input_tokens=100, output_tokens=0)
 
@@ -104,7 +104,7 @@ async def test_adversary_full_lifecycle_mixed_verdicts(tmp_path: Path, _clean_st
         def __init__(self) -> None:
             self.i = 0
 
-        async def complete(self, messages, temperature: float = 0.7, priority: str = "query"):
+        async def complete(self, messages, temperature: float = 0.7, priority: str = "query", **kwargs):
             from llm_wiki.traverse.llm_client import LLMResponse
             response = self.verdicts[self.i % 3]
             self.i += 1
