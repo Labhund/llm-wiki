@@ -637,3 +637,54 @@ async def test_attention_map_clamps_unknown_severity_to_minor(phase6a_daemon_ser
     assert set(am["totals"]["issues"].keys()) == {"critical", "moderate", "minor"}
     # And the count should land in "minor" (the clamp default for issues)
     assert am["totals"]["issues"]["minor"] >= 1
+
+
+@pytest.mark.asyncio
+async def test_dry_run_with_proposal_mode_uses_fast_path(
+    daemon_server, monkeypatch, sample_vault: Path
+):
+    """dry_run=True + proposal_mode=True must NOT call _handle_ingest_proposals.
+
+    _handle_ingest_proposals runs the full multi-chunk LLM pipeline and would
+    time out the 30-second client socket. The fast path (extraction-only) must
+    be used instead.
+    """
+    server, sock_path = daemon_server
+    calls: list[str] = []
+
+    async def fake_proposals(request: dict) -> dict:
+        calls.append("proposals")
+        return {"status": "ok"}
+
+    monkeypatch.setattr(server, "_handle_ingest_proposals", fake_proposals)
+
+    # Patch the ingest agent so we don't need a real LLM
+    from unittest.mock import AsyncMock, MagicMock
+    from llm_wiki.ingest.agent import IngestAgent, IngestResult
+
+    source = sample_vault / "raw" / "test-paper.pdf"
+    mock_result = IngestResult(
+        source_path=source,
+        pages_created=[],
+        pages_updated=[],
+        dry_run=True,
+        concepts_planned=[],
+        source_chars=100,
+    )
+    monkeypatch.setattr(IngestAgent, "ingest", AsyncMock(return_value=mock_result))
+
+    # Write a dummy source file inside the vault
+    source.parent.mkdir(exist_ok=True)
+    source.write_bytes(b"%PDF-test")
+
+    resp = await _request(sock_path, {
+        "type": "ingest",
+        "source_path": str(source),
+        "dry_run": True,
+        "proposal_mode": True,
+        "author": "cli",
+        "connection_id": "test-conn",
+    })
+
+    assert resp["status"] == "ok"
+    assert calls == [], "_handle_ingest_proposals must NOT be called on dry-run"

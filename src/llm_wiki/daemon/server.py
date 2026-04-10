@@ -1338,7 +1338,7 @@ class DaemonServer:
         }
 
     async def _handle_ingest(self, request: dict) -> dict:
-        if request.get("proposal_mode"):
+        if request.get("proposal_mode") and not request.get("dry_run"):
             return await self._handle_ingest_proposals(request)
         if "source_path" not in request:
             return {"status": "error", "message": "Missing required field: source_path"}
