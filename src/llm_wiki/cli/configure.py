@@ -354,6 +354,8 @@ def _setup_openrouter(label: str = "Choose your smart model:") -> tuple[str, dic
 
 
 def _setup_custom(label: str = "Choose your smart model:") -> tuple[str, dict[str, Any]]:
+    # label accepted for API uniformity with other _setup_* funcs; unused here
+    # (_setup_custom uses a free-text prompt, no model picker)
     _info("Any OpenAI-compatible endpoint works (vLLM, Together AI, Groq, etc.)")
     print()
     api_base = _prompt("Base URL (e.g. https://api.groq.com/openai/v1)")
