@@ -230,7 +230,16 @@ def stop(vault_path: Path) -> None:
         click.echo("Daemon is not running.")
         return
     os.kill(pid, _signal.SIGTERM)
-    click.echo(f"Sent stop signal to daemon (PID {pid})")
+    # Wait up to 3s for graceful shutdown; escalate to SIGKILL if stuck.
+    for _ in range(30):
+        time.sleep(0.1)
+        if not is_process_alive(pid):
+            break
+    else:
+        os.kill(pid, _signal.SIGKILL)
+        click.echo(f"Daemon (PID {pid}) did not stop gracefully; sent SIGKILL")
+    cleanup_stale(sock_path, pid_path)
+    click.echo(f"Daemon stopped (PID {pid})")
 
 
 @cli.command()
