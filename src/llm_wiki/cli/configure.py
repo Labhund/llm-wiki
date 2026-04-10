@@ -802,21 +802,44 @@ def run_wizard(vault_path: Path) -> None:
     with open(config_path, "w") as f:
         yaml.dump(config, f, default_flow_style=False, allow_unicode=True, sort_keys=False)
 
+    # ── Agent framework integration ───────────────────────────────────────────
+    print()
+    _header("Agent Framework Integration")
+    framework_result = _setup_agent_framework()
+
     # ── Summary ───────────────────────────────────────────────────────────────
     _header("Setup Complete")
 
     has_fast = "fast" in backends
+    framework = framework_result.get("framework") if framework_result else "skipped"
+    config_missing = framework_result.get("config_missing", False) if framework_result else False
+
+    # Framework display label
+    framework_label = {
+        "hermes": f"Hermes  ({framework_result.get('skills_installed', 0)} skills installed)",
+        "claude_code": "Claude Code  (MCP registered)",
+        "agent_guided": "Agent-guided  (see instructions above)",
+        "manual": "Manual  (see snippets above)",
+        "skipped": "Not configured",
+    }.get(framework, framework)
+
     features = [
         (f"Smart model  ({backend_cfg['model']})", True, None),
-        (f"Fast model  ({backends['fast']['model']})" if has_fast
-         else "Fast model  (using smart model for all tasks)",
-         has_fast, "run wizard again to configure"),
+        (
+            f"Fast model  ({backends['fast']['model']})" if has_fast
+            else "Fast model  (using smart model for all tasks)",
+            has_fast,
+            "run wizard again to configure",
+        ),
         ("Embeddings / semantic search", embed_enabled,
          "disable with search.embeddings_enabled: false"),
+        (f"Agent framework  {framework_label}",
+         framework not in ("skipped", "manual"),
+         "run wizard again to configure"),
     ]
 
     enabled = sum(1 for _, ok, _ in features if ok)
-    _info(f"{enabled}/{len(features)} features configured:")
+    _info(f"{enabled}/{len(features)} configured:")
     print()
     for name, ok, hint in features:
         if ok:
@@ -824,6 +847,11 @@ def run_wizard(vault_path: Path) -> None:
         else:
             dim = f"  {_col(f'({hint})', _C.DIM)}" if hint else ""
             print(f"   {_col('✗', _C.RED)} {name}{dim}")
+
+    if config_missing:
+        print()
+        _warn("No LLM backend configured yet.")
+        _info("Run: llm-wiki configure  to set up your models before starting the daemon.")
 
     print()
     _ok(f"Config written to {config_path}")
