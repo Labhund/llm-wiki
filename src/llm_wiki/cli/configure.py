@@ -1,6 +1,7 @@
 """Interactive setup wizard for llm-wiki — guides users through LLM backend and API key configuration."""
 from __future__ import annotations
 
+import hashlib as _hashlib
 import sys
 from pathlib import Path
 from typing import Any
@@ -31,6 +32,63 @@ def _skills_source() -> Path:
         "Could not locate bundled skills directory.\n"
         "Run: pip install -e . to ensure the package is properly installed."
     )
+
+
+_MCP_BANNER = (
+    "> **MCP supersedes this skill.** If `wiki_search`, `wiki_read`, `wiki_query` tools are\n"
+    "> available (llm-wiki MCP server connected), use those instead. This skill is retained\n"
+    "> as conceptual reference only.\n"
+)
+
+
+def _parse_skill_name(md_path: Path) -> str | None:
+    """Extract the 'name' field from YAML frontmatter. Returns None if absent."""
+    content = md_path.read_text()
+    if not content.startswith("---"):
+        return None
+    end = content.find("---", 3)
+    if end < 0:
+        return None
+    try:
+        meta = yaml.safe_load(content[3:end].strip())
+        return meta.get("name") if isinstance(meta, dict) else None
+    except yaml.YAMLError:
+        return None
+
+
+def _skill_dest(name: str, hermes_home: Path) -> Path:
+    """Map a skill name (slash-separated) to its SKILL.md path under hermes_home/skills/."""
+    parts = name.split("/")
+    return hermes_home / "skills" / Path(*parts) / "SKILL.md"
+
+
+def _update_manifest(manifest_path: Path, skill_name: str, content: bytes) -> None:
+    """Upsert a skillname:md5 entry in the Hermes bundled manifest."""
+    md5 = _hashlib.md5(content).hexdigest()
+    entry = f"{skill_name}:{md5}"
+    if manifest_path.exists():
+        lines = [l for l in manifest_path.read_text().splitlines()
+                 if not l.startswith(f"{skill_name}:")]
+    else:
+        lines = []
+    lines.append(entry)
+    manifest_path.write_text("\n".join(lines) + "\n")
+
+
+def _patch_legacy_skill(skill_path: Path) -> bool:
+    """Prepend MCP supersession banner after frontmatter. Returns True if patched."""
+    content = skill_path.read_text()
+    if _MCP_BANNER in content:
+        return False
+    if not content.startswith("---"):
+        return False
+    end = content.find("---", 3)
+    if end < 0:
+        return False
+    insert_at = end + 3
+    new_content = content[:insert_at] + "\n\n" + _MCP_BANNER + "\n" + content[insert_at:].lstrip("\n")
+    skill_path.write_text(new_content)
+    return True
 
 
 # ── ANSI colors ───────────────────────────────────────────────────────────────
