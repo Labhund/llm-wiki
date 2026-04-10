@@ -16,11 +16,6 @@ _SENTENCE_SPLIT_RE = re.compile(r"(?<=[.!?])\s+")
 # compliance reviewer's pattern.
 _CODE_FENCE_RE = re.compile(r"^(?:```|~~~)")
 _MARKER_LINE_RE = re.compile(r"^%%\s*section:")
-# Find a [[raw/...]] citation that is the LAST wikilink in the sentence
-# (allowing optional trailing punctuation/whitespace after the link).
-_TRAILING_RAW_CITATION_RE = re.compile(
-    r"\[\[(raw/[^\]|]+)(?:\|[^\]]+)?\]\]\s*[.!?]?\s*$"
-)
 
 
 @dataclass
@@ -40,21 +35,32 @@ class Claim:
         return digest[:12]
 
 
-def extract_claims(page: "Page") -> list[Claim]:
+def extract_claims(page: "Page", raw_dir: str = "raw") -> list[Claim]:
     """Extract all verifiable claims from a parsed page.
 
     A claim is a sentence inside a section body that ends with a
-    [[raw/...]] citation. Code blocks (``` or ~~~), %% marker lines,
+    [[<raw_dir>/...]] citation. Code blocks (``` or ~~~), %% marker lines,
     and headings are excluded. The page's frontmatter `source` field
     is NOT counted as a claim — only body content is.
+
+    Args:
+        page: Parsed wiki page.
+        raw_dir: The raw sources directory prefix used in citations
+            (e.g. "raw" matches [[raw/...]]). Defaults to "raw".
+            Pass ``config.vault.raw_dir.rstrip("/")`` at call sites
+            that have access to config.
     """
+    prefix = re.escape(raw_dir.rstrip("/"))
+    citation_re = re.compile(
+        rf"\[\[({prefix}/[^\]|]+)(?:\|[^\]]+)?\]\]\s*[.!?]?\s*$"
+    )
     claims: list[Claim] = []
     page_slug = page.path.stem
 
     for section in page.sections:
         sentences = _extract_body_sentences(section.content)
         for sentence in sentences:
-            match = _TRAILING_RAW_CITATION_RE.search(sentence)
+            match = citation_re.search(sentence)
             if match is None:
                 continue
             citation = match.group(1)
