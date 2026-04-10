@@ -67,7 +67,6 @@ class LLMQueue:
     ) -> None:
         self._semaphore = asyncio.Semaphore(max_concurrent)
         self._max_concurrent = max_concurrent
-        self._active: int = 0
         self._pending: int = 0
         self._active_jobs: dict[int, ActiveJob] = {}
         self._next_id: int = 0
@@ -116,11 +115,9 @@ class LLMQueue:
                     priority=priority,
                     started_at=time.monotonic(),
                 )
-                self._active += 1
                 try:
                     return await fn(**kwargs)
                 finally:
-                    self._active -= 1
                     self._active_jobs.pop(job_id, None)
         finally:
             if not acquired:
@@ -171,7 +168,7 @@ class LLMQueue:
 
     @property
     def active_count(self) -> int:
-        return self._active
+        return len(self._active_jobs)
 
     @property
     def active_jobs(self) -> list[ActiveJob]:
