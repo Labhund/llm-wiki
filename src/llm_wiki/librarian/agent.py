@@ -243,7 +243,7 @@ class LibrarianAgent:
         Returns:
             Number of page files that were modified.
         """
-        from llm_wiki.page import Page, _split_frontmatter
+        from llm_wiki.page import _split_frontmatter
 
         wiki_dir = self._vault_root / "wiki"
         if not wiki_dir.exists():
@@ -305,7 +305,7 @@ class LibrarianAgent:
             frontmatter["ingested"] = date_str
 
         # Reconstruct the file: YAML-dump new frontmatter + original body
-        fm_text = yaml.dump(frontmatter, default_flow_style=False, allow_unicode=True)
+        fm_text = yaml.dump(frontmatter, default_flow_style=False, allow_unicode=True, sort_keys=False)
         new_raw = f"---\n{fm_text}---\n\n{body}"
         md_file.write_text(new_raw, encoding="utf-8")
         logger.debug("Librarian: backfilled %s", md_file.name)
