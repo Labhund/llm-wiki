@@ -66,7 +66,7 @@ and output formats.
 Citations: protein-dj
 ```
 
-The "Missing Information" section is a feature: if the wiki doesn't have a detail, the answer says so rather than hallucinating from training. The adversary will eventually sample that gap, fetch the source, and fill it in — making the gap visible is what triggers that process.
+The "Missing Information" section is a feature: if the wiki doesn't have a detail, the answer says so rather than hallucinating from training. The gap gets filled when you ingest the relevant source — `llm-wiki ingest boltz2-paper.pdf` would create the missing page and the next query would cite it.
 
 ### Talk pages for the uncitable
 
