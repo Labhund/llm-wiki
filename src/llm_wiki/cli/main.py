@@ -112,7 +112,8 @@ class _Spinner:
             print(line)
 
     def stop(self) -> None:
-        self._running = False
+        with self._lock:
+            self._running = False
         if self._thread:
             self._thread.join(timeout=1)
         with self._lock:
@@ -400,9 +401,12 @@ def ingest(source_path: Path, vault_path: Path, dry_run: bool) -> None:
                 # no output line for extracting — spinner alone is enough on TTY
             elif stage == "concepts_found":
                 count = frame["count"]
+                line = f"[PROGRESS] concepts_found: {count}"
                 if spinner:
                     spinner.update(f"Found {count} concept(s) — writing pages...")
-                click.echo(f"[PROGRESS] concepts_found: {count}")
+                    spinner.print_line(line)
+                else:
+                    click.echo(line)
             elif stage == "concept_done":
                 name = frame["name"]
                 action = frame["action"]
