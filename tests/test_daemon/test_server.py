@@ -672,27 +672,20 @@ async def test_process_list_route(daemon_server):
 
 
 @pytest.mark.asyncio
-async def test_dry_run_with_proposal_mode_uses_fast_path(
+async def test_dry_run_with_proposal_mode_uses_proposals_path(
     daemon_server, monkeypatch, sample_vault: Path
 ):
-    """dry_run=True + proposal_mode=True must NOT call _handle_ingest_proposals.
+    """dry_run=True + proposal_mode=True routes through _handle_ingest_proposals.
 
-    _handle_ingest_proposals runs the full multi-chunk LLM pipeline and would
-    time out the 30-second client socket. The fast path (extraction-only) must
-    be used instead.
+    The proposals handler runs ingest_as_proposals(dry_run=True) which stops
+    after the overview pass — fast, and uses the same prompt as live ingest so
+    the dry-run output matches what would actually be created.
     """
     server, sock_path = daemon_server
     calls: list[str] = []
 
-    async def fake_proposals(request: dict) -> dict:
-        calls.append("proposals")
-        return {"status": "ok"}
-
-    monkeypatch.setattr(server, "_handle_ingest_proposals", fake_proposals)
-
-    # Patch the ingest agent so we don't need a real LLM
-    from unittest.mock import AsyncMock, MagicMock
-    from llm_wiki.ingest.agent import IngestAgent, IngestResult
+    from unittest.mock import AsyncMock
+    from llm_wiki.ingest.agent import ConceptPreview, IngestAgent, IngestResult
 
     source = sample_vault / "raw" / "test-paper.pdf"
     mock_result = IngestResult(
@@ -700,10 +693,17 @@ async def test_dry_run_with_proposal_mode_uses_fast_path(
         pages_created=[],
         pages_updated=[],
         dry_run=True,
-        concepts_planned=[],
+        concepts_planned=[
+            ConceptPreview(name="my-concept", title="My Concept", is_update=False),
+        ],
         source_chars=100,
     )
-    monkeypatch.setattr(IngestAgent, "ingest", AsyncMock(return_value=mock_result))
+
+    async def fake_ingest_as_proposals(self, *args, **kwargs) -> IngestResult:
+        calls.append("proposals")
+        return mock_result
+
+    monkeypatch.setattr(IngestAgent, "ingest_as_proposals", fake_ingest_as_proposals)
 
     # Write a dummy source file inside the vault
     source.parent.mkdir(exist_ok=True)
@@ -719,4 +719,6 @@ async def test_dry_run_with_proposal_mode_uses_fast_path(
     })
 
     assert resp["status"] == "ok"
-    assert calls == [], "_handle_ingest_proposals must NOT be called on dry-run"
+    assert resp.get("dry_run") is True
+    assert calls == ["proposals"], "dry-run must route through proposals path"
+    assert resp["concepts_found"] == 1

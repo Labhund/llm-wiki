@@ -21,6 +21,8 @@ from llm_wiki.ingest.proposals import (
 from llm_wiki.ingest.prompts import (
     compose_concept_extraction_messages,
     compose_content_synthesis_messages,
+    compose_deep_read_synthesis_messages,
+    compose_digest_chunk_messages,
     compose_overview_messages,
     compose_page_content_messages,
     compose_passage_collection_messages,
@@ -305,19 +307,34 @@ class IngestAgent:
         self,
         source_path: Path,
         vault_root: Path,
-        proposals_dir: Path,
+        proposals_dir: "Path | None",
         manifest_lines: list[str],
         *,
         author: str = "cli",
+        dry_run: bool = False,
+        connection_id: str = "cli",
+        write_service: "PageWriteService | None" = None,
+        on_progress: "Callable[[dict], Awaitable[None]] | None" = None,
     ) -> IngestResult:
-        """Multi-chunk wiki-aware ingest that writes proposals instead of direct pages.
+        """Multi-chunk wiki-aware ingest: deep-read synthesis per concept.
+
+        Output mode is determined by the combination of arguments:
+        - ``write_service`` provided → write pages directly (streaming live ingest)
+        - ``proposals_dir`` provided → write proposal files for librarian review
+        - Both provided → write_service takes precedence
+        - Neither → concepts are identified but nothing is written (dry_run implies this)
 
         Args:
             source_path:    Absolute path to source (must be inside vault_root/raw/).
             vault_root:     Vault root directory.
             proposals_dir:  Where to write proposal files (inbox/proposals/).
+                            Pass None when using write_service for direct writes.
             manifest_lines: Existing wiki manifest, one "slug  title" line each.
-            author:         Who triggered the ingest (for proposal metadata).
+            author:         Who triggered the ingest (for proposal/page metadata).
+            dry_run:        Stop after overview pass — returns concept plan only.
+            connection_id:  Session ID forwarded to write_service.
+            write_service:  If provided, write pages directly via supervised surface.
+            on_progress:    Async callback for streaming progress frames.
         """
         from llm_wiki.ingest.source_meta import init_companion, write_companion_body
 
@@ -327,6 +344,9 @@ class IngestAgent:
             source_ref = str(source_path.relative_to(vault_root))
         except ValueError:
             source_ref = source_path.name
+
+        if on_progress:
+            await on_progress({"stage": "extracting"})
 
         extraction = await extract_text(source_path, ingest_config=self._config.ingest)
         if not extraction.success:
@@ -372,51 +392,48 @@ class IngestAgent:
             logger.info("No concepts identified in %s", source_path)
             return result
 
-        # Passage collection across all chunks
-        concept_passages: dict[str, list[str]] = {c.name: [] for c in concepts}
-        max_passages = self._config.ingest.max_passages_per_concept
+        if on_progress:
+            await on_progress({"stage": "concepts_found", "count": len(concepts)})
 
-        for chunk in chunks:
-            still_need = [c for c in concepts if len(concept_passages[c.name]) < max_passages]
-            if not still_need:
-                break
-            coll_msgs = compose_passage_collection_messages(
-                chunk_text=chunk,
-                concepts=still_need,
-            )
-            coll_resp = await self._llm.complete(
-                coll_msgs, temperature=0.1, priority="ingest",
-                label=f"ingest:passages:{source_path.name}",
-            )
-            found = parse_passage_collection(
-                coll_resp.content,
-                concept_names=[c.name for c in still_need],
-            )
-            for name, passages in found.items():
-                existing = concept_passages[name]
-                for p in passages:
-                    if p not in existing and len(existing) < max_passages:
-                        existing.append(p)
+        # Dry-run: stop after overview — one LLM call on chunk[0], same prompt as live ingest
+        if dry_run:
+            result.dry_run = True
+            for concept in concepts:
+                page_path = wiki_dir / f"{concept.name}.md"
+                result.concepts_planned.append(ConceptPreview(
+                    name=concept.name,
+                    title=concept.title,
+                    is_update=concept.action == "update" or page_path.exists(),
+                    passages=[],
+                    sections=concept.section_names,
+                ))
+            return result
+
+        if on_progress:
+            await on_progress({"stage": "building_context", "total_chunks": len(chunks)})
+
+        # Build paper context: full text if it fits, rolling digest if too large
+        paper_context = await self._build_paper_context(
+            extraction.content,
+            chunks=chunks,
+            source_name=source_path.name,
+        )
 
         source_slug = _re.sub(r"[^a-z0-9-]", "-", source_path.stem.lower()).strip("-")
         ocr_sourced = extraction.extraction_method == "image_ocr"
+        synth_temp = self._config.ingest.synthesis_temperature
 
-        # Content synthesis + proposal write per concept
-        for concept in concepts:
-            passages = concept_passages.get(concept.name, [])
-            if not passages:
-                logger.warning("No passages collected for concept %r — skipping", concept.name)
-                continue
-
-            synth_msgs = compose_content_synthesis_messages(
+        # Deep-read synthesis + write per concept
+        for i, concept in enumerate(concepts):
+            synth_msgs = compose_deep_read_synthesis_messages(
                 concept=concept,
-                passages=passages,
+                paper_context=paper_context,
                 source_ref=source_ref,
                 manifest_lines=manifest_lines,
                 batch_concepts=concepts,
             )
             synth_resp = await self._llm.complete(
-                synth_msgs, temperature=0.3, priority="ingest",
+                synth_msgs, temperature=synth_temp, priority="ingest",
                 label=f"ingest:synthesize:{concept.name}",
             )
             synthesis = parse_content_synthesis(synth_resp.content)
@@ -425,40 +442,104 @@ class IngestAgent:
                 logger.warning("No sections generated for %r — skipping", concept.name)
                 continue
 
-            proposal_passages: list[ProposalPassage] = []
-            for idx, passage_text in enumerate(passages):
-                gr = ground_passage(passage_text, extraction.content, ocr_sourced=ocr_sourced)
-                claim = sections[0].content.split(".")[0] if sections else passage_text[:80]
-                proposal_passages.append(ProposalPassage(
-                    id=f"p{idx + 1}",
-                    text=gr.passage,
-                    claim=claim,
-                    score=gr.score,
-                    method=gr.method,
-                    verifiable=gr.verifiable,
-                    ocr_sourced=gr.ocr_sourced,
-                ))
-
-            proposal = Proposal(
-                source=source_ref,
-                target_page=concept.name,
-                action=concept.action,
-                proposed_by=author,
-                created=datetime.datetime.now(datetime.timezone.utc).isoformat(),
-                extraction_method=extraction.extraction_method,
-                sections=sections,
-                passages=proposal_passages,
-                quality_warning=result.extraction_warning,
-                target_cluster=concept.cluster,
-            )
-            write_proposal(proposals_dir, proposal, source_slug=source_slug)
-
-            if concept.action == "create":
-                result.pages_created.append(concept.name)
+            if write_service is not None:
+                # Direct write via supervised write surface (streaming live ingest)
+                await self._write_via_service(
+                    write_service, wiki_dir, concept, sections, source_ref,
+                    author=author, connection_id=connection_id, result=result,
+                )
+                if on_progress:
+                    action = "created" if concept.name in result.pages_created else "updated"
+                    await on_progress({
+                        "stage": "concept_done",
+                        "name": concept.name,
+                        "title": concept.title,
+                        "action": action,
+                        "num": i + 1,
+                        "total": len(concepts),
+                    })
             else:
-                result.pages_updated.append(concept.name)
+                # Proposal write path — include grounding evidence for librarian review
+                proposal_passages: list[ProposalPassage] = []
+                for idx, section in enumerate(s for s in sections if s.name != "references"):
+                    first_sentence = section.content.split(".")[0].strip() if section.content else ""
+                    if not first_sentence:
+                        continue
+                    gr = ground_passage(first_sentence, extraction.content, ocr_sourced=ocr_sourced)
+                    proposal_passages.append(ProposalPassage(
+                        id=f"p{idx + 1}",
+                        text=first_sentence,
+                        claim=first_sentence[:120],
+                        score=gr.score,
+                        method=gr.method,
+                        verifiable=gr.verifiable,
+                        ocr_sourced=gr.ocr_sourced,
+                    ))
+
+                proposal = Proposal(
+                    source=source_ref,
+                    target_page=concept.name,
+                    action=concept.action,
+                    proposed_by=author,
+                    created=datetime.datetime.now(datetime.timezone.utc).isoformat(),
+                    extraction_method=extraction.extraction_method,
+                    sections=sections,
+                    passages=proposal_passages,
+                    quality_warning=result.extraction_warning,
+                    target_cluster=concept.cluster,
+                )
+                if proposals_dir is not None:
+                    write_proposal(proposals_dir, proposal, source_slug=source_slug)
+
+                if concept.action == "create":
+                    result.pages_created.append(concept.name)
+                else:
+                    result.pages_updated.append(concept.name)
 
         return result
+
+    async def _build_paper_context(
+        self,
+        full_text: str,
+        chunks: list[str],
+        source_name: str,
+    ) -> str:
+        """Return the paper context to pass to synthesis.
+
+        If the full text is within the configured `full_context_chars` limit,
+        return it directly — the synthesis model reads the whole thing.
+
+        Otherwise, run a rolling digest loop: read each chunk sequentially,
+        accumulating a structured summary of the whole paper. The digest
+        is used for synthesis instead of the raw text.
+        """
+        if len(full_text) <= self._config.ingest.full_context_chars:
+            logger.info(
+                "Paper fits in context (%d chars) — passing full text to synthesis",
+                len(full_text),
+            )
+            return full_text
+
+        logger.info(
+            "Paper too large (%d chars > %d limit) — building rolling digest over %d chunks",
+            len(full_text), self._config.ingest.full_context_chars, len(chunks),
+        )
+        digest = ""
+        for i, chunk in enumerate(chunks):
+            msgs = compose_digest_chunk_messages(
+                chunk_text=chunk,
+                running_digest=digest,
+                chunk_index=i,
+                total_chunks=len(chunks),
+            )
+            resp = await self._llm.complete(
+                msgs, temperature=0.2, priority="ingest",
+                label=f"ingest:digest:{source_name}:{i}",
+            )
+            digest = resp.content.strip()
+            logger.debug("Digest after chunk %d/%d: %d chars", i + 1, len(chunks), len(digest))
+
+        return digest
 
     @staticmethod
     def _sections_to_body(sections: list) -> str:

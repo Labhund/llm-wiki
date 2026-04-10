@@ -82,6 +82,11 @@ class ComplianceReviewer:
         self._check_missing_citation(result, old_content, new_content)
         self._check_new_idea(result, old_content, new_content)
 
+        # Patch token counts into section markers as a bookkeeping step.
+        # No-op on pages without %% markers; safe to call unconditionally.
+        from llm_wiki.ingest.page_writer import patch_token_estimates
+        patch_token_estimates(page_path)
+
         return result
 
     def _check_new_idea(

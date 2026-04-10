@@ -87,13 +87,22 @@ async def _stream_request(sock_path: Path, msg: dict) -> list[dict]:
 
 @pytest.mark.asyncio
 async def test_ingest_stream_route_sends_progress_and_done(server_with_ingest, monkeypatch):
-    """Streaming ingest sends progress frames then a done frame."""
+    """Streaming ingest sends progress frames then a done frame.
+
+    The streaming path uses ingest_as_proposals (not the old ingest) so it
+    emits: extracting → concepts_found → building_context → concept_done* → done.
+    """
     server, sock_path = server_with_ingest
 
-    async def fake_ingest(self_agent, source_path, vault_root, *, on_progress=None, **kwargs):
+    async def fake_ingest_as_proposals(
+        self_agent, source_path, vault_root, proposals_dir, manifest_lines,
+        *, on_progress=None, write_service=None, connection_id="cli",
+        author="cli", dry_run=False,
+    ):
         if on_progress:
             await on_progress({"stage": "extracting"})
             await on_progress({"stage": "concepts_found", "count": 2})
+            await on_progress({"stage": "building_context", "total_chunks": 3})
             await on_progress({
                 "stage": "concept_done", "name": "foo", "title": "Foo",
                 "action": "created", "num": 1, "total": 2,
@@ -104,14 +113,16 @@ async def test_ingest_stream_route_sends_progress_and_done(server_with_ingest, m
             })
         from llm_wiki.ingest.agent import IngestResult
         from pathlib import Path as _Path
-        result = IngestResult(
+        return IngestResult(
             source_path=_Path(source_path),
             pages_created=["foo"],
             pages_updated=["bar"],
         )
-        return result
 
-    monkeypatch.setattr("llm_wiki.ingest.agent.IngestAgent.ingest", fake_ingest)
+    monkeypatch.setattr(
+        "llm_wiki.ingest.agent.IngestAgent.ingest_as_proposals",
+        fake_ingest_as_proposals,
+    )
 
     frames = await _stream_request(sock_path, {
         "type": "ingest",
@@ -122,15 +133,16 @@ async def test_ingest_stream_route_sends_progress_and_done(server_with_ingest, m
     })
 
     types = [f["type"] for f in frames]
-    assert types == ["progress", "progress", "progress", "progress", "done"]
+    assert types == ["progress", "progress", "progress", "progress", "progress", "done"]
     assert frames[0]["stage"] == "extracting"
     assert frames[1]["stage"] == "concepts_found"
     assert frames[1]["count"] == 2
-    assert frames[2]["stage"] == "concept_done"
-    assert frames[2]["name"] == "foo"
-    assert frames[4]["status"] == "ok"
-    assert frames[4]["pages_created"] == 1
-    assert frames[4]["pages_updated"] == 1
+    assert frames[2]["stage"] == "building_context"
+    assert frames[3]["stage"] == "concept_done"
+    assert frames[3]["name"] == "foo"
+    assert frames[5]["status"] == "ok"
+    assert frames[5]["pages_created"] == 1
+    assert frames[5]["pages_updated"] == 1
 
 
 @pytest.mark.asyncio

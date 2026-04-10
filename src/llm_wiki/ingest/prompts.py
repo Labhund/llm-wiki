@@ -49,23 +49,43 @@ _PAGE_CONTENT_SYSTEM = """\
 You are writing content for a wiki page about a specific concept, based on a \
 source document.
 
-## Ingest Rules (Non-Negotiable)
+## Citation Rules (Non-Negotiable)
 
-1. Every factual claim MUST end with a citation: [[{{source_ref}}]]
-2. Do NOT interpret beyond what the source states
-3. If the source says "X correlates with Y", write exactly that — never "X causes Y"
-4. Be concise and precise
+Use numbered footnotes — `[^N]` inline, defined in a References section:
+- `[^1]` = [[{source_ref}]] (the primary source document)
+- Every factual claim MUST end with `[^1]`. No exceptions.
+- Do NOT embed [[raw/...]] links in body text — only in the References section.
+
+## Wikilink Rules
+
+Named concepts, models, methods, datasets, proteins, databases, and proper nouns \
+get `[[slug]]` wikilinks:
+- Known wiki slug → use it exactly.
+- Named concept not yet in wiki (e.g. "Free Energy Perturbation", "TYK2") → invent \
+  a kebab-case slug (e.g. `[[free-energy-perturbation]]`, `[[tyk2]]`). Red links are fine.
+- Generic terms with no standalone identity → plain text, no brackets.
+
+## Content Rules
+
+- Do NOT interpret beyond what the source states.
+- "X correlates with Y", not "X causes Y".
+- Be concise. Every sentence earns its place.
 
 ## Structural Contract (Non-Negotiable)
 
-Respond with a SINGLE JSON object. No text outside the JSON.
+Respond with a SINGLE JSON object. Add "references" as the LAST section:
 
 {{
   "sections": [
     {{
       "name": "section-slug",
       "heading": "Section Heading",
-      "content": "Markdown content with [[source]] citations."
+      "content": "Markdown with [[wikilinks]] and [^1] footnote citations."
+    }},
+    {{
+      "name": "references",
+      "heading": "References",
+      "content": "[^1]: [[{source_ref}]]"
     }}
   ]
 }}"""
@@ -222,13 +242,23 @@ Respond with a SINGLE JSON object mapping concept slugs to passage lists:
 _CONTENT_SYNTHESIS_SYSTEM = """\
 You are writing wiki content for a specific concept using verbatim source passages.
 
-## Wikilink Rules (Non-Negotiable)
+## Citation Rules (Non-Negotiable)
 
-1. Reference to a concept in the EXISTING WIKI or BATCH lists below → [[slug]] inline
-2. Every factual claim → [[<<<SOURCE_REF>>>]] at end of sentence, no exceptions
-3. General term NOT in either list → plain text, no brackets
-4. NEVER invent slugs. Only use slugs from the two lists below.
-5. [[raw/...]] = factual citation. [[slug]] = conceptual link. Never conflate.
+Use numbered footnotes — `[^N]` inline, defined in a References section:
+- `[^1]` = [[<<<SOURCE_REF>>>]] (the primary source)
+- Every factual claim MUST end with `[^1]`. No exceptions.
+- Do NOT embed [[raw/...]] in body text — only in the References section.
+
+## Wikilink Rules
+
+Named concepts, models, methods, datasets, proteins, databases, and proper nouns \
+get `[[slug]]` wikilinks:
+1. Slug in EXISTING WIKI list below → use that exact slug.
+2. Slug in BATCH list below → use that exact slug.
+3. Named concept NOT in either list (e.g. "Free Energy Perturbation", "TYK2") → \
+   invent a kebab-case slug (e.g. `[[free-energy-perturbation]]`, `[[tyk2]]`). \
+   Red links are fine — they flag pages to create.
+4. Generic terms with no standalone identity → plain text, no brackets.
 
 ## Existing wiki pages (use [[slug]] for these)
 
@@ -240,14 +270,14 @@ You are writing wiki content for a specific concept using verbatim source passag
 
 ## Content Rules
 
-- Synthesize — do not transcribe passages verbatim
+- Synthesize — do not transcribe passages verbatim.
 - Be concise and precise. Every sentence earns its place.
-- Do not interpret beyond what passages state
-- "X correlates with Y" not "X causes Y"
+- Do not interpret beyond what passages state.
+- "X correlates with Y" not "X causes Y".
 
 ## Structural Contract (Non-Negotiable)
 
-Respond with a SINGLE JSON object:
+Respond with a SINGLE JSON object. Include "references" as the LAST section:
 
 {
   "summary": "One sentence (≤20 words) describing the concept.",
@@ -255,10 +285,147 @@ Respond with a SINGLE JSON object:
     {
       "name": "section-slug",
       "heading": "Section Heading",
-      "content": "Markdown with [[wikilinks]] and [[<<<SOURCE_REF>>>]] citations."
+      "content": "Markdown with [[wikilinks]] and [^1] footnote citations."
+    },
+    {
+      "name": "references",
+      "heading": "References",
+      "content": "[^1]: [[<<<SOURCE_REF>>>]]"
     }
   ]
 }"""
+
+
+_DIGEST_CHUNK_SYSTEM = """\
+You are building a running digest of a scientific paper as you read it chunk by chunk.
+
+Your job: update the digest with everything NEW and important in the current chunk.
+Preserve all previously captured content unless you can merge it cleanly.
+
+Capture:
+- Named models, methods, datasets, baselines, and tools (with their key properties)
+- Quantitative results and comparisons (exact numbers where stated)
+- Core claims and findings, with enough context to cite them accurately
+- Limitations, open problems, and future directions
+- Cross-references between components
+
+Do NOT truncate or drop prior content to save space.
+Return ONLY the updated digest text — no preamble, no JSON."""
+
+
+_DEEP_READ_SYNTHESIS_SYSTEM = """\
+You are writing a wiki page for a specific concept.
+
+You have a comprehensive digest of the full paper — you understand the \
+whole document. Write from that understanding. Do not transcribe; synthesize.
+
+Think like an expert explaining this concept to a knowledgeable colleague: \
+integrate the methodology, results, comparisons to baselines, and limitations. \
+Every sentence should carry information that earns its place.
+
+## Citation Rules (Non-Negotiable)
+
+Use numbered footnotes — `[^N]` inline, defined in a References section:
+- `[^1]` = [[<<<SOURCE_REF>>>]] (the primary source)
+- Every factual claim MUST end with `[^1]`. No exceptions.
+- Do NOT embed [[raw/...]] in body text — only in the References section.
+
+## Wikilink Rules
+
+Named concepts, models, methods, datasets, proteins, databases, and proper nouns \
+get `[[slug]]` wikilinks:
+1. Slug in EXISTING WIKI list → use that exact slug.
+2. Slug in BATCH list → use that exact slug.
+3. Named concept NOT in either list → invent a kebab-case slug. Red links are fine.
+4. Generic terms → plain text.
+
+## Existing wiki pages
+
+<<<MANIFEST>>>
+
+## Concepts in this ingest batch
+
+<<<BATCH_SLUGS>>>
+
+## Content Rules
+
+- Synthesize, do not transcribe.
+- Write with depth. A good wiki page explains WHY, not just WHAT.
+- Include quantitative results where they ground a claim.
+- Do not interpret beyond what the paper states.
+- "X correlates with Y" not "X causes Y".
+
+## Structural Contract (Non-Negotiable)
+
+Respond with a SINGLE JSON object. Include "references" as the LAST section:
+
+{
+  "summary": "One sentence (≤20 words) describing the concept.",
+  "sections": [
+    {
+      "name": "section-slug",
+      "heading": "Section Heading",
+      "content": "Markdown with [[wikilinks]] and [^1] footnote citations."
+    },
+    {
+      "name": "references",
+      "heading": "References",
+      "content": "[^1]: [[<<<SOURCE_REF>>>]]"
+    }
+  ]
+}"""
+
+
+def compose_digest_chunk_messages(
+    chunk_text: str,
+    running_digest: str,
+    chunk_index: int,
+    total_chunks: int,
+) -> list[dict[str, str]]:
+    """Build messages for one iteration of the rolling paper digest."""
+    progress = f"chunk {chunk_index + 1} of {total_chunks}"
+    prior = (
+        f"## Running Digest So Far\n{running_digest}"
+        if running_digest
+        else "## Running Digest So Far\n(none — this is the first chunk)"
+    )
+    user = f"{prior}\n\n## New Chunk ({progress})\n{chunk_text}"
+    return [
+        {"role": "system", "content": _DIGEST_CHUNK_SYSTEM},
+        {"role": "user", "content": user},
+    ]
+
+
+def compose_deep_read_synthesis_messages(
+    concept: "ConceptPlan",
+    paper_context: str,
+    source_ref: str,
+    manifest_lines: list[str],
+    batch_concepts: "list[ConceptPlan]",
+) -> list[dict[str, str]]:
+    """Build messages for deep-read synthesis — full paper context, no pre-collected passages."""
+    manifest = "\n".join(manifest_lines) if manifest_lines else "(empty wiki)"
+    batch_slugs = "\n".join(f"- {c.name}: {c.title}" for c in batch_concepts)
+    system = (
+        _DEEP_READ_SYNTHESIS_SYSTEM
+        .replace("<<<SOURCE_REF>>>", source_ref)
+        .replace("<<<MANIFEST>>>", manifest)
+        .replace("<<<BATCH_SLUGS>>>", batch_slugs or "(none)")
+    )
+    section_hint = (
+        "## Requested sections\n" + "\n".join(f"- {s}" for s in concept.section_names)
+        if concept.section_names
+        else ""
+    )
+    user = (
+        f"## Concept to write\n{concept.title} (`{concept.name}`)\n\n"
+        f"{section_hint}\n\n"
+        f"## Full Paper Context\n{paper_context}"
+    ).strip()
+    return [
+        {"role": "system", "content": system},
+        {"role": "user", "content": user},
+    ]
 
 
 def compose_overview_messages(

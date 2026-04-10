@@ -608,10 +608,14 @@ def ingest(source_path: Path, vault_path: Path, dry_run: bool) -> None:
                 count = frame["count"]
                 line = f"[PROGRESS] concepts_found: {count}"
                 if spinner:
-                    spinner.update(f"Found {count} concept(s) — writing pages...")
+                    spinner.update(f"Found {count} concept(s) — building context...")
                     spinner.print_line(line)
                 else:
                     click.echo(line)
+            elif stage == "building_context":
+                total = frame.get("total_chunks", "?")
+                if spinner:
+                    spinner.update(f"Building paper context ({total} chunk(s))...")
             elif stage == "concept_done":
                 name = frame["name"]
                 action = frame["action"]

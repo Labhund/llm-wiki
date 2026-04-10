@@ -15,6 +15,7 @@ Each write:
 
 from __future__ import annotations
 
+import datetime
 import hashlib
 import logging
 import re
@@ -176,10 +177,12 @@ class PageWriteService:
 
         warnings: list[dict] = []
         async with self._coordinator.lock_for(slug):
+            from llm_wiki.ingest.page_writer import patch_token_estimates
             page_path.parent.mkdir(parents=True, exist_ok=True)
             content = self._build_page_content(title, body, citations, tags or [])
             page_path.write_text(content, encoding="utf-8")
-            content_hash = _content_hash(content)
+            patch_token_estimates(page_path)
+            content_hash = _content_hash(page_path.read_text(encoding="utf-8"))
 
             session = self._registry.get_or_open(
                 author, connection_id, state_dir=self._state_dir,
@@ -265,7 +268,8 @@ class PageWriteService:
                 )
 
             page_path.write_text(new_content, encoding="utf-8")
-            content_hash = _content_hash(new_content)
+            self._bump_updated(page_path)
+            content_hash = _content_hash(page_path.read_text(encoding="utf-8"))
             diff_summary = f"+{apply_result.additions} -{apply_result.removals}"
 
             session = self._registry.get_or_open(
@@ -378,7 +382,8 @@ class PageWriteService:
 
             new_content = "".join(new_lines)
             page_path.write_text(new_content, encoding="utf-8")
-            content_hash = _content_hash(new_content)
+            self._bump_updated(page_path)
+            content_hash = _content_hash(page_path.read_text(encoding="utf-8"))
 
             session = self._registry.get_or_open(
                 author, connection_id, state_dir=self._state_dir,
@@ -444,7 +449,14 @@ class PageWriteService:
         citations: list[str],
         tags: list[str],
     ) -> str:
-        fm = {"title": title}
+        today = datetime.date.today().isoformat()
+        fm: dict = {
+            "title": title,
+            "created": today,
+            "updated": today,
+            "type": "concept",
+            "status": "stub",
+        }
         if len(citations) == 1:
             fm["source"] = f"[[{citations[0]}]]"
         else:
@@ -453,3 +465,23 @@ class PageWriteService:
             fm["tags"] = tags
         frontmatter = yaml.dump(fm, default_flow_style=False, sort_keys=False).strip()
         return f"---\n{frontmatter}\n---\n\n{body.strip()}\n"
+
+    @staticmethod
+    def _bump_updated(path: Path) -> None:
+        """Update the `updated` frontmatter field to today's date."""
+        text = path.read_text(encoding="utf-8")
+        today = datetime.date.today().isoformat()
+        if not text.startswith("---"):
+            return
+        end = text.find("\n---", 3)
+        if end == -1:
+            return
+        fm_block = text[3:end]
+        # Replace existing updated field or append it
+        if re.search(r"^updated:", fm_block, re.MULTILINE):
+            fm_block = re.sub(
+                r"^updated:.*$", f"updated: '{today}'", fm_block, flags=re.MULTILINE
+            )
+        else:
+            fm_block = fm_block.rstrip() + f"\nupdated: '{today}'"
+        path.write_text("---" + fm_block + text[end:], encoding="utf-8")

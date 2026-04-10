@@ -186,12 +186,18 @@ def test_ingest_as_proposals_creates_proposal_files(tmp_path):
         "concepts": [{"name": "boltz-2", "title": "Boltz-2", "action": "create",
                       "section_names": ["overview"], "cluster": ""}]
     })
-    passage_resp = json.dumps({"boltz-2": ["Boltz-2 achieves SOTA."]})
+    # Deep-read pipeline: overview + synthesis only (no passage-collection step).
+    # Summary field is optional; parse_content_synthesis defaults it to "".
     synthesis_resp = json.dumps({
-        "sections": [{"name": "overview", "heading": "Overview",
-                      "content": "[[Boltz-2]] is a model [[raw/paper.md]]."}]
+        "summary": "Boltz-2 is a structural biology model.",
+        "sections": [
+            {"name": "overview", "heading": "Overview",
+             "content": "[[boltz-2]] is a model. [^1]"},
+            {"name": "references", "heading": "References",
+             "content": "[^1]: [[raw/paper.md]]"},
+        ]
     })
-    llm = MockLLMClient([overview_resp, passage_resp, synthesis_resp])
+    llm = MockLLMClient([overview_resp, synthesis_resp])
     cfg = WikiConfig()
 
     agent = IngestAgent(llm=llm, config=cfg)
