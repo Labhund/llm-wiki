@@ -1,7 +1,7 @@
 ---
 title: Synthesis Cache — Query-to-Page Design
 date: 2026-04-10
-status: approved
+status: implemented
 ---
 
 # Synthesis Cache
@@ -72,29 +72,21 @@ sources:
 
 ## Prompt Design
 
-When synthesis pages appear in the traversal top-K results, a new block is appended to the system prompt:
+The synthesize system prompt always includes the action schema. When synthesis pages appear in the traversal top-K results, their content is appended to the user message as an "Existing Synthesis Pages" block.
+
+**Action trigger (implemented):** the LLM is instructed to emit a JSON action whenever the answer contains `[[wiki-link]]` citations — regardless of whether synthesis candidates were provided. This is necessary for bootstrapping: the first synthesis page on a topic can only be written if `create` fires even when no candidates exist.
+
+The action object must be the **first** thing in the response:
 
 ```
-## Existing Synthesis Pages
-The following synthesis pages were found that may already answer this query.
-Inspect them carefully before generating a new answer.
+{"action": "create", "title": "...", "sources": ["wiki/page.md"]}
 
-[[boltz-2-structure-prediction]]
-query: "how does boltz-2 handle structure prediction?"
-<page body>
-
----
-
-Respond with a JSON action object as the FIRST thing in your response:
-- {"action": "accept", "page": "<slug>"} — existing page fully answers the query; do not regenerate
-- {"action": "update", "page": "<slug>", "title": "...", "content": "...", "sources": [...]} — add new information
-- {"action": "create", "title": "...", "content": "...", "sources": [...]} — no existing page fits
-
-If the answer has no wiki citations, omit the action object entirely.
-After the JSON object, write the prose answer for the user (used even in the update/create cases).
+Prose answer follows here...
 ```
 
-The prose answer is always emitted (for the CLI display). The action envelope is parsed from the response start; if parsing fails the write is skipped gracefully.
+For `accept`, no prose is emitted — the server reads the existing page and returns it verbatim. For `update`/`create`, prose after the JSON is the page body. If parsing fails, the write is skipped and prose is returned as-is.
+
+**Key deviation from original spec:** the spec's prompt example said "omit the JSON action if no synthesis pages are provided." This prevented bootstrapping (first synthesis page never written). The implementation emits `create` for any cited answer regardless of synthesis candidate presence.
 
 ## Error Handling
 
@@ -122,6 +114,18 @@ Integration test:
 - Not a separate cache layer; no `cache/` directory, no TTL logic
 - Not a pre-traversal short-circuit; traversal always runs (fresh content matters)
 - Not a replacement for ingest; synthesis pages are attributed to a query session, never treated as primary sources
+
+## Implementation Deviations
+
+Deviations from the original spec discovered during implementation and production testing:
+
+**Bootstrap fix (prompt):** the original spec said the action JSON should only be emitted when synthesis candidates are present. This prevented the first synthesis page from ever being written. Fixed: `create` fires whenever the answer has wiki citations, regardless of candidate presence. Commit: `bee46df`.
+
+**`accept` on deleted page:** the spec said fall back to `create`. Not possible — the engine discards prose for `accept` before the server can check if the page still exists (`answer = ""`). Outcome: empty answer returned. Documented in code comment.
+
+**`update` body source:** the spec's action schema showed `"content": "..."` as a field inside the JSON object. The implementation uses the prose after the JSON block as the page body instead (the prompt instructs the LLM to write the body as prose, not embed it in JSON). The `content` key in the JSON is ignored.
+
+**Production observation (2026-04-10):** first live query wrote `applications-of-boltz.md` (synthesis page). Second identical query cited `[[applications-of-boltz]]` alongside `[[boltz-2]]`, confirming the synthesis page surfaced in BM25 and was used by the traversal.
 
 ## PHILOSOPHY.md alignment
 

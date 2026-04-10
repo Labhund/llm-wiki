@@ -74,6 +74,20 @@ Citations: protein-dj
 
 The "Missing Information" section is a feature: if the wiki doesn't have a detail, the answer says so rather than hallucinating from training. The gap gets filled when you ingest the relevant source — `llm-wiki ingest boltz2-paper.pdf` would create the missing page and the next query would cite it.
 
+### Synthesis cache
+
+Every cited query answer becomes a first-class wiki page (`type: synthesis`). These pages enter the BM25 index alongside ingest pages — so the next similar query finds the prior synthesis in the traversal results and can accept it verbatim, extend it with new information, or create a fresh page if nothing fits.
+
+Three outcomes, decided by the LLM:
+
+- **accept** — existing synthesis fully answers the query; returned directly, no re-generation
+- **update** — existing synthesis found, new information surfaced; page overwritten with extended version
+- **create** — no relevant synthesis exists; new page written to `wiki/`
+
+The speed benefit is emergent: synthesis pages compete naturally with ingest pages in BM25. If fresh ingest pages are more relevant they outrank stale synthesis; the agent always sees the freshest material. No separate cache layer, no TTL logic, no pre-traversal short-circuit.
+
+The quality gate is simple: synthesis pages are only written when the answer contains `[[wiki-link]]` citations. Unbacked answers don't compound. Low-scoring synthesis pages are eventually culled by the adversary pipeline, same as ingest pages.
+
 ### Talk pages for the uncitable
 
 Contradictions, half-formed connections, and ideas without sources live on talk pages alongside the pages they concern — visible to the agent, separate from sourced content. First-class path, not a consolation.
@@ -275,6 +289,7 @@ See [PHILOSOPHY.md](PHILOSOPHY.md) for the full document.
 - [x] **Phase 6b: Write Surface + Sessions** — V4A patches, session journaling, serial commit pipeline, recovery
 - [x] **Phase 6c: MCP Server** — 17 MCP tools over stdio, stable per-session connection IDs
 - [x] **Configure Wizard** — interactive `llm-wiki configure`: smart/fast model tiers, vault setup, Hermes skill install + MCP registration, Claude Code mcp.json integration
+- [x] **Synthesis Cache** — cited query answers become `type: synthesis` wiki pages; future queries accept/update/create via BM25 without re-synthesising from scratch
 
 ---
 
