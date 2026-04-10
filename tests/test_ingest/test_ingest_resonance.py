@@ -25,7 +25,7 @@ class MockLLMClient:
             raise RuntimeError("MockLLMClient: no more scripted responses")
         content = self._responses[self._idx]
         self._idx += 1
-        return LLMResponse(content=content, tokens_used=50)
+        return LLMResponse(content=content, input_tokens=50, output_tokens=0)
 
 
 def _concept_json(concepts: list[dict]) -> str:

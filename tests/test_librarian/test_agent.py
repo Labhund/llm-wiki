@@ -27,7 +27,7 @@ class _StubLLM:
             "priority": priority,
             "temperature": temperature,
         })
-        return LLMResponse(content=self.response, tokens_used=100)
+        return LLMResponse(content=self.response, input_tokens=100, output_tokens=0)
 
 
 def _seed_log(state_dir: Path, entries: list[dict]) -> None:
@@ -398,7 +398,7 @@ async def test_refresh_talk_summaries_above_threshold_summarizes(tmp_path):
 
     class MockLLM:
         async def complete(self, messages, temperature=0.0, priority="maintenance"):
-            return LLMResponse(content="Five open entries about validation.", tokens_used=10)
+            return LLMResponse(content="Five open entries about validation.", input_tokens=10, output_tokens=0)
 
     vault = Vault.scan(tmp_path)
     queue = IssueQueue(tmp_path)
@@ -443,7 +443,7 @@ async def test_refresh_talk_summaries_robust_to_intervening_closures(tmp_path):
     class CountingLLM:
         async def complete(self, messages, temperature=0.0, priority="maintenance"):
             call_count["n"] += 1
-            return LLMResponse(content="Summary text.", tokens_used=10)
+            return LLMResponse(content="Summary text.", input_tokens=10, output_tokens=0)
 
     vault = Vault.scan(tmp_path)
     queue = IssueQueue(tmp_path)
@@ -582,7 +582,7 @@ async def test_refresh_talk_summaries_prunes_deleted_pages(tmp_path):
 
     class StubLLM:
         async def complete(self, messages, temperature=0.0, priority="maintenance"):
-            return LLMResponse(content="Stub summary.", tokens_used=10)
+            return LLMResponse(content="Stub summary.", input_tokens=10, output_tokens=0)
 
     vault = Vault.scan(tmp_path)
     queue = IssueQueue(tmp_path)

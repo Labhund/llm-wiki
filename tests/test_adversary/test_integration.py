@@ -20,7 +20,7 @@ class _StubLLM:
 
     async def complete(self, messages, temperature: float = 0.7, priority: str = "query"):
         from llm_wiki.traverse.llm_client import LLMResponse
-        return LLMResponse(content=self.response, tokens_used=100)
+        return LLMResponse(content=self.response, input_tokens=100, output_tokens=0)
 
 
 def _build_vault_with_three_claims(tmp_path: Path) -> tuple[Path, list[Path]]:
@@ -108,7 +108,7 @@ async def test_adversary_full_lifecycle_mixed_verdicts(tmp_path: Path, _clean_st
             from llm_wiki.traverse.llm_client import LLMResponse
             response = self.verdicts[self.i % 3]
             self.i += 1
-            return LLMResponse(content=response, tokens_used=100)
+            return LLMResponse(content=response, input_tokens=100, output_tokens=0)
 
     vault = Vault.scan(vault_root)
     queue = IssueQueue(vault_root / "wiki")

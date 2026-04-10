@@ -23,7 +23,7 @@ class MockLLMClient:
             raise RuntimeError("MockLLMClient: no more scripted responses")
         content = self._responses[self._call_index]
         self._call_index += 1
-        return LLMResponse(content=content, tokens_used=100)
+        return LLMResponse(content=content, input_tokens=100, output_tokens=0)
 
 
 @pytest.fixture
