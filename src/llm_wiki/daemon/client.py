@@ -15,12 +15,16 @@ class DaemonClient:
     def __init__(self, socket_path: Path) -> None:
         self._socket_path = socket_path
 
-    def request(self, msg: dict) -> dict:
+    def request(self, msg: dict, timeout: float = 30.0) -> dict:
         """Send a request and return the response.
 
         Works both from synchronous code and from within a running asyncio
         event loop (e.g. an async test).  In the latter case the event loop
         is pumped manually so the server-side coroutine can run concurrently.
+
+        `timeout` controls the per-read socket timeout in the sync path.
+        Slow operations (e.g. ingest dry-run on a large PDF) should pass a
+        higher value — the streaming path already uses 300s.
         """
         try:
             loop = asyncio.get_running_loop()
@@ -30,12 +34,12 @@ class DaemonClient:
         if loop is not None:
             return _run_coroutine_in_running_loop(loop, self._async_request(msg))
         else:
-            return self._sync_request(msg)
+            return self._sync_request(msg, timeout)
 
-    def _sync_request(self, msg: dict) -> dict:
+    def _sync_request(self, msg: dict, timeout: float = 30.0) -> dict:
         """Blocking socket request — safe when no event loop is running."""
         sock = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
-        sock.settimeout(30.0)
+        sock.settimeout(timeout)
         try:
             sock.connect(str(self._socket_path))
             write_message_sync(sock, msg)

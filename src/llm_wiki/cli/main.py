@@ -441,7 +441,7 @@ def ingest(source_path: Path, vault_path: Path, dry_run: bool) -> None:
     }
 
     if dry_run:
-        resp = client.request(msg)
+        resp = client.request(msg, timeout=300)
         if resp["status"] != "ok":
             raise click.ClickException(resp.get("message", "Ingest failed"))
         source_name = Path(resp["source_path"]).name

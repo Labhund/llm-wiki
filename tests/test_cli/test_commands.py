@@ -248,7 +248,7 @@ def test_ingest_dry_run_output(daemon_for_cli, monkeypatch, tmp_path):
     """Dry-run output shows concept list without section details."""
     from llm_wiki.daemon.client import DaemonClient
 
-    def fake_request(self, msg):
+    def fake_request(self, msg, timeout=30.0):
         if msg.get("type") != "ingest":
             return {"status": "ok"}
         return {
