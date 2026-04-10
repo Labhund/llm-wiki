@@ -465,12 +465,18 @@ def manifest(vault_path: Path, budget: int) -> None:
     default=_default_vault_path, help="Path to vault",
 )
 @click.option("--budget", default=None, type=int, help="Token budget for traversal")
-def query(question: str, vault_path: Path, budget: int | None) -> None:
+@click.option(
+    "--trace", "trace", is_flag=True, default=False,
+    help="Show per-call LLM trace and write a full trace file.",
+)
+def query(question: str, vault_path: Path, budget: int | None, trace: bool) -> None:
     """Query the wiki — multi-turn LLM traversal with citations."""
     client = _get_client(vault_path)
     req: dict = {"type": "query", "question": question}
     if budget is not None:
         req["budget"] = budget
+    if trace:
+        req["trace"] = True
 
     resp = client.request(req)
     if resp["status"] != "ok":
@@ -485,6 +491,27 @@ def query(question: str, vault_path: Path, budget: int | None) -> None:
             "\nNote: answer may be incomplete — increase --budget for more detail.",
             err=True,
         )
+
+    # Render trace if requested
+    if trace and resp.get("trace_events"):
+        events = resp["trace_events"]
+        click.echo()
+        click.echo(f"─── Trace: {len(events)} LLM call(s) ───────────────────────────")
+        for ev in events:
+            label = ev.get("label", "?")
+            model = ev.get("model", "?").split("/")[-1]
+            tin = ev.get("input_tokens", 0)
+            tout = ev.get("output_tokens", 0)
+            latency = ev.get("latency_s", 0)
+            click.echo(f"  {label}  [{model} | {tin:,}→{tout:,} tok | {latency}s]")
+
+        import datetime as _dt
+        import tempfile as _tmpfile
+        ts = _dt.datetime.now().strftime("%Y%m%d-%H%M%S")
+        slug = question[:40].lower().replace(" ", "-").replace("/", "-")
+        trace_path = Path(_tmpfile.gettempdir()) / f"llm-wiki-query-{slug}-{ts}.trace.md"
+        _write_trace_file(trace_path, Path(f"query: {question[:60]}"), events)
+        click.echo(f"  Full trace → {trace_path}")
 
 
 @cli.command()
@@ -527,6 +554,65 @@ def _is_inside(path: Path, parent: Path) -> bool:
         return False
 
 
+def _write_trace_file(trace_path: Path, source: Path, events: list[dict]) -> None:
+    """Write a human-readable markdown trace file from collected LLM call events."""
+    import datetime as _dt
+
+    lines: list[str] = [
+        f"# LLM Trace — {source.name}",
+        f"**Date**: {_dt.datetime.now().strftime('%Y-%m-%d %H:%M:%S')}  ",
+        f"**Calls**: {len(events)}",
+        "",
+    ]
+
+    for i, ev in enumerate(events, 1):
+        label = ev.get("label", "unknown")
+        model = ev.get("model", "?")
+        temp = ev.get("temperature", "?")
+        tin = ev.get("input_tokens", 0)
+        tout = ev.get("output_tokens", 0)
+        latency = ev.get("latency_s", 0)
+
+        lines += [
+            "---",
+            "",
+            f"## [{i}] `{label}`",
+            "",
+            f"| Field | Value |",
+            f"|-------|-------|",
+            f"| Model | `{model}` |",
+            f"| Temperature | {temp} |",
+            f"| Tokens | {tin:,} in / {tout:,} out |",
+            f"| Latency | {latency}s |",
+            "",
+        ]
+
+        messages = ev.get("messages", [])
+        for msg in messages:
+            role = msg.get("role", "?").upper()
+            content = msg.get("content", "")
+            lines += [
+                f"### {role}",
+                "",
+                "```",
+                content,
+                "```",
+                "",
+            ]
+
+        response = ev.get("response", "")
+        lines += [
+            "### RESPONSE",
+            "",
+            "```",
+            response,
+            "```",
+            "",
+        ]
+
+    trace_path.write_text("\n".join(lines), encoding="utf-8")
+
+
 @cli.command()
 @click.argument("source_path", type=click.Path(exists=True, path_type=Path))
 @click.option(
@@ -537,7 +623,11 @@ def _is_inside(path: Path, parent: Path) -> bool:
     "--dry-run", "dry_run", is_flag=True, default=False,
     help="Preview: run extraction and generation but skip all writes.",
 )
-def ingest(source_path: Path, vault_path: Path, dry_run: bool) -> None:
+@click.option(
+    "--trace", "trace", is_flag=True, default=False,
+    help="Show per-call LLM trace and write a full trace file.",
+)
+def ingest(source_path: Path, vault_path: Path, dry_run: bool, trace: bool) -> None:
     """Ingest a source document — extracts concepts and creates wiki pages."""
     import shutil
     import uuid as _uuid
@@ -573,6 +663,8 @@ def ingest(source_path: Path, vault_path: Path, dry_run: bool) -> None:
         "dry_run": dry_run,
         "proposal_mode": True,
     }
+    if trace:
+        msg["trace"] = True
 
     if dry_run:
         resp = client.request(msg, timeout=300)
@@ -595,9 +687,38 @@ def ingest(source_path: Path, vault_path: Path, dry_run: bool) -> None:
     spinner: _Spinner | None = _Spinner() if is_tty else None
     error_seen: list[str] = []
 
+    # Trace file state — populated from "trace" frames when --trace is set
+    trace_events: list[dict] = []
+    trace_file_path: Path | None = None
+    if trace:
+        import datetime as _dt
+        import tempfile as _tmpfile
+        ts = _dt.datetime.now().strftime("%Y%m%d-%H%M%S")
+        stem = source_path.stem[:40]  # cap to avoid ridiculous filenames
+        trace_file_path = Path(_tmpfile.gettempdir()) / f"llm-wiki-{stem}-{ts}.trace.md"
+
     def on_frame(frame: dict) -> None:
         ftype = frame.get("type")
         stage = frame.get("stage", "")
+
+        if ftype == "trace":
+            # Compact inline summary — full content goes to the trace file
+            label = frame.get("label", "?")
+            model = frame.get("model", "?")
+            tin = frame.get("input_tokens", 0)
+            tout = frame.get("output_tokens", 0)
+            latency = frame.get("latency_s", 0)
+            line = (
+                f"[TRACE] {label}  "
+                f"model={model.split('/')[-1]}  "
+                f"{tin:,}→{tout:,} tok  {latency}s"
+            )
+            if spinner:
+                spinner.print_line(line)
+            else:
+                click.echo(line)
+            trace_events.append(frame)
+            return
 
         if ftype == "progress":
             if stage == "extracting":
@@ -634,6 +755,10 @@ def ingest(source_path: Path, vault_path: Path, dry_run: bool) -> None:
             if frame.get("warnings"):
                 for w in frame["warnings"]:
                     click.echo(f"  Warning: {w['message']}")
+            # Write trace file now that the run is complete
+            if trace_file_path and trace_events:
+                _write_trace_file(trace_file_path, source_path, trace_events)
+                click.echo(f"[TRACE] {len(trace_events)} calls recorded → {trace_file_path}")
 
         elif ftype == "error":
             if spinner:
@@ -641,6 +766,9 @@ def ingest(source_path: Path, vault_path: Path, dry_run: bool) -> None:
             msg_text = frame.get("message", "Unknown error")
             written = frame.get("concepts_written", 0)
             error_seen.append(f"{msg_text} ({written} concept(s) written before error)")
+            if trace_file_path and trace_events:
+                _write_trace_file(trace_file_path, source_path, trace_events)
+                click.echo(f"[TRACE] partial trace ({len(trace_events)} calls) → {trace_file_path}")
 
     client.stream_ingest_sync(msg, on_frame)
 

@@ -146,6 +146,95 @@ async def test_ingest_stream_route_sends_progress_and_done(server_with_ingest, m
 
 
 @pytest.mark.asyncio
+async def test_ingest_stream_trace_flag_emits_trace_frames(server_with_ingest, monkeypatch):
+    """When trace=True, the daemon wires trace_fn into LLMClient so that each
+    LLM call produces a ``type: "trace"`` frame on the stream."""
+    server, sock_path = server_with_ingest
+
+    from llm_wiki.ingest.agent import IngestResult, IngestAgent
+    from llm_wiki.traverse.llm_client import LLMClient
+
+    captured_trace_fns: list = []
+
+    # Intercept LLMClient construction to grab the trace_fn that gets wired in.
+    original_init = LLMClient.__init__
+
+    def patched_init(self, queue, model, *, trace_fn=None, **kwargs):
+        captured_trace_fns.append(trace_fn)
+        original_init(self, queue, model, trace_fn=trace_fn, **kwargs)
+
+    monkeypatch.setattr(LLMClient, "__init__", patched_init)
+
+    # Make ingest return immediately without doing real LLM work.
+    async def fake_ingest(self_agent, source_path, vault_root, *, on_progress=None, **kwargs):
+        from pathlib import Path as _Path
+        return IngestResult(
+            source_path=_Path(source_path),
+            pages_created=["x"],
+            pages_updated=[],
+        )
+
+    monkeypatch.setattr(IngestAgent, "ingest", fake_ingest)
+
+    frames = await _stream_request(sock_path, {
+        "type": "ingest",
+        "source_path": "/any/path.md",
+        "author": "test",
+        "connection_id": "test-conn",
+        "stream": True,
+        "trace": True,
+    })
+
+    # Verify done frame arrives normally
+    done_frames = [f for f in frames if f.get("type") == "done"]
+    assert done_frames, "expected at least one done frame"
+    # Verify a non-None trace_fn was passed to LLMClient
+    assert any(fn is not None for fn in captured_trace_fns), (
+        "trace=True must wire a trace_fn into LLMClient"
+    )
+
+
+@pytest.mark.asyncio
+async def test_ingest_stream_no_trace_flag_passes_no_trace_fn(server_with_ingest, monkeypatch):
+    """Without trace=True, trace_fn must be None — no overhead on normal ingests."""
+    server, sock_path = server_with_ingest
+
+    from llm_wiki.ingest.agent import IngestResult, IngestAgent
+    from llm_wiki.traverse.llm_client import LLMClient
+
+    captured_trace_fns: list = []
+
+    original_init = LLMClient.__init__
+
+    def patched_init(self, queue, model, *, trace_fn=None, **kwargs):
+        captured_trace_fns.append(trace_fn)
+        original_init(self, queue, model, trace_fn=trace_fn, **kwargs)
+
+    monkeypatch.setattr(LLMClient, "__init__", patched_init)
+
+    async def fake_ingest(self_agent, source_path, vault_root, *, on_progress=None, **kwargs):
+        from pathlib import Path as _Path
+        return IngestResult(source_path=_Path(source_path))
+
+    monkeypatch.setattr(IngestAgent, "ingest", fake_ingest)
+
+    frames = await _stream_request(sock_path, {
+        "type": "ingest",
+        "source_path": "/any/path.md",
+        "author": "test",
+        "connection_id": "test-conn",
+        "stream": True,
+        # no trace key
+    })
+
+    done_frames = [f for f in frames if f.get("type") == "done"]
+    assert done_frames
+    assert all(fn is None for fn in captured_trace_fns), (
+        "without trace=True, trace_fn must be None"
+    )
+
+
+@pytest.mark.asyncio
 async def test_ingest_stream_route_missing_source_path_returns_error(server_with_ingest):
     """Streaming ingest validates required fields, sends error frame."""
     server, sock_path = server_with_ingest
