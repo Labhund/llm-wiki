@@ -1664,6 +1664,7 @@ class DaemonServer:
         manifest_lines = [
             f"{name}  '{entry.title}'"
             for name, entry in vault.manifest_entries().items()
+            if not entry.is_synthesis
         ]
 
         agent = IngestAgent(llm, self._config)
@@ -1758,6 +1759,7 @@ class DaemonServer:
         manifest_lines = [
             f"{name}  '{entry.title}'"
             for name, entry in vault.manifest_entries().items()
+            if not entry.is_synthesis
         ]
 
         concepts_written = 0
