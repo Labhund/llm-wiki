@@ -1409,7 +1409,118 @@ class DaemonServer:
         }
         if trace_events:
             resp["trace_events"] = trace_events
+
+        # Synthesis cache: write, update, or accept existing page.
+        try:
+            await self._dispatch_synthesis_action(request["question"], result, resp)
+        except Exception:
+            logger.warning("Synthesis write failed — returning answer without caching", exc_info=True)
+
         return resp
+
+    async def _write_synthesis_page(
+        self,
+        *,
+        query: str,
+        title: str,
+        answer: str,
+        sources: list[str],
+    ) -> None:
+        """Write a new synthesis page to wiki/. Rescans vault on success."""
+        from llm_wiki.traverse.synthesis import build_synthesis_page_content, slug_from_query
+        slug = slug_from_query(title or query)
+        wiki_dir = self._vault_root / self._config.vault.wiki_dir.rstrip("/")
+        wiki_dir.mkdir(parents=True, exist_ok=True)
+        candidate = wiki_dir / f"{slug}.md"
+        suffix = 2
+        while candidate.exists():
+            candidate = wiki_dir / f"{slug}-{suffix}.md"
+            suffix += 1
+        content = build_synthesis_page_content(title, query, answer, sources)
+        candidate.write_text(content, encoding="utf-8")
+        logger.info("Wrote synthesis page: %s", candidate.name)
+        try:
+            await self.rescan()
+        except Exception:
+            logger.warning("Rescan failed after synthesis write", exc_info=True)
+
+    async def _update_synthesis_page(
+        self,
+        *,
+        slug: str,
+        query: str,
+        title: str,
+        answer: str,
+        sources: list[str],
+        created_at: str | None = None,
+    ) -> None:
+        """Overwrite an existing synthesis page with updated content."""
+        from llm_wiki.traverse.synthesis import build_synthesis_page_content
+        wiki_dir = self._vault_root / self._config.vault.wiki_dir.rstrip("/")
+        page_path = wiki_dir / f"{slug}.md"
+        if not page_path.exists():
+            await self._write_synthesis_page(
+                query=query, title=title, answer=answer, sources=sources
+            )
+            return
+        content = build_synthesis_page_content(
+            title, query, answer, sources, created_at=created_at
+        )
+        page_path.write_text(content, encoding="utf-8")
+        logger.info("Updated synthesis page: %s", page_path.name)
+        try:
+            await self.rescan()
+        except Exception:
+            logger.warning("Rescan failed after synthesis update", exc_info=True)
+
+    async def _dispatch_synthesis_action(
+        self, question: str, result: "TraversalResult", resp: dict
+    ) -> None:
+        """Handle synthesis cache write/update/accept from TraversalResult.synthesis_action.
+
+        Mutates resp["answer"] for the accept case (returns existing page content).
+        No-op if no action or no citations in the answer.
+        """
+        action = result.synthesis_action
+        if not action:
+            return
+        act = action.get("action")
+
+        if act == "create":
+            if not result.citations:
+                return  # No wiki backing — don't cache
+            await self._write_synthesis_page(
+                query=question,
+                title=action.get("title", question),
+                answer=result.answer,
+                sources=action.get("sources", [f"wiki/{c}.md" for c in result.citations]),
+            )
+
+        elif act == "update":
+            slug = action.get("page", "")
+            if not slug:
+                return
+            page = self._vault.read_page(slug)
+            created_at = page.frontmatter.get("created_at") if page else None
+            await self._update_synthesis_page(
+                slug=slug,
+                query=question,
+                title=action.get("title", question),
+                answer=result.answer,
+                sources=action.get("sources", [f"wiki/{c}.md" for c in result.citations]),
+                created_at=created_at,
+            )
+
+        elif act == "accept":
+            slug = action.get("page", "")
+            if not slug:
+                return
+            page = self._vault.read_page(slug)
+            if page is None:
+                return  # Page deleted since search — answer remains as-is
+            answer_sections = [s for s in page.sections if s.name == "answer"]
+            resp["answer"] = answer_sections[0].content if answer_sections else page.raw_content
+            resp["synthesis_cache_hit"] = slug
 
     async def _handle_ingest(self, request: dict) -> dict:
         if request.get("proposal_mode"):
