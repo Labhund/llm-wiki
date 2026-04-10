@@ -119,3 +119,26 @@ def test_merge_hermes_mcp_config(tmp_path):
     assert content["mcp_servers"]["llm-wiki"]["args"] == ["mcp"]
     assert content["mcp_servers"]["llm-wiki"]["timeout"] == 120
     assert content["mcp_servers"]["llm-wiki"]["connect_timeout"] == 30
+
+
+def test_merge_claude_code_mcp_creates_file(tmp_path):
+    """MCP entry is written to .claude/mcp.json if it doesn't exist."""
+    import json
+    from llm_wiki.cli.configure import _merge_claude_code_mcp
+    mcp_path = tmp_path / "mcp.json"
+    _merge_claude_code_mcp(mcp_path, Path("/home/user/wiki"))
+    data = json.loads(mcp_path.read_text())
+    assert "llm-wiki" in data["mcpServers"]
+    assert data["mcpServers"]["llm-wiki"]["args"] == ["mcp"]
+
+
+def test_merge_claude_code_mcp_preserves_existing(tmp_path):
+    """Existing MCP servers are not overwritten."""
+    import json
+    from llm_wiki.cli.configure import _merge_claude_code_mcp
+    mcp_path = tmp_path / "mcp.json"
+    mcp_path.write_text(json.dumps({"mcpServers": {"other": {"command": "foo"}}}))
+    _merge_claude_code_mcp(mcp_path, Path("/home/user/wiki"))
+    data = json.loads(mcp_path.read_text())
+    assert "other" in data["mcpServers"]
+    assert "llm-wiki" in data["mcpServers"]

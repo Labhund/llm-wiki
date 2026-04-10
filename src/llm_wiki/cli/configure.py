@@ -226,6 +226,131 @@ def _setup_hermes() -> dict[str, Any] | None:
     }
 
 
+def _merge_claude_code_mcp(mcp_path: Path, vault_path: Path) -> None:
+    """Merge llm-wiki MCP entry into a Claude Code mcp.json file."""
+    import json
+    existing: dict = {}
+    if mcp_path.exists():
+        try:
+            existing = json.loads(mcp_path.read_text())
+        except json.JSONDecodeError:
+            pass
+    existing.setdefault("mcpServers", {})["llm-wiki"] = {
+        "command": "llm-wiki",
+        "args": ["mcp"],
+        "env": {"LLM_WIKI_VAULT": str(vault_path)},
+    }
+    mcp_path.parent.mkdir(parents=True, exist_ok=True)
+    mcp_path.write_text(json.dumps(existing, indent=2) + "\n")
+
+
+def _setup_claude_code() -> dict[str, Any] | None:
+    """Interactive Claude Code integration setup."""
+    # ── Vault path ────────────────────────────────────────────────────────────
+    env_vault = os.environ.get("LLM_WIKI_VAULT", "")
+    if env_vault:
+        default_vault = env_vault
+        _info("  [from $LLM_WIKI_VAULT — override if stale]")
+    else:
+        default_vault = str(Path.home() / "wiki")
+    vault_str = _prompt("Vault path", default_vault)
+    vault_path = Path(vault_str).expanduser()
+
+    # ── Vault initialisation ──────────────────────────────────────────────────
+    if not (vault_path / "raw").is_dir():
+        _info(f"Creating vault at {vault_path}…")
+        for sub in ("raw", "wiki", "schema", "inbox"):
+            (vault_path / sub).mkdir(parents=True, exist_ok=True)
+        _info("Initialising vault index…")
+        from llm_wiki.vault import Vault
+        try:
+            Vault.scan(vault_path)
+            _ok("Vault initialised")
+        except Exception as e:
+            _warn(f"Vault init warning: {e}")
+
+    # ── MCP config location ───────────────────────────────────────────────────
+    global_mcp = Path.home() / ".claude" / "mcp.json"
+    use_global = _yes_no(f"Write to global config ({global_mcp})?", default=True)
+    mcp_path = global_mcp if use_global else Path.cwd() / ".claude" / "mcp.json"
+
+    _merge_claude_code_mcp(mcp_path, vault_path)
+    _ok(f"MCP server registered in {mcp_path}")
+
+    wiki_config = vault_path / "schema" / "config.yaml"
+    config_missing = not wiki_config.exists() or wiki_config.stat().st_size == 0
+
+    _info("Reload Claude Code (or restart your IDE) to connect the MCP server.")
+
+    return {
+        "framework": "claude_code",
+        "vault_path": vault_path,
+        "config_missing": config_missing,
+    }
+
+
+_FRAMEWORK_CHOICES = [
+    "Hermes",
+    "Claude Code",
+    "Let my agent figure it out",
+    "Skip  (I'll register manually)",
+]
+
+
+def _setup_agent_framework() -> dict[str, Any] | None:
+    """Prompt for agent framework and run appropriate setup. Returns result or None."""
+    _info("Register the llm-wiki MCP server with your agent framework.")
+    print()
+    idx = _choice("Agent framework:", _FRAMEWORK_CHOICES, default=0)
+
+    if idx == 0:
+        _header("Hermes Integration")
+        return _setup_hermes()
+
+    if idx == 1:
+        _header("Claude Code Integration")
+        return _setup_claude_code()
+
+    if idx == 2:
+        print()
+        _info("Tell your agent:")
+        print()
+        print(_col('    "Set up llm-wiki for me."', _C.YELLOW))
+        print()
+        _info("It will load the llm-wiki-setup skill and walk you through vault")
+        _info("creation, daemon configuration, MCP registration, and skill")
+        _info("installation interactively — with explicit consent at each step.")
+        print()
+        return {"framework": "agent_guided"}
+
+    # Skip
+    print()
+    _info("Add this to your agent's MCP server config:")
+    print()
+    _info("  Hermes (~/.hermes/config.yaml under mcp_servers:):")
+    print(_col(
+        "    llm-wiki:\n"
+        "      command: llm-wiki\n"
+        "      args: [mcp]\n"
+        "      env:\n"
+        "        LLM_WIKI_VAULT: ~/wiki\n"
+        "      timeout: 120\n"
+        "      connect_timeout: 30",
+        _C.DIM,
+    ))
+    print()
+    _info("  Claude Code (~/.claude/mcp.json under mcpServers:):")
+    print(_col(
+        '    "llm-wiki": {\n'
+        '      "command": "llm-wiki",\n'
+        '      "args": ["mcp"],\n'
+        '      "env": {"LLM_WIKI_VAULT": "~/wiki"}\n'
+        '    }',
+        _C.DIM,
+    ))
+    return {"framework": "manual"}
+
+
 # ── ANSI colors ───────────────────────────────────────────────────────────────
 
 class _C:
