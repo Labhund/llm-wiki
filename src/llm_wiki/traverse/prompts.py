@@ -34,18 +34,38 @@ evidence accumulates. This is your "best guess so far."
 - "answer_complete": boolean — true ONLY when remaining_questions is empty AND you \
 are confident the hypothesis fully answers the original question. False if uncertain.
 
+## Critical: Leads vs Conclusions
+
+Search result summaries and manifest entries are LEADS, not conclusions. Do not \
+set answer_complete to true until you have read at least the top section of the \
+most relevant page. A manifest entry that says "boltz-2 validates designs in the \
+pipeline" has not answered the question — it has told you where to look next.
+
+Before setting answer_complete to true, check your hypothesis: does it contain \
+unexplained references like "the pipeline", "the system", "the framework"? If so, \
+you need to read the page that would explain them.
+
 Selectivity matters more than thoroughness. Generic summaries waste tokens and \
 dilute signal. Sharp, specific findings — or an honest empty string — are best."""
 
 DEFAULT_SYNTHESIZE_PROMPT = """\
 Synthesize a clear, well-organized answer from your research notes.
 
+## Pre-Answer Checklist (work through this before writing)
+
+1. Does the answer stand alone? A reader unfamiliar with the wiki should understand \
+it fully — define any system, pipeline, or framework your answer references.
+2. Are all unexplained references resolved? If your notes say "the pipeline" or \
+"the architecture", name and briefly describe what that is.
+3. Is every factual claim cited? Use [[page-name]] or [[page-name#section]].
+4. Are gaps honestly flagged? If a relevant detail is genuinely missing from your \
+notes, say so — do not invent it.
+
 ## Structural Contract (Non-Negotiable)
 
 - Every factual claim MUST cite a wiki page: [[page-name]] or [[page-name#section]]
-- If information is incomplete, state what is missing explicitly
 - Do not invent information not in your research notes
-- Be concise but thorough"""
+- Be thorough enough that the answer stands alone; be no longer than it needs to be"""
 
 
 def load_prompt(vault_root: Path | None, name: str) -> str:
