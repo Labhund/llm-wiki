@@ -641,6 +641,36 @@ async def test_attention_map_clamps_unknown_severity_to_minor(phase6a_daemon_ser
 
 
 @pytest.mark.asyncio
+async def test_process_list_route(daemon_server):
+    """process-list returns workers + empty jobs when daemon is idle."""
+    server, sock_path = daemon_server
+    resp = await _request(sock_path, {"type": "process-list"})
+
+    assert resp["status"] == "ok"
+    assert isinstance(resp["jobs"], list)
+    assert isinstance(resp["workers"], list)
+    assert isinstance(resp["pending"], int)
+    assert isinstance(resp["slots_total"], int)
+    assert isinstance(resp["tokens_used"], int)
+
+    # Queue is idle at startup
+    assert resp["jobs"] == []
+    assert resp["pending"] == 0
+
+    # Workers list includes registered workers (at minimum auditor)
+    worker_names = [w["name"] for w in resp["workers"]]
+    assert "auditor" in worker_names
+
+    # Each worker entry has the expected shape
+    for w in resp["workers"]:
+        assert "name" in w
+        assert w["state"] in ("running", "idle")
+        assert "consecutive_failures" in w
+        # last_run may be None if worker hasn't run yet
+        assert "last_run" in w
+
+
+@pytest.mark.asyncio
 async def test_dry_run_with_proposal_mode_uses_fast_path(
     daemon_server, monkeypatch, sample_vault: Path
 ):
