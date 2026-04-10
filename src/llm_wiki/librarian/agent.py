@@ -1,11 +1,15 @@
 from __future__ import annotations
 
+import datetime
 import logging
 import os
+import subprocess
 import tempfile
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import TYPE_CHECKING
+
+import yaml
 
 from llm_wiki.config import WikiConfig
 from llm_wiki.issues.queue import IssueQueue
@@ -27,6 +31,7 @@ class LibrarianResult:
     authorities_updated: int = 0
     issues_filed: list[str] = field(default_factory=list)
     index_regenerated: bool = False
+    pages_backfilled: int = 0
 
 
 class LibrarianAgent:
@@ -66,6 +71,9 @@ class LibrarianAgent:
         entries = self._vault.manifest_entries()
         if not entries:
             return result
+
+        # Backfill missing frontmatter fields deterministically (no LLM).
+        result.pages_backfilled = self._backfill_frontmatter()
 
         threshold = self._config.budgets.manifest_refresh_after_traversals
         usage = aggregate_logs(self._log_path)
@@ -210,6 +218,123 @@ class LibrarianAgent:
 
         logger.info("Librarian: regenerated wiki/index.md (%d clusters)", len(sorted_clusters))
         return True
+
+    def _backfill_frontmatter(self) -> int:
+        """Backfill missing frontmatter fields deterministically (no LLM call).
+
+        For each page file that is missing any of the standard structural fields
+        (created, updated, type, status, ingested), this method computes their
+        values from filesystem / git metadata and writes them back to the file.
+
+        Rules:
+        - ``created``: git log mtime of the file, or stat().st_mtime fallback.
+          Only written if absent.
+        - ``updated``: same date as ``created`` for the initial backfill.
+          Only written if absent.
+        - ``type``: set to ``"concept"`` when the page has body content.
+          Only written if absent.
+        - ``status``: set to ``"stub"`` when ``created_by: ingest`` and absent.
+        - ``ingested``: same date as ``created`` when ``created_by: ingest``
+          and field is absent.
+
+        Only touches pages where at least one field is actually missing.
+        Does NOT modify the page body or fields that are already present.
+
+        Returns:
+            Number of page files that were modified.
+        """
+        from llm_wiki.page import Page, _split_frontmatter
+
+        wiki_dir = self._vault_root / "wiki"
+        if not wiki_dir.exists():
+            return 0
+
+        md_files = sorted(wiki_dir.rglob("*.md"))
+        md_files = [
+            f for f in md_files
+            if not any(p.startswith(".") for p in f.relative_to(wiki_dir).parts)
+            and not f.name.endswith(".talk.md")
+            and f.relative_to(wiki_dir) != Path("index.md")
+        ]
+
+        modified = 0
+        for md_file in md_files:
+            try:
+                changed = self._backfill_page(md_file)
+            except Exception:
+                logger.exception("Librarian: backfill failed for %s", md_file)
+                continue
+            if changed:
+                modified += 1
+
+        logger.info("Librarian: backfilled frontmatter on %d page(s)", modified)
+        return modified
+
+    def _backfill_page(self, md_file: Path) -> bool:
+        """Backfill one page file. Returns True if the file was modified."""
+        from llm_wiki.page import _split_frontmatter
+
+        raw = md_file.read_text(encoding="utf-8")
+        frontmatter, body = _split_frontmatter(raw)
+
+        # Determine which fields are missing
+        needs_created = "created" not in frontmatter
+        needs_updated = "updated" not in frontmatter
+        # type: backfill as "concept" if page has body content
+        needs_type = "type" not in frontmatter and body.strip()
+        # status/ingested are only relevant for ingest-created pages
+        created_by_ingest = frontmatter.get("created_by") == "ingest"
+        needs_status = "status" not in frontmatter and created_by_ingest
+        needs_ingested = "ingested" not in frontmatter and created_by_ingest
+
+        if not any([needs_created, needs_updated, needs_type, needs_status, needs_ingested]):
+            return False
+
+        # Compute the date to use for created/updated/ingested
+        date_str = self._get_file_date(md_file)
+
+        if needs_created:
+            frontmatter["created"] = date_str
+        if needs_updated:
+            frontmatter["updated"] = date_str
+        if needs_type:
+            frontmatter["type"] = "concept"
+        if needs_status:
+            frontmatter["status"] = "stub"
+        if needs_ingested:
+            frontmatter["ingested"] = date_str
+
+        # Reconstruct the file: YAML-dump new frontmatter + original body
+        fm_text = yaml.dump(frontmatter, default_flow_style=False, allow_unicode=True)
+        new_raw = f"---\n{fm_text}---\n\n{body}"
+        md_file.write_text(new_raw, encoding="utf-8")
+        logger.debug("Librarian: backfilled %s", md_file.name)
+        return True
+
+    @staticmethod
+    def _get_file_date(path: Path) -> str:
+        """Return a YYYY-MM-DD string for the given file.
+
+        Tries ``git log --follow -1 --format=%ai`` first; falls back to
+        ``stat().st_mtime`` if git is unavailable or produces no output.
+        """
+        try:
+            result = subprocess.run(
+                ["git", "log", "--follow", "-1", "--format=%ai", "--", str(path)],
+                capture_output=True,
+                text=True,
+                timeout=5,
+            )
+            line = result.stdout.strip()
+            if line:
+                # %ai format: "2024-01-15 12:34:56 +0000" — take the date part
+                return line[:10]
+        except Exception:
+            pass
+
+        # Fallback: filesystem mtime
+        mtime = path.stat().st_mtime
+        return datetime.datetime.fromtimestamp(mtime, tz=datetime.timezone.utc).strftime("%Y-%m-%d")
 
     async def refresh_talk_summaries(self) -> int:
         """Refresh stale talk-page summaries.
