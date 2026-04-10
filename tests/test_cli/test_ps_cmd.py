@@ -31,7 +31,8 @@ def daemon_for_cli(sample_vault: Path):
     loop.call_soon_threadsafe(server._server.close)
     loop.call_soon_threadsafe(loop.stop)
     thread.join(timeout=5)
-    loop.run_until_complete(server.stop())
+    if not thread.is_alive():
+        loop.run_until_complete(server.stop())
     loop.close()
 
 
@@ -99,3 +100,9 @@ def test_worker_display_action_truncates_long_string():
     result = _worker_display_action("adversary", jobs)
     assert len(result) <= 30
     assert result.endswith("…")
+
+
+def test_worker_display_action_bare_label_returns_empty():
+    jobs = [{"label": "adversary"}]  # no colon — bare worker name only
+    result = _worker_display_action("adversary", jobs)
+    assert result == ""

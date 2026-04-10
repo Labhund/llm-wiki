@@ -82,7 +82,7 @@ def _worker_display_action(worker_name: str, jobs: list[dict]) -> str:
         label = job.get("label", "")
         parts = label.split(":", 2)
         if parts and parts[0] == worker_name:
-            action_detail = " ".join(parts[1:]) if len(parts) > 1 else label
+            action_detail = " ".join(parts[1:]) if len(parts) > 1 else ""
             if len(action_detail) > 30:
                 action_detail = action_detail[:29] + "…"
             return action_detail
