@@ -164,6 +164,10 @@ class IngestConfig:
     grounding_auto_merge: float = 0.75            # passage score >= this → auto-merge updates
     grounding_flag: float = 0.50                  # passage score < this → create issue
     auto_copy_to_raw: bool = True                 # copy source to raw/ if outside vault
+    # Deep-read synthesis
+    synthesis_temperature: float = 0.7            # temperature for synthesis LLM calls
+    full_context_chars: int = 800_000             # if paper is within this many chars,
+    #   pass full text directly to synthesis.  If larger, run the rolling-digest loop.
 
 
 @dataclass

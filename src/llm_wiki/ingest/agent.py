@@ -21,6 +21,8 @@ from llm_wiki.ingest.proposals import (
 from llm_wiki.ingest.prompts import (
     compose_concept_extraction_messages,
     compose_content_synthesis_messages,
+    compose_deep_read_synthesis_messages,
+    compose_digest_chunk_messages,
     compose_overview_messages,
     compose_page_content_messages,
     compose_passage_collection_messages,
@@ -387,51 +389,28 @@ class IngestAgent:
                 ))
             return result
 
-        # Passage collection across all chunks
-        concept_passages: dict[str, list[str]] = {c.name: [] for c in concepts}
-        max_passages = self._config.ingest.max_passages_per_concept
-
-        for chunk in chunks:
-            still_need = [c for c in concepts if len(concept_passages[c.name]) < max_passages]
-            if not still_need:
-                break
-            coll_msgs = compose_passage_collection_messages(
-                chunk_text=chunk,
-                concepts=still_need,
-            )
-            coll_resp = await self._llm.complete(
-                coll_msgs, temperature=0.1, priority="ingest",
-                label=f"ingest:passages:{source_path.name}",
-            )
-            found = parse_passage_collection(
-                coll_resp.content,
-                concept_names=[c.name for c in still_need],
-            )
-            for name, passages in found.items():
-                existing = concept_passages[name]
-                for p in passages:
-                    if p not in existing and len(existing) < max_passages:
-                        existing.append(p)
+        # Build paper context: full text if it fits, rolling digest if too large
+        paper_context = await self._build_paper_context(
+            extraction.content,
+            chunks=chunks,
+            source_name=source_path.name,
+        )
 
         source_slug = _re.sub(r"[^a-z0-9-]", "-", source_path.stem.lower()).strip("-")
         ocr_sourced = extraction.extraction_method == "image_ocr"
+        synth_temp = self._config.ingest.synthesis_temperature
 
-        # Content synthesis + proposal write per concept
+        # Deep-read synthesis + proposal write per concept
         for concept in concepts:
-            passages = concept_passages.get(concept.name, [])
-            if not passages:
-                logger.warning("No passages collected for concept %r — skipping", concept.name)
-                continue
-
-            synth_msgs = compose_content_synthesis_messages(
+            synth_msgs = compose_deep_read_synthesis_messages(
                 concept=concept,
-                passages=passages,
+                paper_context=paper_context,
                 source_ref=source_ref,
                 manifest_lines=manifest_lines,
                 batch_concepts=concepts,
             )
             synth_resp = await self._llm.complete(
-                synth_msgs, temperature=0.3, priority="ingest",
+                synth_msgs, temperature=synth_temp, priority="ingest",
                 label=f"ingest:synthesize:{concept.name}",
             )
             synthesis = parse_content_synthesis(synth_resp.content)
@@ -440,14 +419,19 @@ class IngestAgent:
                 logger.warning("No sections generated for %r — skipping", concept.name)
                 continue
 
+            # Ground key sentences from the synthesized content against the source.
+            # We sample the first sentence of each non-references section as a claim
+            # and measure bigram F1 against the full paper — no verbatim passages required.
             proposal_passages: list[ProposalPassage] = []
-            for idx, passage_text in enumerate(passages):
-                gr = ground_passage(passage_text, extraction.content, ocr_sourced=ocr_sourced)
-                claim = sections[0].content.split(".")[0] if sections else passage_text[:80]
+            for idx, section in enumerate(s for s in sections if s.name != "references"):
+                first_sentence = section.content.split(".")[0].strip() if section.content else ""
+                if not first_sentence:
+                    continue
+                gr = ground_passage(first_sentence, extraction.content, ocr_sourced=ocr_sourced)
                 proposal_passages.append(ProposalPassage(
                     id=f"p{idx + 1}",
-                    text=gr.passage,
-                    claim=claim,
+                    text=first_sentence,
+                    claim=first_sentence[:120],
                     score=gr.score,
                     method=gr.method,
                     verifiable=gr.verifiable,
@@ -474,6 +458,49 @@ class IngestAgent:
                 result.pages_updated.append(concept.name)
 
         return result
+
+    async def _build_paper_context(
+        self,
+        full_text: str,
+        chunks: list[str],
+        source_name: str,
+    ) -> str:
+        """Return the paper context to pass to synthesis.
+
+        If the full text is within the configured `full_context_chars` limit,
+        return it directly — the synthesis model reads the whole thing.
+
+        Otherwise, run a rolling digest loop: read each chunk sequentially,
+        accumulating a structured summary of the whole paper. The digest
+        is used for synthesis instead of the raw text.
+        """
+        if len(full_text) <= self._config.ingest.full_context_chars:
+            logger.info(
+                "Paper fits in context (%d chars) — passing full text to synthesis",
+                len(full_text),
+            )
+            return full_text
+
+        logger.info(
+            "Paper too large (%d chars > %d limit) — building rolling digest over %d chunks",
+            len(full_text), self._config.ingest.full_context_chars, len(chunks),
+        )
+        digest = ""
+        for i, chunk in enumerate(chunks):
+            msgs = compose_digest_chunk_messages(
+                chunk_text=chunk,
+                running_digest=digest,
+                chunk_index=i,
+                total_chunks=len(chunks),
+            )
+            resp = await self._llm.complete(
+                msgs, temperature=0.2, priority="ingest",
+                label=f"ingest:digest:{source_name}:{i}",
+            )
+            digest = resp.content.strip()
+            logger.debug("Digest after chunk %d/%d: %d chars", i + 1, len(chunks), len(digest))
+
+        return digest
 
     @staticmethod
     def _sections_to_body(sections: list) -> str:
