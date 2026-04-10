@@ -506,40 +506,6 @@ def test_execute_proposal_merges_applies_high_score_updates(tmp_path):
     assert "overview" in merged.lower() or "Overview" in merged
 
 
-def test_find_pending_proposals_create_high_score_merge_ready(tmp_path):
-    """action=create with score >= auto_merge_threshold → merge-ready (auto-create)."""
-    from llm_wiki.audit.checks import find_pending_proposals
-    wiki_dir = tmp_path / "wiki"
-    wiki_dir.mkdir(parents=True)
-    # Page does not exist yet (that's correct for a create proposal)
-    _make_proposal(tmp_path, action="create", score=0.95)
-    result = find_pending_proposals(tmp_path, wiki_dir=wiki_dir)
-    assert any(i.type == "merge-ready" for i in result.issues), (
-        "High-confidence create proposals should be auto-merge-ready"
-    )
-
-
-def test_find_pending_proposals_create_low_score_requires_review(tmp_path):
-    """action=create with score < flag_threshold → proposal-verification-failed."""
-    from llm_wiki.audit.checks import find_pending_proposals
-    wiki_dir = tmp_path / "wiki"
-    wiki_dir.mkdir(parents=True)
-    _make_proposal(tmp_path, action="create", score=0.3)
-    result = find_pending_proposals(tmp_path, wiki_dir=wiki_dir)
-    assert any(i.type == "proposal-verification-failed" for i in result.issues)
-
-
-def test_find_pending_proposals_create_mid_score_proposal(tmp_path):
-    """action=create with flag_threshold <= score < auto_merge_threshold → proposal."""
-    from llm_wiki.audit.checks import find_pending_proposals
-    wiki_dir = tmp_path / "wiki"
-    wiki_dir.mkdir(parents=True)
-    # score=0.6 is between flag_threshold (0.50) and auto_merge_threshold (0.75)
-    _make_proposal(tmp_path, action="create", score=0.6)
-    result = find_pending_proposals(tmp_path, wiki_dir=wiki_dir)
-    assert any(i.type == "proposal" for i in result.issues)
-
-
 def test_find_pending_proposals_low_score_issues(tmp_path):
     """action=update with low verification score raises an issue."""
     from llm_wiki.audit.checks import find_pending_proposals
@@ -577,15 +543,38 @@ def _make_create_proposal_with_cluster(tmp_path, cluster="bio") -> Path:
     return write_proposal(proposals_dir, p, source_slug="paper")
 
 
+def _merge_ready_issue_for(proposal_path: Path, target_page: str, source: str):
+    """Build a merge-ready Issue that execute_proposal_merges will act on."""
+    from llm_wiki.issues.queue import Issue
+    return Issue(
+        id=Issue.make_id("merge-ready", target_page, source),
+        type="merge-ready",
+        status="open",
+        severity="minor",
+        title=f"Create proposal ready to merge: '{target_page}'",
+        page=target_page,
+        body="",
+        created=Issue.now_iso(),
+        detected_by="auditor",
+        metadata={"proposal_path": str(proposal_path), "min_score": 0.9},
+    )
+
+
 def test_execute_proposal_merges_create_writes_complete_frontmatter(tmp_path):
-    """A create proposal auto-merged by execute_proposal_merges has all required frontmatter fields."""
+    """A create proposal executed by execute_proposal_merges has all required frontmatter fields."""
     import yaml
-    from llm_wiki.audit.checks import execute_proposal_merges
+    from unittest.mock import patch
+    from llm_wiki.audit.checks import execute_proposal_merges, CheckResult
     wiki_dir = tmp_path / "wiki"
     wiki_dir.mkdir(parents=True)
-    _make_create_proposal_with_cluster(tmp_path, cluster="bio")
+    proposal_path = _make_create_proposal_with_cluster(tmp_path, cluster="bio")
 
-    execute_proposal_merges(tmp_path, wiki_dir=wiki_dir)
+    mock_result = CheckResult(
+        check="pending-proposals",
+        issues=[_merge_ready_issue_for(proposal_path, "new-concept", "raw/paper.pdf")],
+    )
+    with patch("llm_wiki.audit.checks.find_pending_proposals", return_value=mock_result):
+        execute_proposal_merges(tmp_path, wiki_dir=wiki_dir)
 
     created_path = wiki_dir / "bio" / "new-concept.md"
     assert created_path.exists(), "Page should be created in the cluster subdirectory"
@@ -616,12 +605,18 @@ def test_execute_proposal_merges_create_writes_complete_frontmatter(tmp_path):
 def test_execute_proposal_merges_create_created_by_is_proposal(tmp_path):
     """created_by field must be 'proposal' so auditors can distinguish auto-merged pages."""
     import yaml
-    from llm_wiki.audit.checks import execute_proposal_merges
+    from unittest.mock import patch
+    from llm_wiki.audit.checks import execute_proposal_merges, CheckResult
     wiki_dir = tmp_path / "wiki"
     wiki_dir.mkdir(parents=True)
-    _make_create_proposal_with_cluster(tmp_path, cluster="")  # no cluster → root
+    proposal_path = _make_create_proposal_with_cluster(tmp_path, cluster="")  # no cluster → root
 
-    execute_proposal_merges(tmp_path, wiki_dir=wiki_dir)
+    mock_result = CheckResult(
+        check="pending-proposals",
+        issues=[_merge_ready_issue_for(proposal_path, "new-concept", "raw/paper.pdf")],
+    )
+    with patch("llm_wiki.audit.checks.find_pending_proposals", return_value=mock_result):
+        execute_proposal_merges(tmp_path, wiki_dir=wiki_dir)
 
     created_path = wiki_dir / "new-concept.md"
     assert created_path.exists()
@@ -633,12 +628,18 @@ def test_execute_proposal_merges_create_created_by_is_proposal(tmp_path):
 
 def test_execute_proposal_merges_create_no_cluster_writes_to_root(tmp_path):
     """A create proposal with no cluster places the page at wiki root."""
-    from llm_wiki.audit.checks import execute_proposal_merges
+    from unittest.mock import patch
+    from llm_wiki.audit.checks import execute_proposal_merges, CheckResult
     wiki_dir = tmp_path / "wiki"
     wiki_dir.mkdir(parents=True)
-    _make_create_proposal_with_cluster(tmp_path, cluster="")
+    proposal_path = _make_create_proposal_with_cluster(tmp_path, cluster="")
 
-    execute_proposal_merges(tmp_path, wiki_dir=wiki_dir)
+    mock_result = CheckResult(
+        check="pending-proposals",
+        issues=[_merge_ready_issue_for(proposal_path, "new-concept", "raw/paper.pdf")],
+    )
+    with patch("llm_wiki.audit.checks.find_pending_proposals", return_value=mock_result):
+        execute_proposal_merges(tmp_path, wiki_dir=wiki_dir)
 
     assert (wiki_dir / "new-concept.md").exists()
     assert not (wiki_dir / "new-concept" / "new-concept.md").exists()

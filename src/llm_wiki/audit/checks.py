@@ -566,10 +566,8 @@ def find_pending_proposals(
     This function NEVER mutates wiki pages — it is safe to call from lint.
 
     Issue types returned:
-      - 'merge-ready':                  scores >= auto_merge_threshold; action=update (page
-                                        exists) OR action=create (page absent, auto-created)
-      - 'proposal':                     flag_threshold <= score < auto_merge_threshold, or
-                                        action=update with missing target page
+      - 'merge-ready':                  action=update, all verifiable scores >= auto_merge_threshold
+      - 'proposal':                     action=create (requires human review), or target missing
       - 'proposal-verification-failed': any verifiable score < flag_threshold
     """
     import json as _json
@@ -608,57 +606,23 @@ def find_pending_proposals(
         min_score = min(scores) if scores else 1.0
 
         if action == "create":
-            # Low-confidence creates always need human review
-            if min_score < flag_threshold:
-                issues.append(Issue(
-                    id=Issue.make_id("proposal-verification-failed", target_page, source),
-                    type="proposal-verification-failed",
-                    status="open",
-                    severity="moderate",
-                    title=f"Create proposal for '{target_page}' has low grounding score ({min_score:.2f})",
-                    page=target_page,
-                    body=(
-                        f"The proposal to create [[{target_page}]] from `{source}` "
-                        f"has a minimum passage verification score of {min_score:.2f} "
-                        f"(threshold: {flag_threshold}). Review `{proposal_path.relative_to(vault_root)}`."
-                    ),
-                    created=Issue.now_iso(),
-                    detected_by="auditor",
-                    metadata={"proposal_path": str(proposal_path), "min_score": min_score},
-                ))
-            elif min_score < auto_merge_threshold:
-                # Mid-confidence creates require human approval
-                issues.append(Issue(
-                    id=Issue.make_id("proposal", target_page, source),
-                    type="proposal",
-                    status="open",
-                    severity="minor",
-                    title=f"New page proposal: '{target_page}' from {source}",
-                    page=target_page,
-                    body=(
-                        f"The ingest pipeline proposes creating [[{target_page}]] from "
-                        f"`{source}`. Review `{proposal_path.relative_to(vault_root)}` "
-                        f"and approve with `llm-wiki proposals approve` or reject with "
-                        f"`llm-wiki proposals reject`."
-                    ),
-                    created=Issue.now_iso(),
-                    detected_by="auditor",
-                    metadata={"proposal_path": str(proposal_path), "source": source},
-                ))
-            else:
-                # High-confidence creates auto-merge (page will be created by executor)
-                issues.append(Issue(
-                    id=Issue.make_id("merge-ready", target_page, source),
-                    type="merge-ready",
-                    status="open",
-                    severity="minor",
-                    title=f"Create proposal ready to merge: '{target_page}' (score {min_score:.2f})",
-                    page=target_page,
-                    body=f"Proposal at `{proposal_path.relative_to(vault_root)}` is verified and ready to auto-create.",
-                    created=Issue.now_iso(),
-                    detected_by="auditor",
-                    metadata={"proposal_path": str(proposal_path), "min_score": min_score},
-                ))
+            issues.append(Issue(
+                id=Issue.make_id("proposal", target_page, source),
+                type="proposal",
+                status="open",
+                severity="minor",
+                title=f"New page proposal: '{target_page}' from {source}",
+                page=target_page,
+                body=(
+                    f"The ingest pipeline proposes creating [[{target_page}]] from "
+                    f"`{source}`. Review `{proposal_path.relative_to(vault_root)}` "
+                    f"and approve with `llm-wiki proposals approve` or reject with "
+                    f"`llm-wiki proposals reject`."
+                ),
+                created=Issue.now_iso(),
+                detected_by="auditor",
+                metadata={"proposal_path": str(proposal_path), "source": source},
+            ))
             continue
 
         if min_score < flag_threshold:
