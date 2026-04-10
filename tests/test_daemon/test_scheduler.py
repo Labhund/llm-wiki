@@ -469,6 +469,88 @@ def test_scheduler_health_info_structure():
 
 
 @pytest.mark.asyncio
+async def test_running_workers_set_during_execution():
+    """Worker name is in running_workers while it's executing."""
+    inside = asyncio.Event()
+    release = asyncio.Event()
+
+    async def slow_worker():
+        inside.set()
+        await release.wait()
+
+    scheduler = IntervalScheduler()
+    scheduler.register(ScheduledWorker("slow", 60.0, slow_worker))
+    await scheduler.start()
+
+    await inside.wait()
+    assert "slow" in scheduler.running_workers
+
+    release.set()
+    await scheduler.stop()
+
+
+@pytest.mark.asyncio
+async def test_running_workers_cleared_after_completion():
+    """Worker name is removed from running_workers after its run completes."""
+    async def quick():
+        pass
+
+    scheduler = IntervalScheduler()
+    scheduler.register(ScheduledWorker("quick", 60.0, quick))
+    await scheduler.start()
+    await asyncio.sleep(0.2)
+    assert "quick" not in scheduler.running_workers
+    await scheduler.stop()
+
+
+@pytest.mark.asyncio
+async def test_running_workers_cleared_on_error():
+    """Worker name is removed even when the worker raises."""
+    async def failing():
+        raise RuntimeError("boom")
+
+    scheduler = IntervalScheduler()
+    scheduler.register(ScheduledWorker("failing", 60.0, failing))
+    await scheduler.start()
+    await asyncio.sleep(0.2)
+    assert "failing" not in scheduler.running_workers
+    await scheduler.stop()
+
+
+@pytest.mark.asyncio
+async def test_running_elapsed_s_none_when_idle():
+    """running_elapsed_s returns None for a worker that isn't running."""
+    scheduler = IntervalScheduler()
+    scheduler.register(ScheduledWorker("idle-worker", 9999.0, lambda: None))
+    # Don't start — worker is registered but never ran
+    assert scheduler.running_elapsed_s("idle-worker") is None
+    assert scheduler.running_elapsed_s("nonexistent") is None
+
+
+@pytest.mark.asyncio
+async def test_running_elapsed_s_positive_when_running():
+    """running_elapsed_s returns a positive float while the worker is executing."""
+    inside = asyncio.Event()
+    release = asyncio.Event()
+
+    async def slow():
+        inside.set()
+        await release.wait()
+
+    scheduler = IntervalScheduler()
+    scheduler.register(ScheduledWorker("slow2", 60.0, slow))
+    await scheduler.start()
+
+    await inside.wait()
+    elapsed = scheduler.running_elapsed_s("slow2")
+    assert elapsed is not None
+    assert elapsed >= 0.0
+
+    release.set()
+    await scheduler.stop()
+
+
+@pytest.mark.asyncio
 async def test_scheduler_status_route_includes_health(sample_vault, tmp_path):
     """The scheduler-status daemon route includes health fields per worker."""
     from llm_wiki.config import MaintenanceConfig, WikiConfig
