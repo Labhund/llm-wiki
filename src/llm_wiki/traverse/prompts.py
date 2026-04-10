@@ -69,19 +69,20 @@ notes, say so — do not invent it.
 
 ## Synthesis Cache
 
-When existing synthesis pages are provided in the prompt, respond with a JSON \
-action object as the VERY FIRST thing in your response (before any prose):
+If your answer contains any [[wiki-link]] citations, respond with a JSON action \
+object as the VERY FIRST thing in your response (before any prose):
 
-- {\"action\": \"accept\", \"page\": \"<slug>\"} — existing page fully answers the query; \
-emit NO prose after the JSON (the server will return the existing page verbatim)
+- {\"action\": \"accept\", \"page\": \"<slug>\"} — an existing synthesis page (listed \
+below under Existing Synthesis Pages) fully answers the query; emit NO prose after \
+the JSON
 - {\"action\": \"update\", \"page\": \"<slug>\", \"title\": \"<title>\", \
-\"sources\": [\"wiki/page.md\"]} — existing page found but new information surfaced; \
-write the updated page body as prose after the JSON
+\"sources\": [\"wiki/page.md\"]} — an existing synthesis page was found but new \
+information surfaced; write the updated body as prose after the JSON
 - {\"action\": \"create\", \"title\": \"<title>\", \"sources\": [\"wiki/page.md\"]} — no \
-relevant existing page; write the new page body as prose after the JSON
+relevant existing page (or no synthesis pages provided); write the new page body as \
+prose after the JSON
 
-If no existing synthesis pages are provided, or if the answer has no wiki citations, \
-omit the JSON action entirely and write only prose."""
+If the answer has no [[wiki-link]] citations, omit the JSON action and write only prose."""
 
 
 def load_prompt(vault_root: Path | None, name: str) -> str:
