@@ -36,7 +36,11 @@ class DaemonServer:
         self._enabled_workers = enabled_workers
         self._vault: Vault | None = None
         self._server: asyncio.Server | None = None
-        self._llm_queue = LLMQueue(self._config.llm_queue.max_concurrent)
+        self._llm_queue = LLMQueue(
+            max_concurrent=self._config.llm_queue.max_concurrent,
+            hourly_limit=self._config.llm_queue.cloud_hourly_limit,
+            daily_limit=self._config.llm_queue.cloud_daily_limit,
+        )
         self._scheduler: IntervalScheduler | None = None
         self._snapshot_store: PageSnapshotStore | None = None
         self._compliance_reviewer = None  # type: ignore[assignment]  # set in start()

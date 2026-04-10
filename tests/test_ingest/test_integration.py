@@ -26,7 +26,7 @@ class MockLLMClient:
             raise RuntimeError("no more responses")
         content = self._responses[self._idx]
         self._idx += 1
-        return LLMResponse(content=content, tokens_used=80)
+        return LLMResponse(content=content, input_tokens=80, output_tokens=0)
 
 
 @pytest.fixture

@@ -17,7 +17,7 @@ class _StubLLM:
 
     async def complete(self, messages, temperature: float = 0.7, priority: str = "query"):
         from llm_wiki.traverse.llm_client import LLMResponse
-        return LLMResponse(content=self.response, tokens_used=50)
+        return LLMResponse(content=self.response, input_tokens=50, output_tokens=0)
 
 
 def _build_vault(tmp_path: Path) -> tuple[Path, Path]:

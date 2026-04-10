@@ -91,7 +91,8 @@ async def test_commit_service_settle_with_llm_uses_summary(tmp_path):
                     "- updated Methods section\n"
                     "- corrected the cited number"
                 ),
-                tokens_used=20,
+                input_tokens=20,
+                output_tokens=0,
             )
 
     service = CommitService(vault_root=tmp_path, llm=MockLLM(), lock=asyncio.Lock())

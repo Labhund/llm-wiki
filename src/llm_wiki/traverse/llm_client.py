@@ -38,7 +38,13 @@ def _should_retry(exc: Exception) -> bool:
 @dataclass
 class LLMResponse:
     content: str
-    tokens_used: int
+    input_tokens: int
+    output_tokens: int
+
+    @property
+    def tokens_used(self) -> int:
+        """Total tokens (input + output, unweighted). Used for context budget tracking."""
+        return self.input_tokens + self.output_tokens
 
 
 class LLMClient:
@@ -85,9 +91,15 @@ class LLMClient:
 
                     response = await litellm.acompletion(**kwargs)
                     content = response.choices[0].message.content
-                    tokens = response.usage.total_tokens if response.usage else 0
-                    self._queue.record_tokens(tokens)
-                    return LLMResponse(content=content, tokens_used=tokens)
+                    usage = response.usage
+                    input_tokens = usage.prompt_tokens if usage else 0
+                    output_tokens = usage.completion_tokens if usage else 0
+                    self._queue.record_tokens(input_tokens, output_tokens)
+                    return LLMResponse(
+                        content=content,
+                        input_tokens=input_tokens,
+                        output_tokens=output_tokens,
+                    )
                 except asyncio.CancelledError:
                     raise
                 except Exception as exc:

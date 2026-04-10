@@ -65,7 +65,8 @@ async def test_summarize_open_entries_calls_llm(tmp_path):
             captured["priority"] = priority
             return LLMResponse(
                 content="Two unresolved entries: an adversary contradiction and a compliance flag.",
-                tokens_used=20,
+                input_tokens=20,
+                output_tokens=0,
             )
 
     summary = await summarize_open_entries(entries, MockLLM())

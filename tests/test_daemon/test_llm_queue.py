@@ -1,8 +1,9 @@
 import asyncio
+import time
 
 import pytest
 
-from llm_wiki.daemon.llm_queue import LLMQueue
+from llm_wiki.daemon.llm_queue import LimitExceededError, LLMQueue
 
 
 @pytest.mark.asyncio
@@ -44,10 +45,15 @@ async def test_concurrency_limited():
 async def test_token_accounting():
     queue = LLMQueue(max_concurrent=2)
     assert queue.tokens_used == 0
+    assert queue.input_tokens_total == 0
+    assert queue.output_tokens_total == 0
 
-    queue.record_tokens(500)
-    queue.record_tokens(300)
-    assert queue.tokens_used == 800
+    queue.record_tokens(400, 100)   # weighted = 400 + 100*5 = 900
+    queue.record_tokens(200, 50)    # weighted = 200 + 50*5  = 450
+
+    assert queue.input_tokens_total == 600
+    assert queue.output_tokens_total == 150
+    assert queue.tokens_used == 750  # unweighted total
 
 
 @pytest.mark.asyncio
@@ -69,3 +75,79 @@ async def test_active_count():
     finish.set()
     await task
     assert queue.active_count == 0
+
+
+@pytest.mark.asyncio
+async def test_hourly_weighted_rolling_window():
+    """Rolling windows only count tokens within their respective periods."""
+    queue = LLMQueue(max_concurrent=1)
+    queue.record_tokens(100, 20)   # weighted = 100 + 20*5 = 200
+
+    assert queue.hourly_weighted == 200
+    assert queue.daily_weighted == 200
+
+    # Inject an entry stale for hourly (>1h) but still within daily (24h).
+    hourly_stale = time.monotonic() - 3601
+    queue._hourly.appendleft((hourly_stale, 9999))
+    assert queue.hourly_weighted == 200  # swept from hourly
+
+    # Inject an entry stale for both hourly and daily (>24h).
+    daily_stale = time.monotonic() - 86401
+    queue._daily.appendleft((daily_stale, 9999))
+    assert queue.daily_weighted == 200  # swept from daily
+
+
+@pytest.mark.asyncio
+async def test_maintenance_blocked_when_hourly_limit_exceeded():
+    """Maintenance calls raise LimitExceededError when hourly limit is hit."""
+    queue = LLMQueue(max_concurrent=2, hourly_limit=100)
+    queue.record_tokens(50, 10)  # weighted = 50 + 50 = 100 → at limit
+
+    async def dummy():
+        return "ok"
+
+    with pytest.raises(LimitExceededError, match="Hourly"):
+        await queue.submit(dummy, priority="maintenance")
+
+
+@pytest.mark.asyncio
+async def test_query_allowed_when_hourly_limit_exceeded(caplog):
+    """Query/ingest calls log a warning but proceed when hourly limit is hit."""
+    import logging
+    queue = LLMQueue(max_concurrent=2, hourly_limit=100)
+    queue.record_tokens(50, 10)  # weighted = 100 → at limit
+
+    async def dummy():
+        return "ok"
+
+    with caplog.at_level(logging.WARNING, logger="llm_wiki.daemon.llm_queue"):
+        result = await queue.submit(dummy, priority="query")
+
+    assert result == "ok"
+    assert "Hourly weighted token limit reached" in caplog.text
+
+
+@pytest.mark.asyncio
+async def test_maintenance_blocked_when_daily_limit_exceeded():
+    """Maintenance calls raise LimitExceededError when daily limit is hit."""
+    queue = LLMQueue(max_concurrent=2, daily_limit=500)
+    queue.record_tokens(400, 20)  # weighted = 400 + 100 = 500 → at limit
+
+    async def dummy():
+        return "ok"
+
+    with pytest.raises(LimitExceededError, match="Daily"):
+        await queue.submit(dummy, priority="maintenance")
+
+
+@pytest.mark.asyncio
+async def test_no_limit_enforcement_when_limits_not_set():
+    """No LimitExceededError when limits are None (default)."""
+    queue = LLMQueue(max_concurrent=2)
+    queue.record_tokens(10_000_000, 10_000_000)
+
+    async def dummy():
+        return "ok"
+
+    result = await queue.submit(dummy, priority="maintenance")
+    assert result == "ok"

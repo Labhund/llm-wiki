@@ -7,6 +7,12 @@ An agent-first knowledge base: plain markdown with wikilinks, a daemon that keep
 
 ---
 
+> **Active development warning.** This project is being stress-tested by its author and is changing rapidly. Interfaces, config formats, and on-disk layouts may break between commits without notice. Not recommended for production use yet.
+>
+> **Cost warning.** The daemon runs background agents (auditor, librarian, adversary, compliance reviewer) on configurable cron intervals that make real LLM calls against whatever API key you've configured. Before pointing this at a paid API (OpenRouter, OpenAI, etc.), review your `~/.llm-wiki/config.yaml` maintenance intervals and set conservative values — or disable background workers you don't need. To cap spend, set `cloud_hourly_limit` and `cloud_daily_limit` in `llm_queue` config (weighted token units: input + output×5). Background maintenance calls are hard-blocked when a limit is reached; interactive query/ingest calls log a warning and proceed.
+
+---
+
 ## Why Not RAG? Why Not Plain Markdown?
 
 **RAG re-derives on every query.** Your agent reads the same papers, synthesises the same conclusions, and starts from scratch next session. Nothing compounds. Every query is session zero.

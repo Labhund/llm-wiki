@@ -221,7 +221,8 @@ async def test_query(daemon_server, sample_vault, monkeypatch):
         mock_resp.choices = [MagicMock()]
         mock_resp.choices[0].message.content = content
         mock_resp.usage = MagicMock()
-        mock_resp.usage.total_tokens = 100
+        mock_resp.usage.prompt_tokens = 80
+        mock_resp.usage.completion_tokens = 20
         return mock_resp
 
     monkeypatch.setattr("litellm.acompletion", mock_acompletion)
