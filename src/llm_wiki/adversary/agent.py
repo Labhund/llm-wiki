@@ -2,6 +2,9 @@ from __future__ import annotations
 
 import datetime
 import logging
+import os
+import tempfile
+import time
 from dataclasses import dataclass, field
 from pathlib import Path
 from random import Random
@@ -66,6 +69,56 @@ class AdversaryAgent:
         self._state_dir = _state_dir_for(vault_root)
         self._overrides_path = self._state_dir / "manifest_overrides.json"
         self._wiki_dir = vault_root / config.vault.wiki_dir.rstrip("/")
+
+    def _load_last_run_ts(self) -> float | None:
+        """Return the stored Unix timestamp of the last adversary run, or None."""
+        path = self._state_dir / "adversary_last_run.txt"
+        try:
+            return float(path.read_text(encoding="utf-8").strip())
+        except (FileNotFoundError, ValueError):
+            return None
+
+    def _record_last_run_ts(self) -> None:
+        """Atomically write the current time as the last-run timestamp."""
+        path = self._state_dir / "adversary_last_run.txt"
+        self._state_dir.mkdir(parents=True, exist_ok=True)
+        fd, tmp = tempfile.mkstemp(
+            dir=self._state_dir, prefix=".adversary-ts-", suffix=".tmp"
+        )
+        try:
+            with os.fdopen(fd, "w", encoding="utf-8") as fh:
+                fh.write(str(time.time()))
+            os.replace(tmp, path)
+        except Exception:
+            try:
+                os.unlink(tmp)
+            except OSError:
+                pass
+            raise
+
+    def _vault_unchanged_since_last_run(self) -> bool:
+        """Return True if no file in wiki/ or raw/ has changed since the last run.
+
+        Always returns False on the first run (no stored timestamp).
+        Also returns False when adversary_force_recheck_days have elapsed since
+        the last run — ensuring periodic re-verification even on a static vault.
+        Skips hidden files (names starting with '.').
+        """
+        ts = self._load_last_run_ts()
+        if ts is None:
+            return False
+        force_days = self._config.maintenance.adversary_force_recheck_days
+        if (time.time() - ts) > force_days * 86400:
+            return False
+        wiki_dir = self._vault_root / self._config.vault.wiki_dir.rstrip("/")
+        raw_dir  = self._vault_root / self._config.vault.raw_dir.rstrip("/")
+        for search_dir in (wiki_dir, raw_dir):
+            if not search_dir.exists():
+                continue
+            for f in search_dir.rglob("*"):
+                if f.is_file() and not f.name.startswith(".") and f.stat().st_mtime > ts:
+                    return False
+        return True
 
     async def run(self) -> AdversaryResult:
         result = AdversaryResult()

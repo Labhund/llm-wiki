@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import time
 from pathlib import Path
 
 import pytest
@@ -303,3 +304,87 @@ async def test_adversary_respects_configured_raw_dir(tmp_path: Path, _clean_stat
     assert result.claims_checked == 1
     assert len(result.validated) == 1
     assert len(stub.calls) == 1
+
+
+def _make_agent(tmp_path: Path, *, force_recheck_days: int = 30) -> AdversaryAgent:
+    """Helper: agent on a vault with one wiki page, no raw sources."""
+    wiki_dir = tmp_path / "wiki"
+    wiki_dir.mkdir(exist_ok=True)
+    (wiki_dir / "page.md").write_text("---\ntitle: Page\n---\n\nContent.\n")
+    config = WikiConfig(
+        maintenance=MaintenanceConfig(
+            adversary_claims_per_run=5,
+            adversary_force_recheck_days=force_recheck_days,
+        ),
+    )
+    vault = Vault.scan(tmp_path)
+    stub = _StubLLM('{"verdict": "validated", "confidence": 0.9, "explanation": "x"}')
+    return AdversaryAgent(vault, tmp_path, stub, IssueQueue(wiki_dir), config)
+
+
+def test_vault_unchanged_no_ts_file(tmp_path: Path):
+    """Returns False (run the adversary) when no timestamp file exists."""
+    agent = _make_agent(tmp_path)
+    assert agent._vault_unchanged_since_last_run() is False
+
+
+def test_vault_unchanged_file_modified_after_ts(tmp_path: Path):
+    """Returns False when a wiki file is newer than the stored timestamp."""
+    agent = _make_agent(tmp_path)
+    # Write a timestamp from 60 seconds ago
+    ts = time.time() - 60
+    agent._state_dir.mkdir(parents=True, exist_ok=True)
+    (agent._state_dir / "adversary_last_run.txt").write_text(str(ts))
+    # Touch the wiki page to set its mtime to now
+    page = tmp_path / "wiki" / "page.md"
+    page.touch()
+    assert agent._vault_unchanged_since_last_run() is False
+
+
+def test_vault_unchanged_no_new_files(tmp_path: Path):
+    """Returns True when no file is newer than the stored timestamp."""
+    agent = _make_agent(tmp_path)
+    # Write page first, then store a timestamp that is newer than the page
+    page = tmp_path / "wiki" / "page.md"
+    page.touch()
+    time.sleep(0.05)  # ensure mtime < ts
+    ts = time.time()
+    agent._state_dir.mkdir(parents=True, exist_ok=True)
+    (agent._state_dir / "adversary_last_run.txt").write_text(str(ts))
+    assert agent._vault_unchanged_since_last_run() is True
+
+
+def test_vault_unchanged_force_recheck_bypasses_guard(tmp_path: Path):
+    """Returns False when force_recheck_days have elapsed, even with no file changes."""
+    agent = _make_agent(tmp_path, force_recheck_days=1)
+    # Timestamp is 2 days ago — force-recheck window exceeded
+    ts = time.time() - (2 * 86400)
+    agent._state_dir.mkdir(parents=True, exist_ok=True)
+    (agent._state_dir / "adversary_last_run.txt").write_text(str(ts))
+    assert agent._vault_unchanged_since_last_run() is False
+
+
+def test_record_last_run_ts_roundtrip(tmp_path: Path):
+    """_record_last_run_ts() writes a float that _load_last_run_ts() reads back."""
+    agent = _make_agent(tmp_path)
+    agent._state_dir.mkdir(parents=True, exist_ok=True)
+    before = time.time()
+    agent._record_last_run_ts()
+    after = time.time()
+    ts = agent._load_last_run_ts()
+    assert ts is not None
+    assert before <= ts <= after
+
+
+def test_load_last_run_ts_missing_file(tmp_path: Path):
+    """Returns None when the timestamp file does not exist."""
+    agent = _make_agent(tmp_path)
+    assert agent._load_last_run_ts() is None
+
+
+def test_load_last_run_ts_corrupt_file(tmp_path: Path):
+    """Returns None when the timestamp file contains garbage."""
+    agent = _make_agent(tmp_path)
+    agent._state_dir.mkdir(parents=True, exist_ok=True)
+    (agent._state_dir / "adversary_last_run.txt").write_text("not-a-float\n")
+    assert agent._load_last_run_ts() is None
