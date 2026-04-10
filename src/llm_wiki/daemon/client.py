@@ -4,6 +4,7 @@ import asyncio
 import asyncio.tasks
 import socket
 from pathlib import Path
+from typing import Callable
 
 from llm_wiki.daemon.protocol import read_message, read_message_sync, write_message, write_message_sync
 
@@ -39,6 +40,27 @@ class DaemonClient:
             sock.connect(str(self._socket_path))
             write_message_sync(sock, msg)
             return read_message_sync(sock)
+        finally:
+            sock.close()
+
+    def stream_ingest_sync(
+        self, msg: dict, on_frame: Callable[[dict], None]
+    ) -> None:
+        """Send an ingest request and call on_frame for each response frame.
+
+        Reads frames until type is 'done' or 'error'. Raises if on_frame raises.
+        Uses a 300-second per-frame timeout — enough for slow LLM backends.
+        """
+        sock = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+        sock.settimeout(300.0)
+        try:
+            sock.connect(str(self._socket_path))
+            write_message_sync(sock, msg)
+            while True:
+                frame = read_message_sync(sock)
+                on_frame(frame)
+                if frame.get("type") in ("done", "error"):
+                    break
         finally:
             sock.close()
 
