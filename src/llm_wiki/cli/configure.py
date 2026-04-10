@@ -568,10 +568,8 @@ def _setup_local(label: str = "Choose your smart model:") -> tuple[str, dict[str
     # Strip any openai/ prefix the user might have typed; we'll add it
     model = raw_model.removeprefix("openai/")
     model_str = f"openai/{model}"
-    api_key = _prompt("API key (press Enter to skip)")
-    backend: dict[str, Any] = {"model": model_str, "api_base": api_base}
-    if api_key:
-        backend["api_key"] = api_key
+    api_key = _prompt("API key (press Enter for 'no-key')")
+    backend: dict[str, Any] = {"model": model_str, "api_base": api_base, "api_key": api_key or "no-key"}
     return "local", backend
 
 
