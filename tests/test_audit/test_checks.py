@@ -227,6 +227,21 @@ def test_find_broken_citations_severity_is_critical(tmp_path: Path):
         assert issue.severity == "critical"
 
 
+def test_find_broken_citations_catches_bare_filename_in_frontmatter(tmp_path):
+    """[[boltz2.pdf]] in frontmatter source (no raw/ prefix) must be flagged."""
+    wiki_dir = tmp_path / "wiki"
+    wiki_dir.mkdir()
+    (wiki_dir / "boltz-2-model.md").write_text(
+        "---\ntitle: Boltz-2 Model\nsource: '[[boltz2.pdf]]'\n---\n\nContent.\n"
+    )
+    vault = Vault.scan(tmp_path)
+    result = find_broken_citations(vault, tmp_path)
+    types = {i.type for i in result.issues}
+    assert "bare-filename-citation" in types
+    targets = {i.metadata.get("target") for i in result.issues}
+    assert "boltz2.pdf" in targets
+
+
 from llm_wiki.audit.checks import find_source_gaps
 from llm_wiki.config import WikiConfig
 import datetime

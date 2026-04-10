@@ -141,16 +141,21 @@ def find_missing_markers(vault: Vault) -> CheckResult:
 _RAW_CITATION_RE = re.compile(r"\[\[(raw/[^\]|]+)(?:\|[^\]]+)?\]\]")
 # Frontmatter source values are stored as the literal string "[[raw/...]]".
 _FRONTMATTER_LINK_RE = re.compile(r"\[\[([^\]|]+)(?:\|[^\]]+)?\]\]")
+# Binary file extensions that should always live under raw/ — catches [[boltz2.pdf]] etc.
+_BINARY_EXTENSIONS = {".pdf", ".docx", ".xlsx", ".pptx", ".epub", ".zip", ".gz"}
+_BARE_BINARY_RE = re.compile(r"\[\[([^\]/\]|]+\.[a-zA-Z0-9]+)(?:\|[^\]]+)?\]\]")
 
 
 def find_broken_citations(vault: Vault, vault_root: Path) -> CheckResult:
-    """References to raw/ source files that don't exist on disk.
+    """References to raw/ source files that don't exist on disk, plus bare
+    filename citations (missing the required raw/ prefix) in frontmatter.
 
     Scans two places:
       1. page.raw_content for inline `[[raw/<path>]]` references
       2. page.frontmatter['source'] (and 'sources' as a list) for raw refs
 
     Each missing target produces one Issue keyed by (page, target).
+    Bare binary citations produce a separate 'bare-filename-citation' issue.
     """
     issues: list[Issue] = []
     for name, entry in vault.manifest_entries().items():
@@ -158,26 +163,33 @@ def find_broken_citations(vault: Vault, vault_root: Path) -> CheckResult:
         if page is None:
             continue
         targets: set[str] = set()
+        bare_filenames: set[str] = set()
 
         for match in _RAW_CITATION_RE.finditer(page.raw_content):
             targets.add(match.group(1))
 
-        source_field = page.frontmatter.get("source")
-        if isinstance(source_field, str):
-            for match in _FRONTMATTER_LINK_RE.finditer(source_field):
+        def _scan_frontmatter_field(value: str) -> None:
+            for match in _FRONTMATTER_LINK_RE.finditer(value):
                 inner = match.group(1)
                 if inner.startswith("raw/"):
                     targets.add(inner)
+                    return
+            # Check for bare binary filename (no raw/ prefix, has binary extension)
+            for match in _BARE_BINARY_RE.finditer(value):
+                inner = match.group(1)
+                suffix = "." + inner.rsplit(".", 1)[-1].lower() if "." in inner else ""
+                if suffix in _BINARY_EXTENSIONS and not inner.startswith("raw/"):
+                    bare_filenames.add(inner)
+
+        source_field = page.frontmatter.get("source")
+        if isinstance(source_field, str):
+            _scan_frontmatter_field(source_field)
 
         sources_field = page.frontmatter.get("sources")
         if isinstance(sources_field, list):
             for entry_str in sources_field:
-                if not isinstance(entry_str, str):
-                    continue
-                for match in _FRONTMATTER_LINK_RE.finditer(entry_str):
-                    inner = match.group(1)
-                    if inner.startswith("raw/"):
-                        targets.add(inner)
+                if isinstance(entry_str, str):
+                    _scan_frontmatter_field(entry_str)
 
         for target in sorted(targets):
             absolute = vault_root / target
@@ -201,6 +213,28 @@ def find_broken_citations(vault: Vault, vault_root: Path) -> CheckResult:
                     metadata={"target": target},
                 )
             )
+
+        for filename in sorted(bare_filenames):
+            issues.append(
+                Issue(
+                    id=Issue.make_id("bare-filename-citation", name, filename),
+                    type="bare-filename-citation",
+                    status="open",
+                    severity="moderate",
+                    title=f"Citation '[[{filename}]]' missing raw/ prefix",
+                    page=name,
+                    body=(
+                        f"The page [[{name}]] has `[[{filename}]]` in its frontmatter. "
+                        f"Source files must live under `raw/` and be cited as "
+                        f"`[[raw/{filename}]]`. Move the file to `raw/{filename}` "
+                        f"and re-ingest, or correct the citation manually."
+                    ),
+                    created=Issue.now_iso(),
+                    detected_by="auditor",
+                    metadata={"target": filename},
+                )
+            )
+
     return CheckResult(check="broken-citations", issues=issues)
 
 
