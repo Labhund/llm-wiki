@@ -157,6 +157,12 @@ class IngestConfig:
     pdf_extractor: str = "pdftotext"              # pdftotext | local-ocr | marker | nougat
     local_ocr_endpoint: str = "http://localhost:8006/v1"
     local_ocr_model: str = "qianfan-ocr"
+    chunk_tokens: int = 6000                      # tokens per extraction chunk
+    chunk_overlap: float = 0.15                   # fractional overlap between chunks
+    max_passages_per_concept: int = 6             # ceiling on passages fed to synthesis
+    grounding_auto_merge: float = 0.75            # passage score >= this → auto-merge updates
+    grounding_flag: float = 0.50                  # passage score < this → create issue
+    auto_copy_to_raw: bool = True                 # copy source to raw/ if outside vault
 
 
 @dataclass
