@@ -106,7 +106,8 @@ async def test_full_pipeline_creates_parseable_pages(managed_vault: Path):
     assert "[[raw/srna-paper.md]]" in srna_text
 
     # --- %% section markers present ---
-    assert "%% section: overview %%" in srna_text
+    import re as _re_int
+    assert _re_int.search(r"%% section: overview(?:, tokens: \d+)? %%", srna_text)
 
     # --- Frontmatter present ---
     assert "title: sRNA Embeddings" in srna_text
@@ -133,7 +134,8 @@ async def test_reingest_same_source_appends_not_duplicates(managed_vault: Path):
 
     assert result1.pages_created == ["topic-a"]
     text1 = (managed_vault / "wiki" / "topic-a.md").read_text()
-    assert "%% section: overview %%" in text1
+    import re as _re_int2
+    assert _re_int2.search(r"%% section: overview(?:, tokens: \d+)? %%", text1)
 
     # Second ingest: appends as "from-paper" since marker doesn't exist yet
     mock_llm2 = MockLLMClient([concept_json, sections_json])
@@ -143,8 +145,8 @@ async def test_reingest_same_source_appends_not_duplicates(managed_vault: Path):
     assert result2.pages_updated == ["topic-a"]
     assert result2.pages_created == []
     text2 = (managed_vault / "wiki" / "topic-a.md").read_text()
-    assert "%% section: overview %%" in text2
-    assert "%% section: from-paper %%" in text2
+    assert _re_int2.search(r"%% section: overview(?:, tokens: \d+)? %%", text2)
+    assert _re_int2.search(r"%% section: from-paper(?:, tokens: \d+)? %%", text2)
 
     # Third ingest: should be idempotent (from-paper marker exists)
     mock_llm3 = MockLLMClient([concept_json, sections_json])

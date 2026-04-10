@@ -347,6 +347,15 @@ def lint(vault_path: Path) -> None:
             click.echo(f"  - {issue_id}")
 
 
+def _is_inside(path: Path, parent: Path) -> bool:
+    """Return True if path is inside (or equal to) parent."""
+    try:
+        path.relative_to(parent)
+        return True
+    except ValueError:
+        return False
+
+
 @cli.command()
 @click.argument("source_path", type=click.Path(exists=True, path_type=Path))
 @click.option(
@@ -359,11 +368,35 @@ def lint(vault_path: Path) -> None:
 )
 def ingest(source_path: Path, vault_path: Path, dry_run: bool) -> None:
     """Ingest a source document — extracts concepts and creates wiki pages."""
+    import shutil
     import uuid as _uuid
+    from llm_wiki.config import WikiConfig
+
+    source_path = source_path.resolve()
+    vault_path = vault_path.resolve()
+
+    # Auto-copy source to raw/ if it's outside the vault
+    if not _is_inside(source_path, vault_path):
+        config = WikiConfig.load(vault_path / "schema" / "config.yaml")
+        if not config.ingest.auto_copy_to_raw:
+            raise click.ClickException(
+                f"Source must be inside vault raw/ directory. "
+                f"Move it first or set auto_copy_to_raw: true in config."
+            )
+        raw_dir = vault_path / config.vault.raw_dir.rstrip("/")
+        raw_dir.mkdir(parents=True, exist_ok=True)
+        dest = raw_dir / source_path.name
+        if not dest.exists():
+            shutil.copy2(source_path, dest)
+            click.echo(f"Copied {source_path.name} → raw/{source_path.name}")
+        else:
+            click.echo(f"Already in raw/: {source_path.name}")
+        source_path = dest
+
     client = _get_client(vault_path)
     msg: dict = {
         "type": "ingest",
-        "source_path": str(source_path.resolve()),
+        "source_path": str(source_path),
         "author": "cli",
         "connection_id": _uuid.uuid4().hex,
         "dry_run": dry_run,

@@ -98,11 +98,14 @@ def _append_source(
     """
     raw_stem = Path(source_ref).stem  # "raw/paper.pdf" → "paper"
     source_slug = re.sub(r"[^a-z0-9-]", "-", raw_stem.lower())  # "my.paper.2024" → "my-paper-2024"
-    section_marker = f"%% section: from-{source_slug} %%"
+    # Use prefix match so it works whether or not tokens have been patched in
+    section_marker_prefix = f"%% section: from-{source_slug}"
 
     existing = page_path.read_text(encoding="utf-8")
-    if section_marker in existing:
+    if section_marker_prefix in existing:
         return WrittenPage(path=page_path, was_update=True)
+
+    section_marker = f"%% section: from-{source_slug} %%"
 
     appended_parts = [f"\n{section_marker}", f"## From {source_slug}", ""]
     for section in sections:

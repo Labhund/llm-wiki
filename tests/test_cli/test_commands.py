@@ -351,3 +351,34 @@ def test_ingest_streaming_error_frame_exits_nonzero(daemon_for_cli, monkeypatch,
     assert result.exit_code != 0
     assert "LLM timeout" in result.output
     assert "1 concept(s) written before error" in result.output
+
+
+def test_ingest_auto_copies_source_outside_vault(daemon_for_cli, monkeypatch, tmp_path):
+    """Source file outside vault is auto-copied to raw/ before sending to daemon."""
+    from llm_wiki.daemon.client import DaemonClient
+    captured_paths: list[str] = []
+
+    def fake_stream(self, msg, on_frame):
+        captured_paths.append(msg.get("source_path", ""))
+        on_frame({"type": "done", "pages_created": 0, "pages_updated": 0, "warnings": []})
+
+    monkeypatch.setattr(DaemonClient, "stream_ingest_sync", fake_stream)
+
+    vault_path = daemon_for_cli
+    # Source is OUTSIDE the vault — place it in the parent of tmp_path
+    # (daemon_for_cli uses the same tmp_path, so vault_path IS tmp_path)
+    source = tmp_path.parent / "outside-paper.pdf"
+    source.write_bytes(b"%PDF")
+
+    runner = CliRunner()
+    result = runner.invoke(cli, ["ingest", str(source), "--vault", str(vault_path)])
+    assert result.exit_code == 0, result.output
+
+    # The path sent to daemon should point into raw/
+    assert captured_paths, "stream_ingest_sync was not called"
+    sent_path = Path(captured_paths[0])
+    assert sent_path.is_relative_to(vault_path / "raw"), (
+        f"Expected path inside vault/raw/, got {sent_path}"
+    )
+    # And the file should actually be there
+    assert (vault_path / "raw" / "outside-paper.pdf").exists()
