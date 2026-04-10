@@ -913,9 +913,10 @@ def run_wizard(vault_path: Path) -> None:
     config_missing = framework_result.get("config_missing", False) if framework_result else False
 
     # Framework display label
+    skills_count = framework_result.get("skills_installed", 0) if framework_result else 0
     framework_label = {
         None: "Not configured",
-        "hermes": f"Hermes  ({framework_result.get('skills_installed', 0)} skills installed)",
+        "hermes": f"Hermes  ({skills_count} skills installed)",
         "claude_code": "Claude Code  (MCP registered)",
         "agent_guided": "Agent-guided  (see instructions above)",
         "manual": "Manual  (see snippets above)",
