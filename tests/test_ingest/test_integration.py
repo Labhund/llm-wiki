@@ -168,3 +168,45 @@ async def test_reingest_same_source_appends_not_duplicates(managed_vault: Path):
     # No duplicate sections
     text = (managed_vault / "wiki" / "topic-a.md").read_text()
     assert text.count("Content [[raw/paper.md]].") == 1
+
+
+def test_ingest_as_proposals_creates_proposal_files(tmp_path):
+    """ingest_as_proposals() writes .md proposal files to inbox/proposals/."""
+    import asyncio
+
+    source = tmp_path / "raw" / "paper.md"
+    source.parent.mkdir(parents=True)
+    source.write_text("# Paper\n\nBoltz-2 is a model.\n\nIt achieves SOTA.", encoding="utf-8")
+
+    wiki_dir = tmp_path / "wiki"
+    wiki_dir.mkdir()
+    proposals_dir = tmp_path / "inbox" / "proposals"
+
+    overview_resp = json.dumps({
+        "concepts": [{"name": "boltz-2", "title": "Boltz-2", "action": "create",
+                      "section_names": ["overview"], "cluster": ""}]
+    })
+    passage_resp = json.dumps({"boltz-2": ["Boltz-2 achieves SOTA."]})
+    synthesis_resp = json.dumps({
+        "sections": [{"name": "overview", "heading": "Overview",
+                      "content": "[[Boltz-2]] is a model [[raw/paper.md]]."}]
+    })
+    llm = MockLLMClient([overview_resp, passage_resp, synthesis_resp])
+    cfg = WikiConfig()
+
+    agent = IngestAgent(llm=llm, config=cfg)
+
+    result = asyncio.run(
+        agent.ingest_as_proposals(
+            source_path=source,
+            vault_root=tmp_path,
+            proposals_dir=proposals_dir,
+            manifest_lines=[],
+        )
+    )
+    assert result.concepts_found == 1
+    pending = list(proposals_dir.glob("*.md"))
+    assert len(pending) == 1
+    raw = pending[0].read_text()
+    assert "boltz-2" in raw
+    assert "```evidence" in raw
