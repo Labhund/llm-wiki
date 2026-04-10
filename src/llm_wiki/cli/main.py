@@ -14,7 +14,9 @@ import click
 
 from llm_wiki.daemon.client import DaemonClient
 from llm_wiki.daemon.lifecycle import (
+    cleanup_stale,
     is_daemon_running,
+    is_process_alive,
     pidfile_path_for,
     read_pidfile,
     socket_path_for,
@@ -199,7 +201,10 @@ def init(vault_path: Path) -> None:
 
 
 @cli.command()
-@click.argument("vault_path", type=click.Path(exists=True, path_type=Path))
+@click.option(
+    "--vault", "vault_path", type=click.Path(exists=True, path_type=Path),
+    default=_default_vault_path, help="Path to vault",
+)
 def serve(vault_path: Path) -> None:
     """Start the daemon in the foreground."""
     from llm_wiki.daemon.__main__ import main as daemon_main
@@ -214,18 +219,16 @@ def serve(vault_path: Path) -> None:
 )
 def stop(vault_path: Path) -> None:
     """Stop the daemon for a vault."""
-    sock = socket_path_for(vault_path)
-    client = DaemonClient(sock)
-    if not client.is_running():
+    import signal as _signal
+    pid_path = pidfile_path_for(vault_path)
+    sock_path = socket_path_for(vault_path)
+    pid = read_pidfile(pid_path)
+    if pid is None or not is_process_alive(pid):
+        cleanup_stale(sock_path, pid_path)
         click.echo("Daemon is not running.")
         return
-    import signal
-    pid = read_pidfile(pidfile_path_for(vault_path))
-    if pid:
-        os.kill(pid, signal.SIGTERM)
-        click.echo(f"Sent stop signal to daemon (PID {pid})")
-    else:
-        click.echo("Could not find daemon PID")
+    os.kill(pid, _signal.SIGTERM)
+    click.echo(f"Sent stop signal to daemon (PID {pid})")
 
 
 @cli.command()
