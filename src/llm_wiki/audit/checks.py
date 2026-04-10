@@ -435,6 +435,159 @@ def find_stale_resonance(vault_root: Path, config: WikiConfig) -> CheckResult:
     return CheckResult(check="stale-resonance", issues=issues)
 
 
+def find_missing_frontmatter(vault: Vault) -> CheckResult:
+    """Pages missing required structural frontmatter fields.
+
+    Checks every wiki page for the following fields:
+      - created, updated, type, status  → minor if absent
+      - source (only when created_by is 'ingest' or 'proposal') → moderate if absent
+
+    Pages without created_by (hand-written pages) are NOT flagged for missing source.
+    Pure Python — no LLM. Implements PHILOSOPHY Principle 13.
+    """
+    # Fields that are always required (minor severity)
+    _REQUIRED_MINOR = ("created", "updated", "type", "status")
+    # created_by values that require a source field (moderate severity)
+    _NEEDS_SOURCE = {"ingest", "proposal"}
+
+    issues: list[Issue] = []
+
+    for name, _entry in vault.manifest_entries().items():
+        page = vault.read_page(name)
+        if page is None:
+            continue
+        fm = page.frontmatter
+
+        missing_minor: list[str] = [f for f in _REQUIRED_MINOR if f not in fm]
+
+        missing_moderate: list[str] = []
+        created_by = fm.get("created_by")
+        if created_by in _NEEDS_SOURCE and "source" not in fm:
+            missing_moderate.append("source")
+
+        if not missing_minor and not missing_moderate:
+            continue
+
+        all_missing = missing_minor + missing_moderate
+        missing_label = ", ".join(all_missing)
+
+        # Overall severity: moderate if any moderate field is missing, else minor
+        severity = "moderate" if missing_moderate else "minor"
+
+        # Build a helpful body explaining each field's purpose
+        field_descriptions: list[str] = []
+        field_purposes = {
+            "created": "creation date (ISO 8601) for audit trails",
+            "updated": "last-updated date for staleness detection",
+            "type": "page type (concept/synthesis/etc.) for search filtering",
+            "status": "maturity status (stub/draft/etc.) for quality assessment",
+            "source": "citation back to the raw/ source file that seeded this page",
+        }
+        for f in all_missing:
+            desc = field_purposes.get(f, f)
+            field_descriptions.append(f"`{f}`: {desc}")
+
+        issues.append(
+            Issue(
+                id=Issue.make_id("missing-frontmatter", name, "|".join(sorted(all_missing))),
+                type="missing-frontmatter",
+                status="open",
+                severity=severity,
+                title=f"[{name}] missing frontmatter: {missing_label}",
+                page=name,
+                body=(
+                    f"The page [[{name}]] is missing required frontmatter fields:\n\n"
+                    + "\n".join(f"- {d}" for d in field_descriptions)
+                ),
+                created=Issue.now_iso(),
+                detected_by="auditor",
+                metadata={"missing_fields": all_missing},
+            )
+        )
+
+    return CheckResult(check="missing-frontmatter", issues=issues)
+
+
+# Matches [[raw/<path>]] anywhere in a page body, allowing optional | alias.
+# Must start with "raw/" to distinguish from plain wikilinks like [[boltz2.pdf]].
+_INLINE_RAW_CITATION_RE = re.compile(r"\[\[raw/[^\]|]+(?:\|[^\]]+)?\]\]")
+
+# created_by values that indicate machine-generated pages requiring inline citations.
+_NEEDS_CITATION = {"ingest", "proposal"}
+
+def _body_only(raw_content: str) -> str:
+    """Return just the body of raw_content, stripping the YAML frontmatter block.
+
+    If the file starts with '---' (the YAML front-matter delimiter), skip
+    everything up to and including the closing '---' line and return the rest.
+    Otherwise return the full content unchanged.
+    """
+    if not raw_content.startswith("---"):
+        return raw_content
+    # Find the closing delimiter — the second occurrence of "---" at line start.
+    # The first is at position 0, so we search from position 3.
+    end = raw_content.find("\n---", 3)
+    if end == -1:
+        return raw_content
+    return raw_content[end + 4:]
+
+
+def find_uncited_sourced_pages(vault: Vault) -> CheckResult:
+    """Pages with a source/created_by field but no inline [[raw/...]] body citations.
+
+    A page is flagged when ALL of the following are true:
+      - It has a `source:` frontmatter field, OR `created_by` is 'ingest'/'proposal'
+      - Its body (content after frontmatter) contains ZERO occurrences of [[raw/...]]
+
+    The check strips YAML frontmatter before scanning so that a `source: [[raw/...]]`
+    frontmatter line does not count as an inline body citation.
+
+    Severity: moderate (the adversary cannot verify any claims on the page).
+    Pure Python — no LLM. Implements PHILOSOPHY Principle 13.
+    """
+    issues: list[Issue] = []
+
+    for name, _entry in vault.manifest_entries().items():
+        page = vault.read_page(name)
+        if page is None:
+            continue
+        fm = page.frontmatter
+
+        has_source_field = "source" in fm
+        created_by = fm.get("created_by")
+        is_machine_generated = created_by in _NEEDS_CITATION
+
+        if not has_source_field and not is_machine_generated:
+            continue  # hand-written page — exempt
+
+        body = _body_only(page.raw_content)
+        if _INLINE_RAW_CITATION_RE.search(body):
+            continue  # at least one [[raw/...]] citation present in body
+
+        issues.append(
+            Issue(
+                id=Issue.make_id("uncited-source", name, ""),
+                type="uncited-source",
+                status="open",
+                severity="moderate",
+                title=f"[{name}] has source but no inline [[raw/...]] citations",
+                page=name,
+                body=(
+                    f"The page [[{name}]] has a source or was created by the ingest "
+                    f"pipeline, but its body contains no inline `[[raw/...]]` citations. "
+                    f"The adversary agent cannot verify any claims on this page because "
+                    f"it finds no citation-backed sentences to check. Add inline "
+                    f"`[[raw/<filename>]]` citations to the sentences you want verified."
+                ),
+                created=Issue.now_iso(),
+                detected_by="auditor",
+                metadata={},
+            )
+        )
+
+    return CheckResult(check="uncited-source", issues=issues)
+
+
 def find_synthesis_without_resonance(vault_root: Path, config: WikiConfig) -> CheckResult:
     """Synthesis pages older than synthesis_lint_months with no resonance talk entries.
 
@@ -732,10 +885,119 @@ def execute_proposal_merges(
             cluster_dir.mkdir(parents=True, exist_ok=True)
             target_path = cluster_dir / f"{target_page}.md"
             if not target_path.exists() and body:
-                target_path.write_text(body + "\n", encoding="utf-8")
+                today = datetime.date.today().isoformat()
+                title = target_page.replace("-", " ").title()
+                source_ref = meta.get("source", "")
+                fm_pairs = [
+                    ("title", title),
+                    ("created", today),
+                    ("updated", today),
+                    ("type", "concept"),
+                    ("status", "stub"),
+                    ("ingested", today),
+                    ("cluster", target_cluster),
+                    ("summary", ""),
+                    ("source", f"[[{source_ref}]]"),
+                    ("created_by", "proposal"),
+                    ("tags", []),
+                ]
+                fm_lines = [
+                    yaml.dump({k: v}, default_flow_style=False).strip()
+                    for k, v in fm_pairs
+                ]
+                frontmatter = "---\n" + "\n".join(fm_lines) + "\n---"
+                target_path.write_text(
+                    frontmatter + "\n\n" + body + "\n",
+                    encoding="utf-8",
+                )
                 patch_token_estimates(target_path)
 
         update_proposal_status(proposal_path, "merged")
         merged.append(target_page)
 
     return merged
+
+
+# Matches [[...]] wikilinks (no nested brackets). Captures the inner target
+# excluding any | alias suffix.
+_WIKILINK_RE = re.compile(r"\[\[([^\]|]+)(?:\|[^\]]+)?\]\]")
+
+
+def find_index_out_of_sync(vault: Vault) -> CheckResult:
+    """Detect drift between wiki/index.md and the vault manifest.
+
+    Two failure modes:
+      1. Missing entry (minor):  a page slug in the manifest is absent from the
+         index body — i.e. there is no [[slug]] anywhere in index.md.
+      2. Broken link (moderate): a [[target]] in index.md does not match any
+         known page slug — e.g. old path-format links like [[wiki/rfdiffusion.md]].
+
+    Pure Python — no LLM.
+    Gracefully skips if wiki/index.md does not yet exist.
+    """
+    index_path = vault.wiki_dir / "index.md"
+    if not index_path.exists():
+        return CheckResult(check="index-out-of-sync", issues=[])
+
+    body = index_path.read_text(encoding="utf-8")
+
+    # All [[target]] slugs referenced in the index
+    index_targets: list[str] = [m.group(1) for m in _WIKILINK_RE.finditer(body)]
+
+    # Known page slugs (excludes index itself — Vault.scan already skips index.md)
+    known_slugs: set[str] = set(vault.manifest_entries().keys())
+
+    issues: list[Issue] = []
+
+    # 1. Missing entries: every known slug must appear in the index
+    index_targets_set = set(index_targets)
+    for slug in sorted(known_slugs):
+        if slug in index_targets_set:
+            continue
+        issues.append(
+            Issue(
+                id=Issue.make_id("index-out-of-sync", slug, "missing"),
+                type="index-out-of-sync",
+                status="open",
+                severity="minor",
+                title=f"Page '{slug}' is not listed in wiki/index.md",
+                page=slug,
+                body=(
+                    f"The page [[{slug}]] exists in the vault but has no entry in "
+                    f"`wiki/index.md`. The librarian will add it on its next run, or "
+                    f"you can add `[[{slug}]]` manually."
+                ),
+                created=Issue.now_iso(),
+                detected_by="auditor",
+                metadata={"slug": slug},
+            )
+        )
+
+    # 2. Broken links: every [[target]] in the index must be a known slug
+    seen_targets: set[str] = set()
+    for target in index_targets:
+        if target in seen_targets:
+            continue
+        seen_targets.add(target)
+        if target in known_slugs:
+            continue
+        issues.append(
+            Issue(
+                id=Issue.make_id("index-out-of-sync", "index", target),
+                type="index-out-of-sync",
+                status="open",
+                severity="moderate",
+                title=f"wiki/index.md has a broken link: [[{target}]]",
+                page="index",
+                body=(
+                    f"`wiki/index.md` contains `[[{target}]]` but no page with that "
+                    f"slug exists in the vault. This may be an old path-format link or "
+                    f"a stale reference to a deleted page. Remove or correct the link."
+                ),
+                created=Issue.now_iso(),
+                detected_by="auditor",
+                metadata={"target": target},
+            )
+        )
+
+    return CheckResult(check="index-out-of-sync", issues=issues)

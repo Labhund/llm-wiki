@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import datetime
 import re
 from dataclasses import dataclass
 from pathlib import Path
@@ -30,6 +31,9 @@ def write_page(
     title: str,
     sections: list[PageSection],
     source_ref: str,
+    *,
+    cluster: str = "",
+    summary: str = "",
 ) -> WrittenPage:
     """Create a new wiki page or append new-source sections to an existing one.
 
@@ -40,6 +44,8 @@ def write_page(
         sections:     Sections to write (for new pages) or append (for updates).
         source_ref:   Source citation string, e.g. "raw/paper.pdf".
                       Used in frontmatter and to name the appended section.
+        cluster:      Wiki subdirectory / cluster name (from ConceptPlan.cluster).
+        summary:      One-sentence summary from synthesis prompt (≤20 words).
 
     Returns:
         WrittenPage with .path and .was_update flag.
@@ -52,7 +58,8 @@ def write_page(
     page_path = wiki_dir / f"{concept_name}.md"
 
     if not page_path.exists():
-        return _create_page(page_path, title, sections, source_ref)
+        return _create_page(page_path, title, sections, source_ref,
+                            cluster=cluster, summary=summary)
     else:
         return _append_source(page_path, sections, source_ref)
 
@@ -62,14 +69,31 @@ def _create_page(
     title: str,
     sections: list[PageSection],
     source_ref: str,
+    *,
+    cluster: str = "",
+    summary: str = "",
 ) -> WrittenPage:
     """Write a brand-new wiki page with frontmatter and %% markers."""
-    fm = {
-        "title": title,
-        "source": f"[[{source_ref}]]",
-        "created_by": "ingest",
-    }
-    frontmatter = "---\n" + yaml.dump(fm, default_flow_style=False).strip() + "\n---"
+    today = datetime.date.today().isoformat()
+    # Build frontmatter in the required field order using a list of (key, value) pairs
+    # so that field order is preserved regardless of Python dict insertion order.
+    fm_pairs = [
+        ("title", title),
+        ("created", today),
+        ("updated", today),
+        ("type", "concept"),
+        ("status", "stub"),
+        ("ingested", today),
+        ("cluster", cluster),
+        ("summary", summary),
+        ("source", f"[[{source_ref}]]"),
+        ("created_by", "ingest"),
+        ("tags", []),
+    ]
+    fm_lines = []
+    for key, value in fm_pairs:
+        fm_lines.append(yaml.dump({key: value}, default_flow_style=False).strip())
+    frontmatter = "---\n" + "\n".join(fm_lines) + "\n---"
 
     body_parts = []
     for section in sections:

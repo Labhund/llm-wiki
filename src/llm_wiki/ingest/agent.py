@@ -213,9 +213,16 @@ class IngestAgent:
                 )
             else:
                 # Legacy direct-write path
+                # NOTE: this path uses compose_page_content_messages / parse_page_content,
+                # which does not produce a summary.  cluster comes from parse_concept_extraction,
+                # which also does not request cluster from the LLM (the extraction prompt omits it),
+                # so concept.cluster is always "" here.  summary is left empty and may be
+                # backfilled later by the librarian.  TODO: migrate callers to write_service.
                 wiki_dir.mkdir(parents=True, exist_ok=True)
                 written = write_page(
                     wiki_dir, concept.name, concept.title, sections, source_ref,
+                    cluster=concept.cluster,
+                    summary="",  # not available in legacy pipeline; backfilled by librarian
                 )
                 if written.was_update:
                     result.pages_updated.append(concept.name)
@@ -412,7 +419,8 @@ class IngestAgent:
                 synth_msgs, temperature=0.3, priority="ingest",
                 label=f"ingest:synthesize:{concept.name}",
             )
-            sections = parse_content_synthesis(synth_resp.content)
+            synthesis = parse_content_synthesis(synth_resp.content)
+            sections = synthesis.sections
             if not sections:
                 logger.warning("No sections generated for %r — skipping", concept.name)
                 continue

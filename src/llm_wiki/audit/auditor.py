@@ -7,13 +7,16 @@ from llm_wiki.audit.checks import (
     execute_proposal_merges,
     find_broken_citations,
     find_broken_wikilinks,
+    find_index_out_of_sync,
     find_inbox_staleness,
+    find_missing_frontmatter,
     find_missing_markers,
     find_orphans,
     find_pending_proposals,
     find_source_gaps,
     find_stale_resonance,
     find_synthesis_without_resonance,
+    find_uncited_sourced_pages,
 )
 from llm_wiki.config import WikiConfig
 from llm_wiki.issues.queue import IssueQueue
@@ -63,6 +66,8 @@ class Auditor:
             find_orphans(self._vault),
             find_broken_wikilinks(self._vault),
             find_missing_markers(self._vault),
+            find_missing_frontmatter(self._vault),
+            find_uncited_sourced_pages(self._vault),
             find_broken_citations(self._vault, self._vault_root),
             find_source_gaps(self._vault_root, self._config),
             find_stale_resonance(self._vault_root, self._config),
@@ -73,6 +78,7 @@ class Auditor:
                 auto_merge_threshold=self._config.ingest.grounding_auto_merge,
                 flag_threshold=self._config.ingest.grounding_flag,
             ),
+            find_index_out_of_sync(self._vault),
         ]
 
         by_check: dict[str, int] = {}
