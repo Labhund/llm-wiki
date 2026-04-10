@@ -417,10 +417,14 @@ def compose_deep_read_synthesis_messages(
         if concept.section_names
         else ""
     )
+    # Paper context FIRST so it forms a stable prefix across all per-concept
+    # synthesis calls in the same batch — this maximises KV-cache hits on
+    # OpenAI-compatible providers (automatic prefix caching) and is the correct
+    # structure for Anthropic cache_control markers too.
     user = (
+        f"## Full Paper Context\n{paper_context}\n\n"
         f"## Concept to write\n{concept.title} (`{concept.name}`)\n\n"
-        f"{section_hint}\n\n"
-        f"## Full Paper Context\n{paper_context}"
+        f"{section_hint}"
     ).strip()
     return [
         {"role": "system", "content": system},
