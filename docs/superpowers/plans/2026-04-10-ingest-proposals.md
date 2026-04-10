@@ -17,9 +17,9 @@
 | `src/llm_wiki/config.py` | Add 6 fields to `IngestConfig` |
 | `src/llm_wiki/ingest/chunker.py` | **New** — `chunk_text()` |
 | `src/llm_wiki/ingest/grounding.py` | **New** — `GroundingResult`, `ground_passage()`, `_bigram_f1()` |
-| `src/llm_wiki/ingest/proposals.py` | **New** — `Proposal`, `ProposalPassage`, `write_proposal()`, `read_proposal_meta()`, `read_proposal_body()`, `update_proposal_status()`, `list_pending_proposals()` |
+| `src/llm_wiki/ingest/proposals.py` | **New** — `Proposal`, `ProposalPassage`, `write_proposal()`, `read_proposal_meta()`, `read_proposal_body()`, `update_proposal_status()`, `list_pending_proposals()`, `find_wiki_page()` |
 | `src/llm_wiki/ingest/prompts.py` | Add `compose_overview_messages`, `compose_passage_collection_messages`, `compose_content_synthesis_messages`, `parse_overview_extraction`, `parse_passage_collection`, `parse_content_synthesis` |
-| `src/llm_wiki/ingest/agent.py` | Add `action`/`section_names` to `ConceptPlan`; fix `_sections_to_body`; add `ingest_as_proposals()` |
+| `src/llm_wiki/ingest/agent.py` | Add `action`/`section_names`/`cluster` to `ConceptPlan`; fix `_sections_to_body`; add `ingest_as_proposals()` |
 | `src/llm_wiki/ingest/page_writer.py` | Add `patch_token_estimates()`, call in `_create_page` and `_append_source` |
 | `src/llm_wiki/audit/checks.py` | Fix `find_broken_citations`; add `find_pending_proposals()` |
 | `src/llm_wiki/audit/auditor.py` | Add `find_pending_proposals` to `audit()` |
@@ -820,6 +820,7 @@ from llm_wiki.ingest.proposals import (
     Proposal, ProposalPassage, write_proposal,
     read_proposal_meta, read_proposal_body,
     update_proposal_status, list_pending_proposals,
+    find_wiki_page, cluster_dirs,
 )
 from llm_wiki.ingest.page_writer import PageSection
 
@@ -899,6 +900,39 @@ def test_list_pending_proposals(tmp_path):
     pending = list_pending_proposals(proposals_dir)
     assert len(pending) == 1
     assert pending[0] == p1
+
+def test_find_wiki_page_flat(tmp_path):
+    wiki = tmp_path / "wiki"
+    wiki.mkdir()
+    page = wiki / "boltz-2.md"
+    page.write_text("---\ntitle: Boltz-2\n---\n")
+    assert find_wiki_page(wiki, "boltz-2") == page
+    assert find_wiki_page(wiki, "does-not-exist") is None
+
+def test_find_wiki_page_nested(tmp_path):
+    wiki = tmp_path / "wiki"
+    cluster = wiki / "structural-biology"
+    cluster.mkdir(parents=True)
+    page = cluster / "boltz-2.md"
+    page.write_text("---\ntitle: Boltz-2\n---\n")
+    assert find_wiki_page(wiki, "boltz-2") == page
+
+def test_cluster_dirs_returns_subdirectories(tmp_path):
+    wiki = tmp_path / "wiki"
+    (wiki / "structural-biology").mkdir(parents=True)
+    (wiki / "ml-methods").mkdir()
+    (wiki / ".hidden").mkdir()
+    result = cluster_dirs(wiki)
+    assert result == ["ml-methods", "structural-biology"]
+    assert ".hidden" not in result
+
+def test_proposal_includes_target_cluster(tmp_path):
+    proposals_dir = tmp_path / "proposals"
+    prop = _sample_proposal()
+    prop.target_cluster = "structural-biology"
+    p = write_proposal(proposals_dir, prop, source_slug="boltz2")
+    meta = read_proposal_meta(p)
+    assert meta.get("target_cluster") == "structural-biology"
 ```
 
 - [ ] **Step 2: Run tests — expect FAIL**
@@ -951,6 +985,7 @@ class Proposal:
     passages: list[ProposalPassage] = field(default_factory=list)
     quality_warning: str | None = None
     status: str = "pending"
+    target_cluster: str = ""   # wiki/ subdirectory for new pages; "" = root
 
 
 def write_proposal(
@@ -969,6 +1004,7 @@ def write_proposal(
         "status": proposal.status,
         "source": proposal.source,
         "target_page": proposal.target_page,
+        "target_cluster": proposal.target_cluster or None,
         "action": proposal.action,
         "proposed_by": proposal.proposed_by,
         "created": proposal.created,
@@ -1050,6 +1086,26 @@ def list_pending_proposals(proposals_dir: Path) -> list[Path]:
         p for p in proposals_dir.glob("*.md")
         if p.is_file() and read_proposal_meta(p).get("status") == "pending"
     )
+
+
+def find_wiki_page(wiki_dir: Path, slug: str) -> Path | None:
+    """Recursively find the page file for *slug* under wiki_dir.
+
+    Supports nested cluster directories (e.g. wiki/structural-biology/boltz-2.md).
+    Returns None if the page does not exist.
+    """
+    for p in wiki_dir.rglob(f"{slug}.md"):
+        if not any(part.startswith(".") for part in p.relative_to(wiki_dir).parts):
+            return p
+    return None
+
+
+def cluster_dirs(wiki_dir: Path) -> list[str]:
+    """Return sorted list of existing cluster subdirectory names under wiki_dir."""
+    return sorted(
+        d.name for d in wiki_dir.iterdir()
+        if d.is_dir() and not d.name.startswith(".")
+    )
 ```
 
 - [ ] **Step 4: Run tests — expect PASS**
@@ -1088,21 +1144,33 @@ from llm_wiki.ingest.prompts import (
 )
 from llm_wiki.ingest.agent import ConceptPlan
 
-def test_overview_messages_embed_manifest():
+def test_overview_messages_embed_manifest_and_clusters():
     msgs = compose_overview_messages(
         chunk_text="Boltz-2 is a new model for structure prediction.",
         manifest_lines=["boltz-1  'Boltz-1'", "protein-mpnn  'ProteinMPNN'"],
         source_ref="raw/boltz2.pdf",
+        cluster_dir_names=["structural-biology", "ml-methods"],
     )
     combined = msgs[0]["content"] + msgs[1]["content"]
     assert "boltz-1" in combined
     assert "protein-mpnn" in combined
+    assert "structural-biology" in combined
     assert "Boltz-2 is a new model" in combined
+
+def test_overview_messages_no_clusters():
+    msgs = compose_overview_messages(
+        chunk_text="A paper.",
+        manifest_lines=[],
+        source_ref="raw/paper.pdf",
+    )
+    combined = msgs[0]["content"]
+    assert "none yet" in combined.lower()
 
 def test_parse_overview_extraction_valid():
     text = json.dumps({
         "concepts": [
             {"name": "boltz-2", "title": "Boltz-2", "action": "update",
+             "cluster": "structural-biology",
              "section_names": ["binding-affinity", "ensemble-prediction"]},
         ]
     })
@@ -1110,6 +1178,7 @@ def test_parse_overview_extraction_valid():
     assert len(result) == 1
     assert result[0].name == "boltz-2"
     assert result[0].action == "update"
+    assert result[0].cluster == "structural-biology"
     assert "binding-affinity" in result[0].section_names
 
 def test_parse_overview_extraction_defaults_action_to_create():
@@ -1170,6 +1239,7 @@ class ConceptPlan:
     passages: list[str] = field(default_factory=list)
     action: str = "create"                      # "create" | "update"
     section_names: list[str] = field(default_factory=list)
+    cluster: str = ""                           # target wiki/ subdirectory; "" = root
 ```
 
 - [ ] **Step 4: Add new prompts to `src/llm_wiki/ingest/prompts.py`**
@@ -1197,10 +1267,18 @@ For each concept:
 and use the EXACT existing slug
 3. If new, set action to "create"
 4. List 2-6 section names (sub-topics that will be sections on the page)
+5. Assign a cluster (wiki subdirectory). Use an EXISTING cluster name if it fits; \
+otherwise invent a short lowercase-hyphenated name (e.g. "structural-biology", \
+"ml-methods"). All concepts from one paper should share a cluster unless they \
+clearly belong to different domains.
 
 ## Existing Wiki Pages (check slugs before naming new concepts)
 
 <<<MANIFEST>>>
+
+## Existing Clusters (prefer these over inventing new ones)
+
+<<<CLUSTER_DIRS>>>
 
 ## Structural Contract (Non-Negotiable)
 
@@ -1212,6 +1290,7 @@ Respond with a SINGLE JSON object:
       "name": "exact-slug",
       "title": "Human Readable Title",
       "action": "create",
+      "cluster": "structural-biology",
       "section_names": ["overview", "architecture", "benchmarks"]
     }
   ]
@@ -1282,10 +1361,16 @@ def compose_overview_messages(
     chunk_text: str,
     manifest_lines: list[str],
     source_ref: str,
+    cluster_dir_names: list[str] | None = None,
 ) -> list[dict[str, str]]:
     """Build messages for the overview concept-identification pass."""
     manifest = "\n".join(manifest_lines) if manifest_lines else "(empty wiki)"
-    system = _OVERVIEW_SYSTEM.replace("<<<MANIFEST>>>", manifest)
+    clusters = "\n".join(f"- {c}" for c in cluster_dir_names) if cluster_dir_names else "(none yet — invent appropriate names)"
+    system = (
+        _OVERVIEW_SYSTEM
+        .replace("<<<MANIFEST>>>", manifest)
+        .replace("<<<CLUSTER_DIRS>>>", clusters)
+    )
     user = f"## Source Reference\n{source_ref}\n\n## Document Opening\n{chunk_text}"
     return [
         {"role": "system", "content": system},
@@ -1353,6 +1438,7 @@ def parse_overview_extraction(text: str) -> "list[ConceptPlan]":
                 title=c.get("title", c["name"]),
                 action=c.get("action", "create"),
                 section_names=c.get("section_names") if isinstance(c.get("section_names"), list) else [],
+                cluster=c.get("cluster", "") or "",
                 passages=[],
             )
             for c in concepts
@@ -1497,7 +1583,7 @@ import datetime
 from llm_wiki.ingest.chunker import chunk_text
 from llm_wiki.ingest.grounding import ground_passage, GroundingResult
 from llm_wiki.ingest.proposals import (
-    Proposal, ProposalPassage, write_proposal,
+    Proposal, ProposalPassage, write_proposal, cluster_dirs as _get_cluster_dirs,
 )
 from llm_wiki.ingest.prompts import (
     compose_overview_messages,
@@ -1566,11 +1652,15 @@ async def ingest_as_proposals(
     if not chunks:
         return result
 
+    wiki_dir = vault_root / self._config.vault.wiki_dir.rstrip("/")
+    existing_clusters = _get_cluster_dirs(wiki_dir)
+
     # Overview pass on chunk 0
     overview_msgs = compose_overview_messages(
         chunk_text=chunks[0],
         manifest_lines=manifest_lines,
         source_ref=source_ref,
+        cluster_dir_names=existing_clusters,
     )
     overview_resp = await self._llm.complete(overview_msgs, temperature=0.2, priority="ingest")
     concepts = parse_overview_extraction(overview_resp.content)
@@ -1652,6 +1742,7 @@ async def ingest_as_proposals(
             sections=sections,
             passages=proposal_passages,
             quality_warning=result.extraction_warning,
+            target_cluster=concept.cluster,
         )
         write_proposal(proposals_dir, proposal, source_slug=source_slug)
 
@@ -1899,6 +1990,7 @@ from llm_wiki.ingest.proposals import (
     read_proposal_meta,
     read_proposal_body,
     update_proposal_status,
+    find_wiki_page,
 )
 ```
 
@@ -1988,8 +2080,8 @@ def find_pending_proposals(
             ))
             continue
 
-        target_path = wiki_dir / f"{target_page}.md"
-        if not target_path.exists():
+        target_path = find_wiki_page(wiki_dir, target_page)
+        if target_path is None:
             issues.append(Issue(
                 id=Issue.make_id("proposal", target_page, source),
                 type="proposal",
@@ -2044,18 +2136,34 @@ def execute_proposal_merges(
         if issue.type != "merge-ready":
             continue
         proposal_path = Path(issue.metadata["proposal_path"])
+        meta = read_proposal_meta(proposal_path)
         target_page = issue.page
-        target_path = wiki_dir / f"{target_page}.md"
+        action = meta.get("action", "update")
+        target_cluster = meta.get("target_cluster") or ""
 
+        from llm_wiki.ingest.page_writer import patch_token_estimates
         body = read_proposal_body(proposal_path)
-        existing = target_path.read_text(encoding="utf-8")
-        if body and body not in existing:
-            target_path.write_text(
-                existing.rstrip() + "\n\n" + body + "\n",
-                encoding="utf-8",
-            )
-            from llm_wiki.ingest.page_writer import patch_token_estimates
-            patch_token_estimates(target_path)
+
+        if action == "update":
+            target_path = find_wiki_page(wiki_dir, target_page)
+            if target_path is None:
+                continue  # page vanished between check and merge — skip
+            existing = target_path.read_text(encoding="utf-8")
+            if body and body not in existing:
+                target_path.write_text(
+                    existing.rstrip() + "\n\n" + body + "\n",
+                    encoding="utf-8",
+                )
+                patch_token_estimates(target_path)
+        else:
+            # create: place in cluster subdir (or root if no cluster assigned)
+            cluster_dir = wiki_dir / target_cluster if target_cluster else wiki_dir
+            cluster_dir.mkdir(parents=True, exist_ok=True)
+            target_path = cluster_dir / f"{target_page}.md"
+            if not target_path.exists() and body:
+                target_path.write_text(body + "\n", encoding="utf-8")
+                patch_token_estimates(target_path)
+
         update_proposal_status(proposal_path, "merged")
         merged.append(target_page)
 
@@ -2257,25 +2365,32 @@ elif request_type == "proposals-list":
 
 # proposals-approve
 elif request_type == "proposals-approve":
-    from llm_wiki.ingest.proposals import read_proposal_meta, read_proposal_body, update_proposal_status
+    from llm_wiki.ingest.proposals import (
+        read_proposal_meta, read_proposal_body, update_proposal_status, find_wiki_page,
+    )
     from llm_wiki.ingest.page_writer import patch_token_estimates
     p = self._vault_root / request["path"]
     meta = read_proposal_meta(p)
-    target = self._vault_root / self._config.vault.wiki_dir.rstrip("/") / f"{meta['target_page']}.md"
+    wiki_dir = self._vault_root / self._config.vault.wiki_dir.rstrip("/")
+    target_page = meta["target_page"]
+    target_cluster = meta.get("target_cluster") or ""
     body = read_proposal_body(p)
-    if target.exists() and body:
+    target = find_wiki_page(wiki_dir, target_page)
+    if target is not None and body:
         existing = target.read_text(encoding="utf-8")
         if body not in existing:
             target.write_text(existing.rstrip() + "\n\n" + body + "\n", encoding="utf-8")
             patch_token_estimates(target)
-    elif not target.exists() and meta.get("action") == "create":
-        # Write a new page from the proposal body
+    elif target is None and meta.get("action") == "create":
+        # Write a new page from the proposal body, respecting cluster
+        cluster_dir = wiki_dir / target_cluster if target_cluster else wiki_dir
+        cluster_dir.mkdir(parents=True, exist_ok=True)
+        new_path = cluster_dir / f"{target_page}.md"
         fm = {"title": meta["target_page"], "source": f"[[{meta['source']}]]", "created_by": "ingest"}
         import yaml as _yaml
         fm_text = "---\n" + _yaml.dump(fm, default_flow_style=False).strip() + "\n---\n\n"
-        target.parent.mkdir(parents=True, exist_ok=True)
-        target.write_text(fm_text + body + "\n", encoding="utf-8")
-        patch_token_estimates(target)
+        new_path.write_text(fm_text + body + "\n", encoding="utf-8")
+        patch_token_estimates(new_path)
     update_proposal_status(p, "merged")
     return {"status": "ok", "merged": str(request["path"])}
 
