@@ -130,6 +130,7 @@ def test_merge_claude_code_mcp_creates_file(tmp_path):
     data = json.loads(mcp_path.read_text())
     assert "llm-wiki" in data["mcpServers"]
     assert data["mcpServers"]["llm-wiki"]["args"] == ["mcp"]
+    assert data["mcpServers"]["llm-wiki"]["env"]["LLM_WIKI_VAULT"] == "/home/user/wiki"
 
 
 def test_merge_claude_code_mcp_preserves_existing(tmp_path):

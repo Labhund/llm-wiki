@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import hashlib as _hashlib
+import json
 import os
 import sys
 from pathlib import Path
@@ -228,7 +229,6 @@ def _setup_hermes() -> dict[str, Any] | None:
 
 def _merge_claude_code_mcp(mcp_path: Path, vault_path: Path) -> None:
     """Merge llm-wiki MCP entry into a Claude Code mcp.json file."""
-    import json
     existing: dict = {}
     if mcp_path.exists():
         try:
