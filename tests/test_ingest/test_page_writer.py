@@ -3,6 +3,7 @@ from pathlib import Path
 import pytest
 
 from llm_wiki.ingest.page_writer import PageSection, WrittenPage, write_page
+from llm_wiki.ingest.agent import IngestAgent
 
 
 @pytest.fixture
@@ -84,3 +85,15 @@ def test_update_same_source_twice_no_duplicate(wiki_dir: Path):
     text = (wiki_dir / "pca.md").read_text()
     # Section name from-paper should appear only once
     assert text.count("%% section: from-paper %%") <= 1
+
+
+def test_sections_to_body_includes_markers():
+    sections = [
+        PageSection(name="overview", heading="Overview", content="Boltz-2 is a model."),
+        PageSection(name="performance", heading="Performance", content="It achieves SOTA."),
+    ]
+    body = IngestAgent._sections_to_body(sections)
+    assert "%% section: overview %%" in body
+    assert "%% section: performance %%" in body
+    assert "## Overview" in body
+    assert "## Performance" in body

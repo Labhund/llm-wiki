@@ -275,6 +275,7 @@ class IngestAgent:
     def _sections_to_body(sections: list) -> str:
         parts = []
         for s in sections:
+            parts.append(f"%% section: {s.name} %%")
             parts.append(f"## {s.heading}")
             parts.append("")
             parts.append(s.content)
