@@ -668,6 +668,7 @@ async def test_process_list_route(daemon_server):
         assert "consecutive_failures" in w
         # last_run may be None if worker hasn't run yet
         assert "last_run" in w
+        assert "running_elapsed_s" in w
 
 
 @pytest.mark.asyncio
