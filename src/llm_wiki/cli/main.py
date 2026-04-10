@@ -5,6 +5,7 @@ import subprocess
 import sys
 import tempfile
 import time
+from datetime import datetime, timezone
 from pathlib import Path
 
 import click
@@ -28,6 +29,42 @@ def _default_vault_path() -> str:
     if home_wiki.is_dir():
         return str(home_wiki)
     return "."
+
+
+def _relative_time(timestamp_str: str) -> tuple[str, str]:
+    """Convert ISO timestamp to (relative, next_scheduled) strings.
+    
+    Returns:
+        Tuple of (relative_time_str, next_run_str) where:
+        - relative_time_str: "Xs/minutes/hours/days ago" or "never"
+        - next_run_str: "in Xs/minutes/hours/days" or "— (never)"
+    """
+    if not timestamp_str or timestamp_str == "never":
+        return "never", "— (never)"
+    
+    try:
+        # Parse ISO timestamp
+        ts = datetime.fromisoformat(timestamp_str.replace("Z", "+00:00"))
+        now = datetime.now(timezone.utc)
+        delta = now - ts
+        total_seconds = delta.total_seconds()
+        
+        # Convert to relative time
+        if total_seconds < 60:
+            ago = f"{int(total_seconds)}s ago"
+        elif total_seconds < 3600:
+            minutes = int(total_seconds / 60)
+            ago = f"{minutes}m ago"
+        elif total_seconds < 86400:
+            hours = int(total_seconds / 3600)
+            ago = f"{hours}h ago"
+        else:
+            days = int(total_seconds / 86400)
+            ago = f"{days}d ago"
+        
+        return ago, None  # next_run calculated by caller
+    except (ValueError, TypeError):
+        return str(timestamp_str), "—"
 
 
 def _get_client(vault_path: Path, auto_start: bool = True) -> DaemonClient:
@@ -460,16 +497,39 @@ def maintenance_status(vault_path: Path) -> None:
         click.echo("No maintenance workers registered.")
         return
 
-    click.echo(f"{'name':<16} {'interval':<10} {'failures':<10} last_run")
-    click.echo("-" * 70)
+    click.echo(f"{'name':<16} {'interval':<10} {'failures':<10} last_run        next_scheduled")
+    click.echo("-" * 85)
     for worker in workers:
-        interval = f"{worker['interval_seconds']:.0f}s"
+        interval = worker["interval_seconds"]
+        interval_str = f"{interval:.0f}s"
+        if interval >= 3600:
+            interval_str = f"{interval/3600:.1f}h"
+        elif interval >= 60:
+            interval_str = f"{interval/60:.1f}m"
+        
         failures = worker.get("consecutive_failures", 0)
         last = worker["last_run"] or "never"
         reachable = worker.get("backend_reachable")
         reachable_str = "" if reachable is None else (" [backend DOWN]" if not reachable else "")
+        
+        ago, next_calc = _relative_time(last)
+        if next_calc is None:
+            # Calculate next scheduled time from interval
+            next_seconds = interval
+            next_str = "—"
+            if next_seconds < 60:
+                next_str = f"in {next_seconds}s"
+            elif next_seconds < 3600:
+                next_str = f"in {int(next_seconds/60)}m"
+            elif next_seconds < 86400:
+                next_str = f"in {int(next_seconds/3600)}h"
+            else:
+                next_str = f"in {int(next_seconds/86400)}d"
+        else:
+            next_str = next_calc
+        
         click.echo(
-            f"{worker['name']:<16} {interval:<10} {failures:<10} {last}{reachable_str}"
+            f"{worker['name']:<16} {interval_str:<10} {failures:<10} {ago:<16} {next_str:<12}{reachable_str}".rstrip()
         )
 
 
