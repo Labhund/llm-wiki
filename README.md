@@ -3,7 +3,7 @@
 An agent-first knowledge base: plain markdown with wikilinks, a daemon that keeps it indexed and honest, and an MCP server that lets agents navigate it the way a researcher reads Wikipedia.
 
 > *The LLM writes and maintains the wiki; the human reads and asks questions.*
-> — [Andrej Karpathy](https://x.com/karpathy/status/1908534332534366468)
+> — [Andrej Karpathy](https://x.com/karpathy/status/2039805659525644595)
 
 ---
 
