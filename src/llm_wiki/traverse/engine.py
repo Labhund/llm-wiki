@@ -29,6 +29,7 @@ class TraversalResult:
     outcome: str  # "complete", "budget_exceeded", "candidates_exhausted", "turn_limit"
     needs_more_budget: bool
     log: TraversalLog
+    synthesis_action: dict | None = None
 
 
 class TraversalEngine:
@@ -51,6 +52,27 @@ class TraversalEngine:
         self._vault_root = vault_root
         self._log_dir = log_dir
 
+    def _collect_synthesis_candidates(
+        self, search_results: list
+    ) -> list[tuple[str, str, str]]:
+        """Extract synthesis pages from BM25 search results for the synthesize prompt.
+
+        Returns list of (slug, original_query, answer_content) for synthesis pages
+        found in the top search results. The LLM uses these to decide accept/update/create.
+        """
+        candidates = []
+        for result in search_results:
+            if not result.entry.is_synthesis:
+                continue
+            page = self._vault.read_page(result.entry.name)
+            if page is None:
+                continue
+            orig_query = page.frontmatter.get("query", "")
+            answer_sections = [s for s in page.sections if s.name == "answer"]
+            content = answer_sections[0].content if answer_sections else page.raw_content
+            candidates.append((result.entry.name, orig_query, content))
+        return candidates
+
     async def query(self, question: str, budget: int | None = None) -> TraversalResult:
         budget = budget if budget is not None else self._config.budgets.default_query
         max_turns = self._config.budgets.max_traversal_turns
@@ -65,6 +87,7 @@ class TraversalEngine:
         try:
             # -- Turn 0: Search -> manifest -> LLM picks starting pages --
             search_results = self._vault.search(question, limit=10)
+            synthesis_candidates = self._collect_synthesis_candidates(search_results)
             if not search_results:
                 # Fallback: if the vault has multiple pages, use the full manifest so the
                 # LLM can still orient itself (search may have filtered stop-word queries).
@@ -113,7 +136,7 @@ class TraversalEngine:
             )
             if outcome and not turn0_premature:
                 return await self._finish(
-                    question, memory, outcome, log, synthesize_prompt
+                    question, memory, outcome, log, synthesize_prompt, synthesis_candidates
                 )
 
             # -- Turns 1..max_turns: Read -> update -> decide --
@@ -168,7 +191,7 @@ class TraversalEngine:
                 outcome = "turn_limit"
 
             return await self._finish(
-                question, memory, outcome, log, synthesize_prompt
+                question, memory, outcome, log, synthesize_prompt, synthesis_candidates
             )
         except Exception:
             if not log.outcome:
@@ -256,13 +279,29 @@ class TraversalEngine:
         outcome: str,
         log: TraversalLog,
         synthesize_prompt: str,
+        synthesis_candidates: list[tuple[str, str, str]] | None = None,
     ) -> TraversalResult:
         """Synthesize final answer, persist log, build result."""
-        messages = compose_synthesize_messages(question, memory, synthesize_prompt)
+        from llm_wiki.traverse.synthesis import extract_prose_after_action, parse_synthesis_action
+
+        messages = compose_synthesize_messages(
+            question, memory, synthesize_prompt,
+            synthesis_candidates=synthesis_candidates or [],
+        )
         response = await self._llm.complete(messages, temperature=0.3, label="query:synthesize")
         memory.budget_used += response.tokens_used
 
-        answer = response.content
+        synthesis_action = parse_synthesis_action(response.content)
+        if synthesis_action and synthesis_action.get("action") == "accept":
+            # accept: the server will return the existing page — no prose needed
+            answer = ""
+        else:
+            answer = (
+                extract_prose_after_action(response.content)
+                if synthesis_action
+                else response.content
+            )
+
         citations = _extract_citations(answer)
 
         log.outcome = outcome
@@ -277,6 +316,7 @@ class TraversalEngine:
             outcome=outcome,
             needs_more_budget=(outcome == "budget_exceeded"),
             log=log,
+            synthesis_action=synthesis_action,
         )
 
     def _persist_log(self, log: TraversalLog) -> None:

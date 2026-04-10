@@ -369,3 +369,35 @@ async def test_turn_token_accounting_is_per_call_delta(vault, config):
     # Each individual turn should be 100 (one LLM call per turn).
     for t in result.log.turns:
         assert t.tokens_used == 100
+
+
+def test_traversal_result_has_synthesis_action_field():
+    """TraversalResult accepts synthesis_action kwarg."""
+    from llm_wiki.traverse.log import TraversalLog
+    from unittest.mock import MagicMock
+    log = MagicMock(spec=TraversalLog)
+    log.to_dict.return_value = {}
+    result = TraversalResult(
+        answer="ans",
+        citations=[],
+        outcome="complete",
+        needs_more_budget=False,
+        log=log,
+        synthesis_action={"action": "create", "title": "T"},
+    )
+    assert result.synthesis_action["action"] == "create"
+
+
+def test_traversal_result_synthesis_action_defaults_none():
+    """TraversalResult.synthesis_action defaults to None."""
+    from llm_wiki.traverse.log import TraversalLog
+    from unittest.mock import MagicMock
+    log = MagicMock(spec=TraversalLog)
+    result = TraversalResult(
+        answer="ans",
+        citations=[],
+        outcome="complete",
+        needs_more_budget=False,
+        log=log,
+    )
+    assert result.synthesis_action is None
