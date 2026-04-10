@@ -287,22 +287,28 @@ _PROVIDERS = [
 _PROVIDER_NAMES = ["local", "openai", "anthropic", "openrouter", "custom"]
 
 
-def _pick_or_type(choices: list[str], default: int = 0) -> str:
+def _pick_or_type(choices: list[str], label: str = "Select model:", default: int = 0) -> str:
     """Choose from list; last entry is always 'other (type manually)'."""
-    idx = _choice("Select model:", choices, default)
+    idx = _choice(label, choices, default)
     if idx == len(choices) - 1:
+        _info("LiteLLM format examples:")
+        _info("  openai/gpt-4o                     (OpenAI)")
+        _info("  anthropic/claude-haiku-4-5         (Anthropic)")
+        _info("  openrouter/google/gemini-2.5-pro   (OpenRouter)")
+        _info("  openai/my-local-model              (local endpoint)")
+        print()
         return _prompt("Model name")
     return choices[idx]
 
 
-def _setup_local() -> tuple[str, dict[str, Any]]:
+def _setup_local(label: str = "Choose your smart model:") -> tuple[str, dict[str, Any]]:
     _info("Common base URLs:")
     _info("  ollama:       http://localhost:11434/v1")
     _info("  vllm:         http://localhost:8000/v1")
     _info("  LiteLLM proxy: http://localhost:4000/v1")
     print()
     api_base = _prompt("Base URL", "http://localhost:11434/v1")
-    raw_model = _pick_or_type(_LOCAL_MODELS)
+    raw_model = _pick_or_type(_LOCAL_MODELS, label=label)
     # Strip any openai/ prefix the user might have typed; we'll add it
     model = raw_model.lstrip("openai/") if raw_model.startswith("openai/") else raw_model
     model_str = f"openai/{model}"
@@ -313,28 +319,28 @@ def _setup_local() -> tuple[str, dict[str, Any]]:
     return "local", backend
 
 
-def _setup_openai() -> tuple[str, dict[str, Any]]:
+def _setup_openai(label: str = "Choose your smart model:") -> tuple[str, dict[str, Any]]:
     _info("Get your key at: https://platform.openai.com/api-keys")
     print()
     api_key = _prompt("OpenAI API key", password=True)
-    model = _pick_or_type(_OPENAI_MODELS)
+    model = _pick_or_type(_OPENAI_MODELS, label=label)
     return "openai", {"model": model, "api_key": api_key}
 
 
-def _setup_anthropic() -> tuple[str, dict[str, Any]]:
+def _setup_anthropic(label: str = "Choose your smart model:") -> tuple[str, dict[str, Any]]:
     _info("Get your key at: https://console.anthropic.com/")
     print()
     api_key = _prompt("Anthropic API key", password=True)
-    model = _pick_or_type(_ANTHROPIC_MODELS)
+    model = _pick_or_type(_ANTHROPIC_MODELS, label=label)
     return "anthropic", {"model": model, "api_key": api_key}
 
 
-def _setup_openrouter() -> tuple[str, dict[str, Any]]:
+def _setup_openrouter(label: str = "Choose your smart model:") -> tuple[str, dict[str, Any]]:
     _info("Get your key at: https://openrouter.ai/keys")
     _info("OpenRouter gives you access to 200+ models with a single key.")
     print()
     api_key = _prompt("OpenRouter API key", password=True)
-    model_short = _pick_or_type(_OPENROUTER_MODELS)
+    model_short = _pick_or_type(_OPENROUTER_MODELS, label=label)
     # Prefix with openrouter/ for LiteLLM routing unless user already did
     if not model_short.startswith("openrouter/"):
         model_str = f"openrouter/{model_short}"
@@ -347,7 +353,7 @@ def _setup_openrouter() -> tuple[str, dict[str, Any]]:
     }
 
 
-def _setup_custom() -> tuple[str, dict[str, Any]]:
+def _setup_custom(label: str = "Choose your smart model:") -> tuple[str, dict[str, Any]]:
     _info("Any OpenAI-compatible endpoint works (vLLM, Together AI, Groq, etc.)")
     print()
     api_base = _prompt("Base URL (e.g. https://api.groq.com/openai/v1)")
@@ -382,7 +388,7 @@ def _setup_fast_backend(smart_name: str, smart_cfg: dict) -> tuple[str, dict] | 
     _header("Fast / Cheap Model")
     provider_idx = _choice("Provider:", _PROVIDERS, default=0)
     _header(_PROVIDERS[provider_idx].split("  ")[0].strip())
-    _, backend_cfg = _PROVIDER_SETUP[provider_idx]()
+    _, backend_cfg = _PROVIDER_SETUP[provider_idx](label="Choose your fast model:")
     return "fast", backend_cfg
 
 
@@ -463,10 +469,19 @@ def run_wizard(vault_path: Path) -> None:
             return
         print()
 
-    # ── LLM Backend ──────────────────────────────────────────────────────────
-    _header("LLM Backend")
-    _info("llm-wiki uses LiteLLM to route requests to any model provider.")
-    _info("Which provider do you want to use?")
+    # ── Model tier framing ────────────────────────────────────────────────────
+    _header("LLM Backends")
+    _info("llm-wiki routes tasks across two model tiers:")
+    _info("")
+    _info("  Smart model — depth work: research queries, document ingestion,")
+    _info("                adversarial fact-checking. Use your most capable model.")
+    _info("")
+    _info("  Fast model  — high-frequency background: librarian, compliance,")
+    _info("                commit summaries. Throughput matters more than depth.")
+    _info("")
+    _info("You can use the same model for both — just skip the fast model step.")
+    print()
+    _info("Which provider do you want for your smart model?")
     print()
 
     provider_idx = _choice("Provider:", _PROVIDERS, default=0)
