@@ -466,10 +466,14 @@ def manifest(vault_path: Path, budget: int) -> None:
 )
 @click.option("--budget", default=None, type=int, help="Token budget for traversal")
 @click.option(
+    "--timeout", default=300, type=int, show_default=True,
+    help="Socket timeout in seconds (increase for slow/local models).",
+)
+@click.option(
     "--trace", "trace", is_flag=True, default=False,
     help="Show per-call LLM trace and write a full trace file.",
 )
-def query(question: str, vault_path: Path, budget: int | None, trace: bool) -> None:
+def query(question: str, vault_path: Path, budget: int | None, timeout: int, trace: bool) -> None:
     """Query the wiki — multi-turn LLM traversal with citations."""
     client = _get_client(vault_path)
     req: dict = {"type": "query", "question": question}
@@ -478,7 +482,7 @@ def query(question: str, vault_path: Path, budget: int | None, trace: bool) -> N
     if trace:
         req["trace"] = True
 
-    resp = client.request(req)
+    resp = client.request(req, timeout=timeout)
     if resp["status"] != "ok":
         raise click.ClickException(resp.get("message", "Query failed"))
 
