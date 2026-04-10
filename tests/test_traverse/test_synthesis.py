@@ -55,6 +55,14 @@ def test_parse_synthesis_action_unknown_action():
     assert parse_synthesis_action('{"action": "delete", "page": "boltz-2"}') is None
 
 
+def test_parse_synthesis_action_content_with_braces():
+    """parse_synthesis_action handles JSON values that contain curly braces."""
+    resp = '{"action": "create", "content": "Boltz {uses} diffusion", "sources": []}'
+    action = parse_synthesis_action(resp)
+    assert action is not None
+    assert action["action"] == "create"
+
+
 def test_extract_prose_after_action():
     resp = '{"action": "accept", "page": "boltz-2"}\n\nBoltz-2 is great.'
     prose = extract_prose_after_action(resp)

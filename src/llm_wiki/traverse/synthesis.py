@@ -11,14 +11,13 @@ import re
 from datetime import datetime, timezone
 
 _SLUG_RE = re.compile(r"[^a-z0-9]+")
-# Match a JSON object starting at the very beginning of the (stripped) response.
-_JSON_OBJECT_RE = re.compile(r"^\s*(\{[^}]*\})", re.DOTALL)
 
 
 def slug_from_query(query: str) -> str:
     """Convert a query string to a filesystem-safe slug (max 60 chars)."""
-    slug = _SLUG_RE.sub("-", query.lower()).strip("-")
-    slug = slug[:60] if len(slug) > 60 else slug
+    slug = _SLUG_RE.sub("-", query.lower())
+    slug = slug[:60]
+    slug = slug.strip("-")
     return slug or "query"
 
 
@@ -28,11 +27,11 @@ def parse_synthesis_action(response: str) -> dict | None:
     Returns the action dict if present and valid, else None.
     Valid actions: "accept", "update", "create".
     """
-    m = _JSON_OBJECT_RE.match(response.strip())
-    if not m:
+    stripped = response.strip()
+    if not stripped.startswith("{"):
         return None
     try:
-        data = json.loads(m.group(1))
+        data, _ = json.JSONDecoder().raw_decode(stripped)
     except json.JSONDecodeError:
         return None
     if not isinstance(data, dict) or "action" not in data:
@@ -49,10 +48,13 @@ def extract_prose_after_action(response: str) -> str:
     If the JSON block covers the entire response, returns it as-is (accept path).
     """
     stripped = response.strip()
-    m = _JSON_OBJECT_RE.match(stripped)
-    if not m:
+    if not stripped.startswith("{"):
         return stripped
-    prose = stripped[m.end():].strip()
+    try:
+        _, end_idx = json.JSONDecoder().raw_decode(stripped)
+    except json.JSONDecodeError:
+        return stripped
+    prose = stripped[end_idx:].strip()
     return prose if prose else stripped
 
 
