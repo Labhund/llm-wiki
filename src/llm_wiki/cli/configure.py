@@ -923,7 +923,7 @@ def run_wizard(vault_path: Path) -> None:
     }.get(framework, framework)
 
     features = [
-        (f"Smart model  ({backend_cfg['model']})", True, None),
+        (f"Smart model  ({backend_cfg.get('model', '(unknown)')})", True, None),
         (
             f"Fast model  ({backends['fast']['model']})" if has_fast
             else "Fast model  (using smart model for all tasks)",
