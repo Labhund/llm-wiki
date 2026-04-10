@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import hashlib as _hashlib
+import os
 import sys
 from pathlib import Path
 from typing import Any
@@ -146,7 +147,6 @@ def _merge_hermes_mcp(config_path: Path, vault_path: Path) -> None:
 
 def _setup_hermes() -> dict[str, Any] | None:
     """Interactive Hermes integration setup. Returns result dict or None on abort."""
-    import os
     # ── Detect Hermes home ────────────────────────────────────────────────────
     default_hermes = Path(os.environ.get("HERMES_HOME", str(Path.home() / ".hermes")))
     hermes_home_str = _prompt("Hermes home directory", str(default_hermes))

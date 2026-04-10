@@ -116,3 +116,6 @@ def test_merge_hermes_mcp_config(tmp_path):
     assert content["mcp_servers"]["llm-wiki"]["env"]["LLM_WIKI_VAULT"] == str(vault_path)
     assert "other-tool" in content["mcp_servers"]   # existing entry preserved
     assert content["agent"]["max_turns"] == 90       # unrelated key preserved
+    assert content["mcp_servers"]["llm-wiki"]["args"] == ["mcp"]
+    assert content["mcp_servers"]["llm-wiki"]["timeout"] == 120
+    assert content["mcp_servers"]["llm-wiki"]["connect_timeout"] == 30
