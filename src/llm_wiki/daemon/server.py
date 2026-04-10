@@ -1365,12 +1365,20 @@ class DaemonServer:
         from llm_wiki.traverse.engine import TraversalEngine
         from llm_wiki.traverse.llm_client import LLMClient
 
+        # Trace mode: collect all LLM call events and return with the response.
+        trace_events: list[dict] = []
+        trace_fn = None
+        if request.get("trace"):
+            async def trace_fn(event: dict) -> None:  # noqa: E731
+                trace_events.append(event)
+
         backend = self._config.llm.resolve("query")
         llm = LLMClient(
             self._llm_queue,
             model=backend.model,
             api_base=backend.api_base,
             api_key=backend.api_key,
+            trace_fn=trace_fn,
         )
         log_dir = _state_dir_for(self._vault_root) / "traversal_logs"
         engine = TraversalEngine(
@@ -1382,7 +1390,7 @@ class DaemonServer:
             request["question"],
             budget=request.get("budget"),
         )
-        return {
+        resp: dict = {
             "status": "ok",
             "answer": result.answer,
             "citations": result.citations,
@@ -1390,6 +1398,9 @@ class DaemonServer:
             "needs_more_budget": result.needs_more_budget,
             "log": result.log.to_dict(),
         }
+        if trace_events:
+            resp["trace_events"] = trace_events
+        return resp
 
     async def _handle_ingest(self, request: dict) -> dict:
         if request.get("proposal_mode") and not request.get("dry_run"):
@@ -1571,11 +1582,19 @@ class DaemonServer:
         source_path = Path(request["source_path"])
         source_type = request.get("source_type", "paper")
         backend = self._config.llm.resolve("ingest")
+
+        # Trace mode: emit {"type": "trace", ...} frames for every LLM call.
+        trace_fn = None
+        if request.get("trace"):
+            async def trace_fn(event: dict) -> None:  # noqa: E731
+                await write_message(writer, {"type": "trace", **event})
+
         llm = LLMClient(
             self._llm_queue,
             model=backend.model,
             api_base=backend.api_base,
             api_key=backend.api_key,
+            trace_fn=trace_fn,
         )
         agent = IngestAgent(llm, self._config)
 

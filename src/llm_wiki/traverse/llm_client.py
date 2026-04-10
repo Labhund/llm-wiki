@@ -2,8 +2,9 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import time
 from dataclasses import dataclass
-from typing import Any
+from typing import Any, Awaitable, Callable
 
 import litellm
 
@@ -53,6 +54,10 @@ class LLMClient:
     Wraps litellm.acompletion. Supports the litellm proxy via api_base/api_key.
     For local-instruct served by the litellm proxy on port 4000, use:
         model="openai/local-instruct", api_base="http://localhost:4000".
+
+    When ``trace_fn`` is provided, it is awaited after every successful completion
+    with a dict containing the label, messages, response, token counts, and latency.
+    Use this to capture the full LLM call trace for debugging.
     """
 
     def __init__(
@@ -62,12 +67,14 @@ class LLMClient:
         api_base: str | None = None,
         api_key: str | None = None,
         timeout: float | None = None,
+        trace_fn: "Callable[[dict], Awaitable[None]] | None" = None,
     ) -> None:
         self._queue = queue
         self._model = model
         self._api_base = api_base
         self._api_key = api_key
         self._timeout = timeout
+        self._trace_fn = trace_fn
 
     async def complete(
         self,
@@ -77,6 +84,7 @@ class LLMClient:
         label: str = "unknown",
     ) -> LLMResponse:
         """Send a completion request through the concurrency-limited queue."""
+        t0 = time.monotonic()
 
         async def _call() -> LLMResponse:
             last_exc: Exception | None = None
@@ -118,4 +126,22 @@ class LLMClient:
                     await asyncio.sleep(delay)
             raise last_exc  # type: ignore[misc]  # unreachable
 
-        return await self._queue.submit(_call, priority=priority, label=label)
+        resp = await self._queue.submit(_call, priority=priority, label=label)
+
+        if self._trace_fn is not None:
+            try:
+                await self._trace_fn({
+                    "label": label,
+                    "model": self._model,
+                    "temperature": temperature,
+                    "priority": priority,
+                    "messages": messages,
+                    "response": resp.content,
+                    "input_tokens": resp.input_tokens,
+                    "output_tokens": resp.output_tokens,
+                    "latency_s": round(time.monotonic() - t0, 3),
+                })
+            except Exception:
+                logger.warning("trace_fn raised — tracing suppressed for this call", exc_info=True)
+
+        return resp

@@ -239,3 +239,98 @@ async def test_complete_passes_label_to_queue(monkeypatch):
         )
 
     assert "adversary:verify:test-page" in captured_labels
+
+
+# ─── Trace callback tests ─────────────────────────────────────────────────────
+
+@pytest.mark.asyncio
+async def test_trace_fn_called_with_correct_fields():
+    """When trace_fn is provided, it is awaited after each complete() call
+    with a dict containing label, model, messages, response, token counts, and latency."""
+    queue = LLMQueue(max_concurrent=2)
+    trace_calls: list[dict] = []
+
+    async def capture_trace(event: dict) -> None:
+        trace_calls.append(event)
+
+    client = LLMClient(
+        queue, model="openai/test", api_base="http://localhost:4000",
+        trace_fn=capture_trace,
+    )
+    mock_resp = _make_mock_response("synthesis result", input_tokens=500, output_tokens=120)
+    messages = [
+        {"role": "system", "content": "You are a wiki agent."},
+        {"role": "user", "content": "Summarise this paper."},
+    ]
+
+    with patch("llm_wiki.traverse.llm_client.litellm") as mock_litellm:
+        mock_litellm.acompletion = AsyncMock(return_value=mock_resp)
+        result = await client.complete(
+            messages, temperature=0.9, label="ingest:synthesize:boltz-2",
+        )
+
+    assert result.content == "synthesis result"
+    assert len(trace_calls) == 1
+    ev = trace_calls[0]
+    assert ev["label"] == "ingest:synthesize:boltz-2"
+    assert ev["model"] == "openai/test"
+    assert ev["temperature"] == 0.9
+    assert ev["messages"] is messages
+    assert ev["response"] == "synthesis result"
+    assert ev["input_tokens"] == 500
+    assert ev["output_tokens"] == 120
+    assert isinstance(ev["latency_s"], float)
+    assert ev["latency_s"] >= 0
+
+
+@pytest.mark.asyncio
+async def test_trace_fn_not_called_when_none():
+    """When trace_fn is not provided, complete() behaves identically to before."""
+    queue = LLMQueue(max_concurrent=2)
+    client = LLMClient(queue, model="test-model")  # no trace_fn
+    mock_resp = _make_mock_response("ok", input_tokens=10, output_tokens=5)
+
+    with patch("llm_wiki.traverse.llm_client.litellm") as mock_litellm:
+        mock_litellm.acompletion = AsyncMock(return_value=mock_resp)
+        result = await client.complete([{"role": "user", "content": "hi"}])
+
+    assert result.content == "ok"
+
+
+@pytest.mark.asyncio
+async def test_trace_fn_called_for_every_call():
+    """Each sequential complete() call fires trace_fn once."""
+    queue = LLMQueue(max_concurrent=2)
+    trace_calls: list[str] = []
+
+    async def capture(event: dict) -> None:
+        trace_calls.append(event["label"])
+
+    client = LLMClient(queue, model="test-model", trace_fn=capture)
+    mock_resp = _make_mock_response("ok", input_tokens=10, output_tokens=5)
+
+    with patch("llm_wiki.traverse.llm_client.litellm") as mock_litellm:
+        mock_litellm.acompletion = AsyncMock(return_value=mock_resp)
+        await client.complete([{"role": "user", "content": "a"}], label="call-1")
+        await client.complete([{"role": "user", "content": "b"}], label="call-2")
+        await client.complete([{"role": "user", "content": "c"}], label="call-3")
+
+    assert trace_calls == ["call-1", "call-2", "call-3"]
+
+
+@pytest.mark.asyncio
+async def test_trace_fn_error_does_not_abort_completion():
+    """A buggy trace_fn must not propagate — complete() still returns the response."""
+    queue = LLMQueue(max_concurrent=2)
+
+    async def bad_trace(event: dict) -> None:
+        raise RuntimeError("trace writer is broken")
+
+    client = LLMClient(queue, model="test-model", trace_fn=bad_trace)
+    mock_resp = _make_mock_response("still works", input_tokens=10, output_tokens=5)
+
+    with patch("llm_wiki.traverse.llm_client.litellm") as mock_litellm:
+        mock_litellm.acompletion = AsyncMock(return_value=mock_resp)
+        result = await client.complete([{"role": "user", "content": "hi"}])
+
+    assert result.content == "still works"
