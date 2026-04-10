@@ -22,9 +22,9 @@ def _skills_source() -> Path:
     try:
         import importlib.resources
         ref = importlib.resources.files("llm_wiki") / "skills" / "llm-wiki"
-        with importlib.resources.as_file(ref) as p:
-            if Path(p).is_dir():
-                return Path(p)
+        p = Path(str(ref))
+        if p.is_dir():
+            return p
     except Exception:
         pass
     raise RuntimeError(

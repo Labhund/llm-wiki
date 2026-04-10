@@ -32,4 +32,5 @@ pythonpath = ["src", "tests"]
 
 [tool.hatch.build.targets.wheel]
 packages = ["src/llm_wiki"]
+# Only .md files — update glob if skills gain non-.md assets
 artifacts = ["src/llm_wiki/skills/**/*.md"]
