@@ -102,6 +102,15 @@ def _get_client(vault_path: Path, auto_start: bool = True) -> DaemonClient:
             f"Daemon not running for {vault_path}. Run: llm-wiki serve {vault_path}"
         )
 
+    has_config = (vault_path / "schema" / "config.yaml").exists()
+    has_vault_dir = (vault_path / "raw").is_dir() or (vault_path / "wiki").is_dir()
+    if not has_config and not has_vault_dir:
+        raise click.ClickException(
+            f"'{vault_path}' is not an initialised vault. "
+            "Run 'llm-wiki init <vault_path>' to initialise it, "
+            "or pass --vault to point at an existing one."
+        )
+
     click.echo("Starting daemon...", err=True)
 
     # Capture stderr so startup errors are visible immediately instead of after 30s.
@@ -211,6 +220,13 @@ def configure(vault_path: Path) -> None:
 @click.argument("vault_path", type=click.Path(exists=True, path_type=Path))
 def init(vault_path: Path) -> None:
     """Scan and index a vault directory (no daemon needed)."""
+    has_config = (vault_path / "schema" / "config.yaml").exists()
+    has_vault_dir = (vault_path / "raw").is_dir() or (vault_path / "wiki").is_dir()
+    if not has_config and not has_vault_dir:
+        (vault_path / "wiki").mkdir(exist_ok=True)
+        (vault_path / "raw").mkdir(exist_ok=True)
+        (vault_path / "inbox").mkdir(exist_ok=True)
+        click.echo(f"Initialised new vault at {vault_path}.")
     vault = Vault.scan(vault_path)
     click.echo(
         f"Indexed {vault.page_count} pages "
