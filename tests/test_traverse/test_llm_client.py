@@ -229,7 +229,7 @@ async def test_complete_passes_label_to_queue(monkeypatch):
     client = LLMClient(queue, model="test-model")
 
     # Patch litellm to avoid real network call
-    mock_resp = _make_mock_response("response", 10)
+    mock_resp = _make_mock_response("response", input_tokens=10, output_tokens=0)
     with patch("llm_wiki.traverse.llm_client.litellm") as mock_litellm:
         mock_litellm.acompletion = AsyncMock(return_value=mock_resp)
 
