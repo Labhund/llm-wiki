@@ -31,6 +31,9 @@ local/
 # llm-wiki state (index, manifest cache)
 .llm-wiki/
 
+# Auditor issue queue (runtime state, not source)
+wiki/.issues/
+
 # Daemon-managed compiled pages directory (created when vault root is repo root)
 wiki/wiki/
 
