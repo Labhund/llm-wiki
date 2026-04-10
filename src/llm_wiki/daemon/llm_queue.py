@@ -4,6 +4,7 @@ import asyncio
 import collections
 import logging
 import time
+from dataclasses import dataclass
 from typing import Any, Awaitable, Callable
 
 logger = logging.getLogger(__name__)
@@ -23,6 +24,18 @@ class LimitExceededError(Exception):
     """Raised when a token-spend limit would be breached."""
 
 
+@dataclass
+class ActiveJob:
+    id: int
+    label: str        # e.g. "adversary:verify:protein-dj"
+    priority: str     # "query" | "ingest" | "maintenance"
+    started_at: float # time.monotonic()
+
+    @property
+    def elapsed_s(self) -> float:
+        return time.monotonic() - self.started_at
+
+
 class LLMQueue:
     """Concurrency-limited queue for LLM requests.
 
@@ -34,6 +47,9 @@ class LLMQueue:
     approximating relative API pricing.  Input and output totals are
     tracked separately so callers can compute exact costs later once
     they know the per-token rates for their model.
+
+    Tracks labeled active jobs and pending count for observability via
+    the process-list route.
 
     Enforcement:
     - ``maintenance`` priority calls are rejected with ``LimitExceededError``
@@ -50,7 +66,11 @@ class LLMQueue:
         daily_limit: int | None = None,
     ) -> None:
         self._semaphore = asyncio.Semaphore(max_concurrent)
+        self._max_concurrent = max_concurrent
         self._active: int = 0
+        self._pending: int = 0
+        self._active_jobs: dict[int, ActiveJob] = {}
+        self._next_id: int = 0
 
         # Separate totals for cost calculation.
         self._input_tokens: int = 0
@@ -71,6 +91,7 @@ class LLMQueue:
         self,
         fn: Callable[..., Awaitable[Any]],
         priority: str = "maintenance",
+        label: str = "unknown",
         **kwargs: Any,
     ) -> Any:
         """Submit an async callable, waiting for a concurrency slot.
@@ -81,12 +102,29 @@ class LLMQueue:
         (a warning is logged).
         """
         self._check_limits(priority)
-        async with self._semaphore:
-            self._active += 1
-            try:
-                return await fn(**kwargs)
-            finally:
-                self._active -= 1
+        self._pending += 1
+        acquired = False
+        try:
+            async with self._semaphore:
+                acquired = True
+                self._pending -= 1
+                job_id = self._next_id
+                self._next_id += 1
+                self._active_jobs[job_id] = ActiveJob(
+                    id=job_id,
+                    label=label,
+                    priority=priority,
+                    started_at=time.monotonic(),
+                )
+                self._active += 1
+                try:
+                    return await fn(**kwargs)
+                finally:
+                    self._active -= 1
+                    self._active_jobs.pop(job_id, None)
+        finally:
+            if not acquired:
+                self._pending -= 1
 
     def record_tokens(self, input_tokens: int, output_tokens: int) -> None:
         """Record tokens consumed after a completed LLM call.
@@ -134,6 +172,21 @@ class LLMQueue:
     @property
     def active_count(self) -> int:
         return self._active
+
+    @property
+    def active_jobs(self) -> list[ActiveJob]:
+        """Snapshot of currently running jobs."""
+        return list(self._active_jobs.values())
+
+    @property
+    def pending_count(self) -> int:
+        """Number of submit() callers waiting for a semaphore slot."""
+        return self._pending
+
+    @property
+    def slots_total(self) -> int:
+        """Maximum concurrent jobs (semaphore ceiling)."""
+        return self._max_concurrent
 
     # ------------------------------------------------------------------
     # Internal helpers
