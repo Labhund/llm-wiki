@@ -161,3 +161,63 @@ async def test_dispatch_synthesis_no_citations_skips_write(server, wiki_dir):
     with patch.object(type(server), "rescan", new_callable=AsyncMock):
         await server._dispatch_synthesis_action("q?", result, resp)
     assert not list((wiki_dir / "wiki").glob("*.md"))
+
+
+@pytest.mark.asyncio
+async def test_dispatch_synthesis_action_update(server, wiki_dir):
+    """update action overwrites existing synthesis page via dispatch."""
+    existing = wiki_dir / "wiki" / "foo.md"
+    existing.write_text(
+        '---\ntitle: "Foo"\ntype: synthesis\nquery: "foo"\n'
+        "created_by: query\ncreated_at: 2026-01-01T00:00:00Z\n"
+        "updated_at: 2026-01-01T00:00:00Z\nsources: []\n---\n\n"
+        "%% section: answer %%\n\nOld content.\n",
+        encoding="utf-8",
+    )
+    from llm_wiki.page import Page
+    page = Page.parse(existing)
+    server._vault.read_page.return_value = page
+
+    result = _make_result(
+        action={"action": "update", "page": "foo", "title": "Foo", "sources": ["wiki/foo.md"]},
+        answer="New extended content [[foo]].",
+        citations=["foo"],
+    )
+    resp = {"answer": result.answer}
+    with patch.object(type(server), "rescan", new_callable=AsyncMock):
+        await server._dispatch_synthesis_action("how does foo work?", result, resp)
+    content = existing.read_text()
+    assert "New extended content" in content
+    assert "Old content" not in content
+    assert "created_at: 2026-01-01" in content  # preserved
+
+
+@pytest.mark.asyncio
+async def test_dispatch_synthesis_action_update_skips_when_no_citations(server, wiki_dir):
+    """update action with no citations → no write (parallel to create guard)."""
+    result = _make_result(
+        action={"action": "update", "page": "foo", "title": "Foo", "sources": []},
+        answer="No citations.",
+        citations=[],
+    )
+    resp = {"answer": result.answer}
+    await server._dispatch_synthesis_action("q?", result, resp)
+    assert not list((wiki_dir / "wiki").glob("*.md"))
+
+
+@pytest.mark.asyncio
+async def test_dispatch_synthesis_action_update_fallback_creates(server, wiki_dir):
+    """update action falls back to create if target page was deleted."""
+    # read_page returns None (page was deleted since search)
+    server._vault.read_page.return_value = None
+
+    result = _make_result(
+        action={"action": "update", "page": "foo", "title": "Foo", "sources": ["wiki/foo.md"]},
+        answer="Content [[foo]].",
+        citations=["foo"],
+    )
+    resp = {"answer": result.answer}
+    with patch.object(type(server), "rescan", new_callable=AsyncMock):
+        await server._dispatch_synthesis_action("q?", result, resp)
+    pages = list((wiki_dir / "wiki").glob("*.md"))
+    assert len(pages) == 1  # fallback created the page

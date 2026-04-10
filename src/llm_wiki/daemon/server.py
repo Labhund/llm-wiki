@@ -1498,7 +1498,7 @@ class DaemonServer:
 
         elif act == "update":
             slug = action.get("page", "")
-            if not slug:
+            if not slug or not result.citations:
                 return
             page = self._vault.read_page(slug)
             created_at = page.frontmatter.get("created_at") if page else None
