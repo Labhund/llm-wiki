@@ -71,6 +71,24 @@ def _relative_time(timestamp_str: str) -> tuple[str, str]:
         return str(timestamp_str), "—"
 
 
+def _worker_display_action(worker_name: str, jobs: list[dict]) -> str:
+    """Extract display string for a running worker from active jobs.
+
+    Finds the first job whose label starts with the worker name, strips the
+    source prefix, joins remaining parts with spaces, truncates at 30 chars.
+    Returns empty string if no matching job.
+    """
+    for job in jobs:
+        label = job.get("label", "")
+        parts = label.split(":", 2)
+        if parts and parts[0] == worker_name:
+            action_detail = " ".join(parts[1:]) if len(parts) > 1 else label
+            if len(action_detail) > 30:
+                action_detail = action_detail[:29] + "…"
+            return action_detail
+    return ""
+
+
 def _get_client(vault_path: Path, auto_start: bool = True) -> DaemonClient:
     """Get a daemon client, auto-starting the daemon if needed."""
     sock = socket_path_for(vault_path)
@@ -259,6 +277,72 @@ def status(vault_path: Path) -> None:
     for cluster_text in resp["clusters"]:
         click.echo(f"  {cluster_text}")
     click.echo(f"Index: {resp['index_path']}")
+
+
+@cli.command()
+@click.option(
+    "--vault", "vault_path", type=click.Path(exists=True, path_type=Path),
+    default=_default_vault_path, help="Path to vault",
+)
+def ps(vault_path: Path) -> None:
+    """Show active LLM processes and background worker state."""
+    try:
+        client = _get_client(vault_path, auto_start=False)
+    except click.ClickException:
+        click.echo("Daemon not running.", err=True)
+        raise SystemExit(1)
+
+    resp = client.request({"type": "process-list"})
+    if resp["status"] != "ok":
+        raise click.ClickException(resp.get("message", "Failed"))
+
+    jobs: list[dict] = resp.get("jobs", [])
+    pending: int = resp.get("pending", 0)
+    tokens_used: int = resp.get("tokens_used", 0)
+    slots_total: int = resp.get("slots_total", 0)
+    workers: list[dict] = resp.get("workers", [])
+    active = len(jobs)
+
+    # Header
+    click.echo(f"PROCESSES  {active} active · {pending} pending · {tokens_used:,} tokens used")
+    click.echo()
+
+    # Workers section
+    if workers:
+        click.echo("WORKERS")
+        for w in workers:
+            name: str = w["name"]
+            state: str = w.get("state", "idle")
+            last_run: str | None = w.get("last_run")
+            elapsed_s: float | None = w.get("running_elapsed_s")
+
+            if state == "running":
+                action = _worker_display_action(name, jobs)
+                elapsed_str = f"{int(elapsed_s)}s" if elapsed_s is not None else "—"
+                click.echo(f"  {name:<14} running   {action:<32} {elapsed_str}")
+            else:
+                last_str = (
+                    f"last run {_relative_time(last_run)[0]}" if last_run else "never run"
+                )
+                failures: int = w.get("consecutive_failures", 0)
+                fail_str = f" [{failures} failures]" if failures > 0 else ""
+                click.echo(f"  {name:<14} idle      {last_str}{fail_str}")
+        click.echo()
+
+    # LLM Queue section
+    click.echo(
+        f"LLM QUEUE  ({active}/{slots_total} slots, {pending} pending)"
+        if active or pending
+        else "LLM QUEUE"
+    )
+    if jobs:
+        for job in jobs:
+            label: str = job.get("label", "unknown")
+            priority: str = job.get("priority", "")
+            elapsed: int = int(job.get("elapsed_s", 0))
+            click.echo(f"  [{job['id']}]  {label:<42} {priority:<14} {elapsed}s")
+    else:
+        click.echo("  No active LLM calls.")
 
 
 @cli.command()
