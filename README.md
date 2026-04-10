@@ -60,7 +60,15 @@ pip install -e .
 
 > Not yet on PyPI — install from source. Requires Python 3.11+.
 
-LLM inference is via [litellm](https://github.com/BerriAI/litellm) — bring your own model (local or API). Configure backends in `schema/config.yaml` in your vault; see [Agent Setup](#agent-setup) below.
+LLM inference is via [litellm](https://github.com/BerriAI/litellm) — bring your own model (local or API).
+
+Run the interactive setup wizard to configure backends, create a vault, and register the MCP server with your agent framework:
+
+```bash
+llm-wiki configure
+```
+
+The wizard walks you through model selection (smart model for depth work, fast model for background tasks), vault setup, and agent framework integration (Hermes or Claude Code MCP registration, one-shot).
 
 ---
 
@@ -99,9 +107,9 @@ State lives in `~/.llm-wiki/` — your vault directory stays clean. The daemon w
 
 ## MCP / Agent Integration
 
-Register the MCP server in your agent framework after install:
+The quickest path is `llm-wiki configure` — it handles MCP registration for Hermes and Claude Code automatically. For manual setup:
 
-**Claude Code** — add to `.claude/settings.json` or `.mcp.json`:
+**Claude Code** — add to `~/.claude/mcp.json` (or `.claude/mcp.json` in cwd for project-local):
 
 ```json
 {
@@ -152,13 +160,13 @@ Full setup walkthrough — vault creation, backend config, MCP registration, and
 
 ## Agent Skills
 
-`skills/llm-wiki/` contains skill files that prime agents to use llm-wiki correctly by default — research traversal modes, citation discipline, conversational ingest, and maintenance hygiene.
+Skills that prime agents to use llm-wiki correctly by default — research traversal modes, citation discipline, conversational ingest, and maintenance hygiene. Skills are bundled with the pip package; `llm-wiki configure` installs them to your Hermes home automatically.
 
-**Attended** (user present): load `skills/llm-wiki/`
+**Attended** (user present): load `skills/llm-wiki/` (or let the wizard install them)
 
 **Autonomous** (cron, swarm, unattended): load `skills/llm-wiki/autonomous/<subskill>` directly — different scope, conservative defaults, structured exit reports instead of check-ins.
 
-Compatible with Claude Code, Hermes, and any agent framework that loads skill files by path.
+Compatible with Claude Code (via MCP tools) and Hermes (via skill files + MCP). Claude Code uses the MCP tool surface directly; no separate skill files needed.
 
 ---
 
@@ -238,6 +246,7 @@ See [PHILOSOPHY.md](PHILOSOPHY.md) for the full document.
 - [x] **Phase 6a: Visibility & Severity** — Severity-aware issues and talk entries, enriched read/search/lint
 - [x] **Phase 6b: Write Surface + Sessions** — V4A patches, session journaling, serial commit pipeline, recovery
 - [x] **Phase 6c: MCP Server** — 17 MCP tools over stdio, stable per-session connection IDs
+- [x] **Configure Wizard** — interactive `llm-wiki configure`: smart/fast model tiers, vault setup, Hermes skill install + MCP registration, Claude Code mcp.json integration
 
 ---
 
