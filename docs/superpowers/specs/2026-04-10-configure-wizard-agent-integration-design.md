@@ -48,6 +48,7 @@ Which agent framework are you using?
 
 → Hermes
   Claude Code
+  Let my agent figure it out
   Skip (I'll register manually)
 ```
 
@@ -57,12 +58,12 @@ Which agent framework are you using?
 - Check `HERMES_HOME` env var, then `~/.hermes`. Confirm path with user.
 
 **Vault setup:**
-- Prompt for vault path (default: `LLM_WIKI_VAULT` env var, then `~/wiki`).
+- Prompt for vault path. Default resolution order: `LLM_WIKI_VAULT` env var (shown as `[from $LLM_WIKI_VAULT]` so the user knows the source), then `~/wiki`. User can always override.
 - If vault dirs missing: create `raw/`, `wiki/`, `schema/`, `inbox/`.
 - Run `Vault.scan(vault_path)` (same as `llm-wiki init`) automatically — no separate CLI call needed.
 
 **Skill installation:**
-- Source: `skills/llm-wiki/` directory from the installed package (resolved via `importlib.resources` or `__file__`-relative path from `src/llm_wiki/`).
+- Source: `src/llm_wiki/skills/llm-wiki/` — skills are moved inside the package and declared as `package-data` in `pyproject.toml` so they ship with pip installs. Resolved at runtime via `importlib.resources.files('llm_wiki') / 'skills' / 'llm-wiki'`. If resolution fails, error clearly: "llm-wiki package not properly installed — run `pip install -e .`".
 - Mapping: skill `name` field uses slash notation (`llm-wiki/research`) → maps to `<hermes_home>/skills/llm-wiki/research/SKILL.md`. Top-level skill (`name: llm-wiki`) → `<hermes_home>/skills/llm-wiki/SKILL.md`.
 - Overwrite existing files (idempotent).
 - Compute MD5 of each written file; append/update entries in `<hermes_home>/skills/.bundled_manifest` (format: `skillname:hash` one per line).
@@ -106,7 +107,7 @@ Which agent framework are you using?
 **Vault setup:** same as Hermes (prompt, create dirs, run `Vault.scan`).
 
 **MCP registration:**
-- Target file: `.claude/mcp.json` in the current working directory (project-local), OR `~/.claude/mcp.json` (global) — ask user which.
+- Default to global config: `~/.claude/mcp.json`. Offer single override prompt: "Use global config? [Y/n]" — if no, use `.claude/mcp.json` in cwd.
 - Merge entry:
   ```json
   {
@@ -129,6 +130,27 @@ Which agent framework are you using?
 
 **Final message:**
 > "Reload Claude Code (or restart your IDE) to connect the MCP server."
+
+---
+
+#### If "Let my agent figure it out"
+
+Print a single honest pointer and stop — no wizard steps, no file writes:
+
+```
+  Tell your agent:
+
+    "Set up llm-wiki for me."
+
+  It will load the llm-wiki-setup skill and walk you through vault creation,
+  daemon configuration, MCP registration, and skill installation interactively.
+
+  The skill covers: vault structure, config.yaml, systemd service, MCP registration,
+  and Hermes skill installation. Your agent will ask for explicit consent before
+  installing any persistent background process.
+```
+
+No vault is created, no files are written. The agent-guided path is the right choice when the user wants interactive hand-holding or is on a non-standard setup.
 
 ---
 
@@ -157,7 +179,8 @@ After agent framework section, summary shows all configured items:
 | File | Change |
 |------|--------|
 | `src/llm_wiki/cli/configure.py` | Add model tier framing text; fix "other" hint; add `_setup_agent_framework()` section; update summary |
-| `skills/llm-wiki/` | No changes — existing skill files are the install source |
+| `src/llm_wiki/skills/llm-wiki/` | Move from `skills/llm-wiki/` (repo root) into package so `importlib.resources` can find it |
+| `pyproject.toml` | Add `[tool.hatch.build.targets.wheel] packages` or `include` entry for `src/llm_wiki/skills/` |
 
 No new dependencies. `importlib.resources` and `yaml` are already present. Vault init reuses `Vault.scan()`.
 
