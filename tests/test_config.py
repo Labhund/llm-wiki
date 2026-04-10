@@ -3,7 +3,7 @@ from pathlib import Path
 import pytest
 import yaml
 
-from llm_wiki.config import WikiConfig, IngestConfig
+from llm_wiki.config import WikiConfig, IngestConfig, MaintenanceConfig
 
 
 def test_default_config():
@@ -184,3 +184,18 @@ def test_ingest_config_loads_new_fields_from_yaml(tmp_path):
     assert c.ingest.grounding_auto_merge == 0.8
     assert c.ingest.auto_copy_to_raw is False
     assert c.ingest.grounding_flag == 0.50  # default preserved
+
+
+def test_adversary_force_recheck_days_default():
+    config = MaintenanceConfig()
+    assert config.adversary_force_recheck_days == 30
+
+
+def test_adversary_force_recheck_days_configurable():
+    config = MaintenanceConfig(adversary_force_recheck_days=7)
+    assert config.adversary_force_recheck_days == 7
+
+
+def test_wiki_config_inherits_force_recheck_default():
+    config = WikiConfig()
+    assert config.maintenance.adversary_force_recheck_days == 30

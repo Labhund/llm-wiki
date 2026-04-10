@@ -142,6 +142,8 @@ class MaintenanceConfig:
     # Synthesis authority boost — multiplier applied to synthesis pages in
     # compute_authority(). >1.0 boosts, <1.0 penalises. 1.0 = no effect.
     synthesis_authority_boost: float = 1.5
+    # Adversary idle guard — bypass mtime check after this many days without a real run
+    adversary_force_recheck_days: int = 30
 
 
 @dataclass
