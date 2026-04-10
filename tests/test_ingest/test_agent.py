@@ -303,3 +303,68 @@ async def test_dry_run_returns_previews_without_sections(tmp_path: Path):
     assert pca.passages == ["PCA content."]
     assert pca.sections == []   # no section generation in dry-run
     assert km.sections == []
+
+
+@pytest.mark.asyncio
+async def test_on_progress_callback_receives_correct_frames(tmp_path: Path):
+    """on_progress receives extracting → concepts_found → concept_done frames in order."""
+    (tmp_path / "raw").mkdir()
+    (tmp_path / "wiki").mkdir()
+    source = tmp_path / "raw" / "paper.md"
+    source.write_text("# Paper\n\nPCA reduces dimensions. k-means clusters data.")
+
+    concept_response = _concept_json([
+        {"name": "pca", "title": "PCA", "passages": ["PCA reduces dimensions."]},
+        {"name": "k-means", "title": "K-Means", "passages": ["k-means clusters data."]},
+    ])
+    pca_sections = _sections_json([
+        {"name": "overview", "heading": "Overview", "content": "PCA [[raw/paper.md]]."},
+    ])
+    km_sections = _sections_json([
+        {"name": "overview", "heading": "Overview", "content": "k-means [[raw/paper.md]]."},
+    ])
+
+    mock_llm = MockLLMClient([concept_response, pca_sections, km_sections])
+    agent = IngestAgent(mock_llm, WikiConfig())
+
+    frames: list[dict] = []
+
+    async def capture(frame: dict) -> None:
+        frames.append(frame)
+
+    await agent.ingest(source, tmp_path, on_progress=capture)
+
+    stages = [f["stage"] for f in frames]
+    assert stages[0] == "extracting"
+    assert stages[1] == "concepts_found"
+    assert frames[1]["count"] == 2
+    assert stages[2] == "concept_done"
+    assert frames[2]["name"] == "pca"
+    assert frames[2]["action"] in ("created", "updated")
+    assert frames[2]["num"] == 1
+    assert frames[2]["total"] == 2
+    assert stages[3] == "concept_done"
+    assert frames[3]["name"] == "k-means"
+    assert frames[3]["num"] == 2
+
+
+@pytest.mark.asyncio
+async def test_on_progress_none_is_safe(tmp_path: Path):
+    """on_progress=None (default) works — no errors, result is correct."""
+    (tmp_path / "raw").mkdir()
+    (tmp_path / "wiki").mkdir()
+    source = tmp_path / "raw" / "paper.md"
+    source.write_text("# Paper\n\nPCA reduces dimensions.")
+
+    concept_response = _concept_json([
+        {"name": "pca", "title": "PCA", "passages": ["PCA reduces dimensions."]},
+    ])
+    pca_sections = _sections_json([
+        {"name": "overview", "heading": "Overview", "content": "PCA [[raw/paper.md]]."},
+    ])
+    mock_llm = MockLLMClient([concept_response, pca_sections])
+    agent = IngestAgent(mock_llm, WikiConfig())
+
+    result = await agent.ingest(source, tmp_path)  # no on_progress kwarg
+
+    assert result.pages_created == ["pca"]

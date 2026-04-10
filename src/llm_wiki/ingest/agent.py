@@ -3,7 +3,7 @@ from __future__ import annotations
 import logging
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Awaitable, Callable
 
 from llm_wiki.config import WikiConfig
 from llm_wiki.ingest.extractor import extract_text
@@ -82,6 +82,7 @@ class IngestAgent:
         write_service: "PageWriteService | None" = None,
         dry_run: bool = False,
         source_type: str = "paper",
+        on_progress: "Callable[[dict], Awaitable[None]] | None" = None,
     ) -> IngestResult:
         """Ingest one source file into the wiki.
 
@@ -108,6 +109,9 @@ class IngestAgent:
             source_ref = str(source_path.relative_to(vault_root))
         except ValueError:
             source_ref = source_path.name
+
+        if on_progress:
+            await on_progress({"stage": "extracting"})
 
         extraction = await extract_text(
             source_path,
@@ -137,6 +141,9 @@ class IngestAgent:
         )
         response = await self._llm.complete(messages, temperature=0.3, priority="ingest")
         concepts = parse_concept_extraction(response.content)
+
+        if on_progress:
+            await on_progress({"stage": "concepts_found", "count": len(concepts)})
 
         if not concepts:
             logger.info("No concepts identified in %s", source_path)
@@ -174,6 +181,8 @@ class IngestAgent:
                 )
                 continue
 
+            created_before = len(result.pages_created)
+
             if write_service is not None:
                 await self._write_via_service(
                     write_service, wiki_dir, concept, sections, source_ref,
@@ -189,6 +198,17 @@ class IngestAgent:
                     result.pages_updated.append(concept.name)
                 else:
                     result.pages_created.append(concept.name)
+
+            if on_progress:
+                action = "created" if len(result.pages_created) > created_before else "updated"
+                await on_progress({
+                    "stage": "concept_done",
+                    "name": concept.name,
+                    "title": concept.title,
+                    "action": action,
+                    "num": i + 1,
+                    "total": len(concepts),
+                })
 
         # Resonance matching post-step (gated by config)
         # pages_created only — resonance seeds new pages, not updates to existing ones
