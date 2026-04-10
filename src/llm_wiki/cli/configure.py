@@ -816,6 +816,7 @@ def run_wizard(vault_path: Path) -> None:
 
     # Framework display label
     framework_label = {
+        None: "Not configured",
         "hermes": f"Hermes  ({framework_result.get('skills_installed', 0)} skills installed)",
         "claude_code": "Claude Code  (MCP registered)",
         "agent_guided": "Agent-guided  (see instructions above)",
