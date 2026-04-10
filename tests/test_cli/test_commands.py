@@ -273,9 +273,10 @@ def test_ingest_dry_run_output(daemon_for_cli, monkeypatch, tmp_path):
     runner = CliRunner()
     result = runner.invoke(cli, ["ingest", str(source), "--dry-run", "--vault", str(vault_path)])
     assert result.exit_code == 0, result.output
+    assert "DRY RUN — test.md (1,000 chars)" in result.output
     assert "[NEW]" in result.output
     assert "[UPD]" in result.output
-    assert "2 concepts total" in result.output
+    assert "  2 concepts total" in result.output
     assert "section" not in result.output
     assert "content_chars" not in result.output
 
@@ -318,3 +319,35 @@ def test_ingest_streaming_output(daemon_for_cli, monkeypatch, tmp_path):
     assert "[DONE] boltz-diffusion (created)" in result.output
     assert "[DONE] structure-prediction (updated)" in result.output
     assert "[SUMMARY] 1 created, 1 updated" in result.output
+
+
+def test_ingest_streaming_error_frame_exits_nonzero(daemon_for_cli, monkeypatch, tmp_path):
+    """Error frame mid-stream causes non-zero exit with concepts_written in message."""
+    from llm_wiki.daemon.client import DaemonClient
+
+    def fake_stream(self, msg, on_frame):
+        on_frame({"type": "progress", "stage": "extracting"})
+        on_frame({"type": "progress", "stage": "concepts_found", "count": 3})
+        on_frame({
+            "type": "progress", "stage": "concept_done",
+            "name": "topic-a", "title": "Topic A", "action": "created",
+            "num": 1, "total": 3,
+        })
+        on_frame({
+            "type": "error", "status": "error",
+            "message": "LLM timeout",
+            "concepts_written": 1,
+        })
+
+    monkeypatch.setattr(DaemonClient, "stream_ingest_sync", fake_stream)
+
+    vault_path = daemon_for_cli
+    source = vault_path / "paper.md"
+    source.write_text("# Test paper")
+
+    runner = CliRunner()
+    result = runner.invoke(cli, ["ingest", str(source), "--vault", str(vault_path)])
+
+    assert result.exit_code != 0
+    assert "LLM timeout" in result.output
+    assert "1 concept(s) written before error" in result.output

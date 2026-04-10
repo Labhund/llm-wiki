@@ -372,14 +372,15 @@ def ingest(source_path: Path, vault_path: Path, dry_run: bool) -> None:
         resp = client.request(msg)
         if resp["status"] != "ok":
             raise click.ClickException(resp.get("message", "Ingest failed"))
-        click.echo("DRY RUN — no pages written")
-        click.echo(f"Source: {resp['source_path']} ({resp['source_chars']} chars)")
+        source_name = Path(resp["source_path"]).name
+        source_chars = f"{resp['source_chars']:,}"
+        click.echo(f"DRY RUN — {source_name} ({source_chars} chars)")
         if resp.get("extraction_warning"):
             click.echo(f"  Warning: {resp['extraction_warning']}")
         for c in resp.get("concepts", []):
             action = "UPD" if c["action"] == "update" else "NEW"
             click.echo(f"  [{action}] {c['name']}  \"{c['title']}\"  ({c['passage_count']} passages)")
-        click.echo(f"{resp['concepts_found']} concepts total")
+        click.echo(f"  {resp['concepts_found']} concepts total")
         return
 
     # Live streaming ingest
