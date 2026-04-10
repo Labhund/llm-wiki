@@ -95,3 +95,32 @@ def test_compose_synthesize_messages_handles_empty_memory():
     mem.remaining_questions = []  # Force fully empty state
     messages = compose_synthesize_messages("q", mem, "sys")
     assert "No research notes available." in messages[1]["content"]
+
+
+def test_compose_synthesize_messages_includes_synthesis_candidates():
+    """When synthesis_candidates provided, messages include existing-page block."""
+    memory = WorkingMemory.initial("how does boltz-2 work?", 2000)
+    candidates = [("boltz-2-structure", "how does boltz-2 work?", "Boltz-2 uses diffusion.")]
+    msgs = compose_synthesize_messages(
+        "how does boltz-2 work?",
+        memory,
+        DEFAULT_SYNTHESIZE_PROMPT,
+        synthesis_candidates=candidates
+    )
+    user_msg = msgs[-1]["content"]
+    assert "boltz-2-structure" in user_msg
+    assert "how does boltz-2 work?" in user_msg
+    assert "Boltz-2 uses diffusion." in user_msg
+    # Verify the system prompt includes action schema instructions
+    sys_msg = msgs[0]["content"]
+    assert "accept" in sys_msg
+    assert "update" in sys_msg
+    assert "create" in sys_msg
+
+
+def test_compose_synthesize_messages_no_candidates_unchanged():
+    """Without synthesis_candidates the message structure is unchanged."""
+    memory = WorkingMemory.initial("q", 1000)
+    msgs_without = compose_synthesize_messages("q", memory, "Sys.")
+    msgs_with_empty = compose_synthesize_messages("q", memory, "Sys.", synthesis_candidates=[])
+    assert msgs_without == msgs_with_empty
