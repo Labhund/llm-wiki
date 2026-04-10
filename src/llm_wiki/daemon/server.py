@@ -881,9 +881,18 @@ class DaemonServer:
             cluster_dir = wiki_dir / target_cluster if target_cluster else wiki_dir
             cluster_dir.mkdir(parents=True, exist_ok=True)
             new_path = cluster_dir / f"{target_page}.md"
-            fm = {"title": meta["target_page"], "source": f"[[{meta['source']}]]",
-                  "created_by": "ingest"}
-            fm_text = "---\n" + _yaml.dump(fm, default_flow_style=False).strip() + "\n---\n\n"
+            import datetime as _dt
+            _today = _dt.date.today().isoformat()
+            fm = {
+                "title": meta["target_page"],
+                "created": _today,
+                "updated": _today,
+                "type": "concept",
+                "status": "stub",
+                "source": f"[[{meta['source']}]]",
+                "created_by": "ingest",
+            }
+            fm_text = "---\n" + _yaml.dump(fm, default_flow_style=False, sort_keys=False).strip() + "\n---\n\n"
             new_path.write_text(fm_text + body + "\n", encoding="utf-8")
             patch_token_estimates(new_path)
         update_proposal_status(p, "merged")
@@ -1392,7 +1401,7 @@ class DaemonServer:
         }
 
     async def _handle_ingest(self, request: dict) -> dict:
-        if request.get("proposal_mode") and not request.get("dry_run"):
+        if request.get("proposal_mode"):
             return await self._handle_ingest_proposals(request)
         if "source_path" not in request:
             return {"status": "error", "message": "Missing required field: source_path"}
@@ -1510,6 +1519,7 @@ class DaemonServer:
 
         source_path = Path(request["source_path"])
         author = request.get("author", "cli")
+        dry_run = request.get("dry_run", False)
         proposals_dir = self._vault_root / "inbox" / "proposals"
 
         backend = self._config.llm.resolve("ingest")
@@ -1533,7 +1543,29 @@ class DaemonServer:
             proposals_dir=proposals_dir,
             manifest_lines=manifest_lines,
             author=author,
+            dry_run=dry_run,
         )
+
+        if dry_run:
+            concepts = [
+                {
+                    "name": cp.name,
+                    "title": cp.title,
+                    "action": "update" if cp.is_update else "create",
+                    "passage_count": len(cp.passages),
+                }
+                for cp in result.concepts_planned
+            ]
+            return {
+                "status": "ok",
+                "dry_run": True,
+                "source_path": str(source_path),
+                "source_chars": result.source_chars,
+                "concepts_found": result.concepts_found,
+                "extraction_warning": result.extraction_warning,
+                "concepts": concepts,
+                "proposal_mode": True,
+            }
 
         return {
             "status": "ok",

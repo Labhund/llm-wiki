@@ -49,23 +49,43 @@ _PAGE_CONTENT_SYSTEM = """\
 You are writing content for a wiki page about a specific concept, based on a \
 source document.
 
-## Ingest Rules (Non-Negotiable)
+## Citation Rules (Non-Negotiable)
 
-1. Every factual claim MUST end with a citation: [[{{source_ref}}]]
-2. Do NOT interpret beyond what the source states
-3. If the source says "X correlates with Y", write exactly that — never "X causes Y"
-4. Be concise and precise
+Use numbered footnotes — `[^N]` inline, defined in a References section:
+- `[^1]` = [[{source_ref}]] (the primary source document)
+- Every factual claim MUST end with `[^1]`. No exceptions.
+- Do NOT embed [[raw/...]] links in body text — only in the References section.
+
+## Wikilink Rules
+
+Named concepts, models, methods, datasets, proteins, databases, and proper nouns \
+get `[[slug]]` wikilinks:
+- Known wiki slug → use it exactly.
+- Named concept not yet in wiki (e.g. "Free Energy Perturbation", "TYK2") → invent \
+  a kebab-case slug (e.g. `[[free-energy-perturbation]]`, `[[tyk2]]`). Red links are fine.
+- Generic terms with no standalone identity → plain text, no brackets.
+
+## Content Rules
+
+- Do NOT interpret beyond what the source states.
+- "X correlates with Y", not "X causes Y".
+- Be concise. Every sentence earns its place.
 
 ## Structural Contract (Non-Negotiable)
 
-Respond with a SINGLE JSON object. No text outside the JSON.
+Respond with a SINGLE JSON object. Add "references" as the LAST section:
 
 {{
   "sections": [
     {{
       "name": "section-slug",
       "heading": "Section Heading",
-      "content": "Markdown content with [[source]] citations."
+      "content": "Markdown with [[wikilinks]] and [^1] footnote citations."
+    }},
+    {{
+      "name": "references",
+      "heading": "References",
+      "content": "[^1]: [[{source_ref}]]"
     }}
   ]
 }}"""
@@ -222,13 +242,23 @@ Respond with a SINGLE JSON object mapping concept slugs to passage lists:
 _CONTENT_SYNTHESIS_SYSTEM = """\
 You are writing wiki content for a specific concept using verbatim source passages.
 
-## Wikilink Rules (Non-Negotiable)
+## Citation Rules (Non-Negotiable)
 
-1. Reference to a concept in the EXISTING WIKI or BATCH lists below → [[slug]] inline
-2. Every factual claim → [[<<<SOURCE_REF>>>]] at end of sentence, no exceptions
-3. General term NOT in either list → plain text, no brackets
-4. NEVER invent slugs. Only use slugs from the two lists below.
-5. [[raw/...]] = factual citation. [[slug]] = conceptual link. Never conflate.
+Use numbered footnotes — `[^N]` inline, defined in a References section:
+- `[^1]` = [[<<<SOURCE_REF>>>]] (the primary source)
+- Every factual claim MUST end with `[^1]`. No exceptions.
+- Do NOT embed [[raw/...]] in body text — only in the References section.
+
+## Wikilink Rules
+
+Named concepts, models, methods, datasets, proteins, databases, and proper nouns \
+get `[[slug]]` wikilinks:
+1. Slug in EXISTING WIKI list below → use that exact slug.
+2. Slug in BATCH list below → use that exact slug.
+3. Named concept NOT in either list (e.g. "Free Energy Perturbation", "TYK2") → \
+   invent a kebab-case slug (e.g. `[[free-energy-perturbation]]`, `[[tyk2]]`). \
+   Red links are fine — they flag pages to create.
+4. Generic terms with no standalone identity → plain text, no brackets.
 
 ## Existing wiki pages (use [[slug]] for these)
 
@@ -240,14 +270,14 @@ You are writing wiki content for a specific concept using verbatim source passag
 
 ## Content Rules
 
-- Synthesize — do not transcribe passages verbatim
+- Synthesize — do not transcribe passages verbatim.
 - Be concise and precise. Every sentence earns its place.
-- Do not interpret beyond what passages state
-- "X correlates with Y" not "X causes Y"
+- Do not interpret beyond what passages state.
+- "X correlates with Y" not "X causes Y".
 
 ## Structural Contract (Non-Negotiable)
 
-Respond with a SINGLE JSON object:
+Respond with a SINGLE JSON object. Include "references" as the LAST section:
 
 {
   "summary": "One sentence (≤20 words) describing the concept.",
@@ -255,7 +285,12 @@ Respond with a SINGLE JSON object:
     {
       "name": "section-slug",
       "heading": "Section Heading",
-      "content": "Markdown with [[wikilinks]] and [[<<<SOURCE_REF>>>]] citations."
+      "content": "Markdown with [[wikilinks]] and [^1] footnote citations."
+    },
+    {
+      "name": "references",
+      "heading": "References",
+      "content": "[^1]: [[<<<SOURCE_REF>>>]]"
     }
   ]
 }"""

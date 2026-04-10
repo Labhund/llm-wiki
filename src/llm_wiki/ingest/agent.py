@@ -309,6 +309,7 @@ class IngestAgent:
         manifest_lines: list[str],
         *,
         author: str = "cli",
+        dry_run: bool = False,
     ) -> IngestResult:
         """Multi-chunk wiki-aware ingest that writes proposals instead of direct pages.
 
@@ -370,6 +371,20 @@ class IngestAgent:
 
         if not concepts:
             logger.info("No concepts identified in %s", source_path)
+            return result
+
+        # Dry-run: stop after overview — one LLM call on chunk[0], same prompt as live ingest
+        if dry_run:
+            result.dry_run = True
+            for concept in concepts:
+                page_path = wiki_dir / f"{concept.name}.md"
+                result.concepts_planned.append(ConceptPreview(
+                    name=concept.name,
+                    title=concept.title,
+                    is_update=concept.action == "update" or page_path.exists(),
+                    passages=[],
+                    sections=concept.section_names,
+                ))
             return result
 
         # Passage collection across all chunks
