@@ -2,6 +2,9 @@ from __future__ import annotations
 
 import datetime
 import logging
+import os
+import tempfile
+import time
 from dataclasses import dataclass, field
 from pathlib import Path
 from random import Random
@@ -67,11 +70,67 @@ class AdversaryAgent:
         self._overrides_path = self._state_dir / "manifest_overrides.json"
         self._wiki_dir = vault_root / config.vault.wiki_dir.rstrip("/")
 
+    def _load_last_run_ts(self) -> float | None:
+        """Return the stored Unix timestamp of the last adversary run, or None."""
+        path = self._state_dir / "adversary_last_run.txt"
+        try:
+            return float(path.read_text(encoding="utf-8").strip())
+        except (FileNotFoundError, ValueError):
+            return None
+
+    def _record_last_run_ts(self) -> None:
+        """Atomically write the current time as the last-run timestamp."""
+        path = self._state_dir / "adversary_last_run.txt"
+        self._state_dir.mkdir(parents=True, exist_ok=True)
+        fd, tmp = tempfile.mkstemp(
+            dir=self._state_dir, prefix=".adversary-ts-", suffix=".tmp"
+        )
+        try:
+            with os.fdopen(fd, "w", encoding="utf-8") as fh:
+                fh.write(str(time.time()))
+            os.replace(tmp, path)
+        except Exception:
+            try:
+                os.unlink(tmp)
+            except OSError:
+                pass
+            raise
+
+    def _vault_unchanged_since_last_run(self) -> bool:
+        """Return True if no file in wiki/ or raw/ has changed since the last run.
+
+        Always returns False on the first run (no stored timestamp).
+        Also returns False when adversary_force_recheck_days have elapsed since
+        the last run — ensuring periodic re-verification even on a static vault.
+        Skips hidden files (names starting with '.').
+        """
+        ts = self._load_last_run_ts()
+        if ts is None:
+            return False
+        force_days = self._config.maintenance.adversary_force_recheck_days
+        if (time.time() - ts) > force_days * 86400:
+            return False
+        wiki_dir = self._vault_root / self._config.vault.wiki_dir.rstrip("/")
+        raw_dir  = self._vault_root / self._config.vault.raw_dir.rstrip("/")
+        for search_dir in (wiki_dir, raw_dir):
+            if not search_dir.exists():
+                continue
+            for f in search_dir.rglob("*"):
+                if f.is_file() and not f.name.startswith(".") and f.stat().st_mtime > ts:
+                    return False
+        return True
+
     async def run(self) -> AdversaryResult:
         result = AdversaryResult()
         entries = self._vault.manifest_entries()
         if not entries:
             return result
+
+        if self._vault_unchanged_since_last_run():
+            logger.info("Adversary: vault unchanged since last run, skipping")
+            return result
+
+        raw_prefix = self._config.vault.raw_dir.rstrip("/")
 
         # 1. Extract claims from every non-synthesis page
         all_claims: list[Claim] = []
@@ -81,9 +140,10 @@ class AdversaryAgent:
                 continue
             if page.frontmatter.get("type") == "synthesis":
                 continue  # resonance agent handles synthesis pages; adversary skips them
-            all_claims.extend(extract_claims(page))
+            all_claims.extend(extract_claims(page, raw_dir=raw_prefix))
 
         if not all_claims:
+            self._record_last_run_ts()
             return result
 
         # 2. Sample
@@ -92,18 +152,18 @@ class AdversaryAgent:
 
         # Build unread sources set for adversary upweighting
         unread_sources: set[str] = set()
-        raw_dir = self._vault_root / "raw"
+        raw_dir = self._vault_root / raw_prefix
         if raw_dir.is_dir():
             from llm_wiki.ingest.source_meta import read_frontmatter
             for md_file in raw_dir.glob("*.md"):
                 fm = read_frontmatter(md_file)
                 if fm.get("reading_status") == "unread":
                     # Add both the companion path and the likely binary path
-                    unread_sources.add(f"raw/{md_file.name}")
+                    unread_sources.add(f"{raw_prefix}/{md_file.name}")
                     for ext in (".pdf", ".docx", ".png", ".jpg", ".jpeg", ".gif", ".bmp", ".tiff"):
                         binary = md_file.with_suffix(ext)
                         if binary.exists():
-                            unread_sources.add(f"raw/{binary.name}")
+                            unread_sources.add(f"{raw_prefix}/{binary.name}")
 
         sampled = sample_claims(
             all_claims, entries, n=n, rng=self._rng, now=now,
@@ -115,6 +175,7 @@ class AdversaryAgent:
         for claim in sampled:
             await self._process_claim(claim, result, now)
 
+        self._record_last_run_ts()
         return result
 
     async def _process_claim(

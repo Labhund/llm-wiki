@@ -27,6 +27,8 @@ Each document describes:
 7. [[07-attention-aware-prompt-ordering.md]] — Double prompting with query at start/end to leverage attention
 8. [[08-pre-seeding-with-vector-keyword-lookup.md]] — Hybrid search on tool init, agent chooses starting points
 9. [[09-working-agent-context-for-tool-calls.md]] — Platform/agent integration: how much conversation history to pass
+10. [[10-gap-filling-agent.md]] — Gap detection and URL ingest for missing wiki coverage
+11. [[11-semantic-claim-identity.md]] — Semantic claim identity, per-claim verification store, and embedding-based sampling diversity for the adversary
 
 ---
 

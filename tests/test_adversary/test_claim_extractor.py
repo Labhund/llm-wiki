@@ -139,3 +139,42 @@ def test_extract_claims_handles_trailing_punctuation_after_link(tmp_path: Path):
 def test_extract_claims_empty_page(tmp_path: Path):
     page = _make_page(tmp_path, "---\ntitle: Empty\n---\n\n")
     assert extract_claims(page) == []
+
+
+def test_extract_claims_custom_raw_dir(tmp_path: Path):
+    """extract_claims with a custom raw_dir matches that prefix, not 'raw/'."""
+    page = _make_page(tmp_path, (
+        "---\ntitle: Test\n---\n\n"
+        "%% section: method %%\n## Method\n\n"
+        "The result is positive [[sources/smith-2026.pdf]].\n"
+    ))
+    # With default raw_dir="raw", should find no claims (prefix mismatch)
+    assert extract_claims(page) == []
+    # With raw_dir="sources", should find the claim
+    claims = extract_claims(page, raw_dir="sources")
+    assert len(claims) == 1
+    assert claims[0].citation == "sources/smith-2026.pdf"
+
+
+def test_extract_claims_custom_raw_dir_ignores_default_prefix(tmp_path: Path):
+    """When raw_dir is customised, the default 'raw/' prefix is NOT matched."""
+    page = _make_page(tmp_path, (
+        "---\ntitle: Test\n---\n\n"
+        "%% section: method %%\n## Method\n\n"
+        "The result is positive [[raw/smith-2026.pdf]].\n"
+    ))
+    # Explicitly passing raw_dir="sources" — should NOT match [[raw/...]]
+    claims = extract_claims(page, raw_dir="sources")
+    assert claims == []
+
+
+def test_extract_claims_raw_dir_strips_trailing_slash(tmp_path: Path):
+    """raw_dir="raw/" (with trailing slash) works identically to "raw"."""
+    page = _make_page(tmp_path, (
+        "---\ntitle: Test\n---\n\n"
+        "%% section: method %%\n## Method\n\n"
+        "The algorithm converges [[raw/jones.md]].\n"
+    ))
+    claims = extract_claims(page, raw_dir="raw/")
+    assert len(claims) == 1
+    assert claims[0].citation == "raw/jones.md"
