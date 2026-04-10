@@ -51,7 +51,10 @@ def _parse_skill_name(md_path: Path) -> str | None:
         return None
     try:
         meta = yaml.safe_load(content[3:end].strip())
-        return meta.get("name") if isinstance(meta, dict) else None
+        if not isinstance(meta, dict):
+            return None
+        name = meta.get("name")
+        return name if isinstance(name, str) else None
     except yaml.YAMLError:
         return None
 
@@ -68,10 +71,11 @@ def _update_manifest(manifest_path: Path, skill_name: str, content: bytes) -> No
     entry = f"{skill_name}:{md5}"
     if manifest_path.exists():
         lines = [l for l in manifest_path.read_text().splitlines()
-                 if not l.startswith(f"{skill_name}:")]
+                 if l.strip() and not l.startswith(f"{skill_name}:")]
     else:
         lines = []
     lines.append(entry)
+    manifest_path.parent.mkdir(parents=True, exist_ok=True)
     manifest_path.write_text("\n".join(lines) + "\n")
 
 
@@ -86,7 +90,7 @@ def _patch_legacy_skill(skill_path: Path) -> bool:
     if end < 0:
         return False
     insert_at = end + 3
-    new_content = content[:insert_at] + "\n\n" + _MCP_BANNER + "\n" + content[insert_at:].lstrip("\n")
+    new_content = content[:insert_at] + "\n\n" + _MCP_BANNER + "\n" + content[insert_at:].lstrip("\n\r")
     skill_path.write_text(new_content)
     return True
 
