@@ -21,19 +21,46 @@ Users running `llm-wiki` from source or editable installs want to know when they
 
 Three-tier detection, in priority order:
 
-1. **Editable install** — `pip show -f llm-wiki` lists files; look for `Location` + `Requires-Dist` metadata. Extract the source path from the editable install marker.
+1. **Git directory walk** — Start from `__file__` (available at import time), walk up the tree looking for `.git`. First match is the repo root. Works for editable installs, source installs, and venv installs.
 
-2. **Git directory** — Check if the package's `__file__` path contains `.git` or if `pkg_resources.get_distribution('llm-wiki').locate_file('.')` has a git repo.
+2. **pip direct_url** — `pip show --format=json llm-wiki` includes `direct_url` if installed from a VCS. Extract `url` and `commit_hash`.
 
-3. **pip direct_url** — `pip show --format=json llm-wiki` includes `direct_url` if installed from a VCS. Extract `url` and `commit_hash`.
+3. **Editable install markers** — `pip show -f llm-wiki` lists files; look for `Location` + `Requires-Dist` metadata. Extract the source path from the editable install marker.
 
 If none succeed, skip update check (assume non-git install or pip install).
 
-### Upstream Comparison
+### Upstream URL Resolution
 
-- Clone/fetch upstream `https://github.com/Labhund/llm-wiki` (or use cached clone)
-- Compare HEAD commit hash to installed commit hash
-- Calculate commit distance (git merge-base + rev-list count)
+- Read `git remote get-url origin` from the detected repo. If `origin` doesn't exist, use `https://github.com/Labhund/llm-wiki` as fallback.
+- This allows forks/mirrors to work without hardcoding the upstream URL.
+
+### Network Model: Cached Check with TTL
+
+**Cache location:** `~/.cache/llm-wiki/update-check.json`
+
+**Cache schema:**
+```json
+{
+  "repo_path": "/absolute/path/to/llm-wiki",
+  "local_commit": "abc123...",
+  "upstream_commit": "def456...",
+  "commit_distance": 42,
+  "checked_at": "2026-04-10T12:00:00Z"
+}
+```
+
+**TTL:** 24 hours. If `checked_at` is older than 24h, refetch.
+
+**Cache invalidation:**
+- On `llm-wiki update` success: clear cache
+- On `llm-wiki update` failure: keep cache (user can retry later)
+- On network error: keep cache, don't write new stale data
+
+**Flow:**
+1. Load cache if exists
+2. If cache is < 24h old: use cached value, show warning if behind
+3. If cache is stale or missing: `git fetch` upstream, compare commits, write new cache, show warning if behind
+4. Silent failure: if git fetch fails, use cached value (or no warning if cache is missing)
 
 ### Warning Message
 
@@ -46,7 +73,7 @@ If ahead or equal: no warning.
 
 ### Integration Point
 
-Checker runs at the start of every CLI command (in `cli/main.py` before command dispatch). Silent failure — if check fails (no git, network error), suppress warning.
+Checker runs at the start of every CLI command (in `cli/main.py` before command dispatch). Silent failure — if check fails (no git, network error, cache missing), suppress warning.
 
 ## Component B: Update Command
 
