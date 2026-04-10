@@ -20,12 +20,15 @@
 
 - [ ] **Step 1: Write the failing test**
 
-Check whether `tests/test_config.py` exists first (`ls tests/test_config.py`). If it doesn't exist, create it; if it does, append this test to it.
+`tests/test_config.py` already exists. First, amend its existing import line (currently `from llm_wiki.config import WikiConfig, IngestConfig`) to also include `MaintenanceConfig`:
 
 ```python
-from llm_wiki.config import MaintenanceConfig, WikiConfig
+from llm_wiki.config import WikiConfig, IngestConfig, MaintenanceConfig
+```
 
+Then append these three test functions to the bottom of the file:
 
+```python
 def test_adversary_force_recheck_days_default():
     config = MaintenanceConfig()
     assert config.adversary_force_recheck_days == 30
@@ -607,10 +610,82 @@ async def test_idle_guard_runs_after_wiki_change(tmp_path: Path, _clean_state):
     assert len(stub.calls) == calls_after_first + 1
 ```
 
+Also append these three tests covering the cases where timestamp recording is critical:
+
+```python
+@pytest.mark.asyncio
+async def test_idle_guard_force_recheck_bypasses_stable_vault(tmp_path: Path, _clean_state):
+    """Guard is bypassed when force_recheck_days have elapsed, even with no file changes."""
+    import time as _time
+    vault_root, _ = _build_vault_with_one_claim(tmp_path)
+    _clean_state.append(_state_dir_for(vault_root))
+    # force_recheck_days=1; timestamp is 2 days old → guard bypassed → LLM called
+    config = WikiConfig(maintenance=MaintenanceConfig(
+        adversary_claims_per_run=5,
+        adversary_force_recheck_days=1,
+    ))
+    stub = _StubLLM(
+        '{"verdict": "validated", "confidence": 0.9, "explanation": "Matches."}'
+    )
+    vault = Vault.scan(vault_root)
+    queue = IssueQueue(vault_root / "wiki")
+    agent = AdversaryAgent(vault, vault_root, stub, queue, config)
+
+    # Manually write an old timestamp (2 days ago) so force-recheck fires
+    state_dir = _state_dir_for(vault_root)
+    state_dir.mkdir(parents=True, exist_ok=True)
+    (state_dir / "adversary_last_run.txt").write_text(str(_time.time() - 2 * 86400))
+
+    result = await agent.run()
+    assert result.claims_checked == 1
+    assert len(stub.calls) == 1
+
+
+@pytest.mark.asyncio
+async def test_idle_guard_empty_vault_does_not_record_timestamp(tmp_path: Path, _clean_state):
+    """Running on an empty vault (no entries) does not write the timestamp file."""
+    _clean_state.append(_state_dir_for(tmp_path))
+    (tmp_path / "wiki").mkdir()
+    vault = Vault.scan(tmp_path)
+    config = WikiConfig()
+    stub = _StubLLM('{"verdict": "validated", "confidence": 0.9, "explanation": "x"}')
+    agent = AdversaryAgent(vault, tmp_path, stub, IssueQueue(tmp_path / "wiki"), config)
+
+    await agent.run()
+
+    ts_file = _state_dir_for(tmp_path) / "adversary_last_run.txt"
+    assert not ts_file.exists(), "timestamp must not be written when vault is empty"
+
+
+@pytest.mark.asyncio
+async def test_idle_guard_no_claims_records_timestamp(tmp_path: Path, _clean_state):
+    """Running on a vault with pages but no raw citations writes the timestamp
+    so the guard fires on subsequent runs (preventing repeated scans)."""
+    wiki_dir = tmp_path / "wiki"
+    wiki_dir.mkdir()
+    (wiki_dir / "page.md").write_text(
+        "---\ntitle: Page\n---\n\n%% section: overview %%\n## Overview\n\n"
+        "No citations here, just prose.\n"
+    )
+    _clean_state.append(_state_dir_for(tmp_path))
+    config = WikiConfig(maintenance=MaintenanceConfig(adversary_claims_per_run=5))
+    stub = _StubLLM('{"verdict": "validated", "confidence": 0.9, "explanation": "x"}')
+    vault = Vault.scan(tmp_path)
+    agent = AdversaryAgent(vault, tmp_path, stub, IssueQueue(wiki_dir), config)
+
+    result = await agent.run()
+    assert result.claims_checked == 0
+    assert stub.calls == []  # no LLM calls (no claims)
+
+    ts_file = _state_dir_for(tmp_path) / "adversary_last_run.txt"
+    assert ts_file.exists(), "timestamp must be written even when no claims found"
+    assert agent._load_last_run_ts() is not None
+```
+
 - [ ] **Step 2: Run tests to confirm they fail**
 
 ```bash
-python -m pytest tests/test_adversary/test_agent.py::test_idle_guard_skips_llm_on_stable_vault tests/test_adversary/test_agent.py::test_idle_guard_runs_after_wiki_change -v
+python -m pytest tests/test_adversary/test_agent.py::test_idle_guard_skips_llm_on_stable_vault tests/test_adversary/test_agent.py::test_idle_guard_runs_after_wiki_change tests/test_adversary/test_agent.py::test_idle_guard_force_recheck_bypasses_stable_vault tests/test_adversary/test_agent.py::test_idle_guard_empty_vault_does_not_record_timestamp tests/test_adversary/test_agent.py::test_idle_guard_no_claims_records_timestamp -v
 ```
 
 Expected: FAIL — second run still calls the LLM (guard not wired in yet).
@@ -681,10 +756,10 @@ Update `AdversaryAgent.run()` to call the guard early and record the timestamp a
 - [ ] **Step 4: Run the new integration tests**
 
 ```bash
-python -m pytest tests/test_adversary/test_agent.py::test_idle_guard_skips_llm_on_stable_vault tests/test_adversary/test_agent.py::test_idle_guard_runs_after_wiki_change -v
+python -m pytest tests/test_adversary/test_agent.py::test_idle_guard_skips_llm_on_stable_vault tests/test_adversary/test_agent.py::test_idle_guard_runs_after_wiki_change tests/test_adversary/test_agent.py::test_idle_guard_force_recheck_bypasses_stable_vault tests/test_adversary/test_agent.py::test_idle_guard_empty_vault_does_not_record_timestamp tests/test_adversary/test_agent.py::test_idle_guard_no_claims_records_timestamp -v
 ```
 
-Expected: 2 passed.
+Expected: 5 passed.
 
 - [ ] **Step 5: Run the full test suite**
 
@@ -718,6 +793,8 @@ git commit -m "feat(adversary): wire idle guard into run(); record timestamp aft
 | `extract_claims` called with `raw_dir=raw_prefix` | Task 3 |
 | Atomic write of timestamp file | Task 4 |
 | Skip hidden files in mtime scan | Task 4 |
-| Record timestamp even when `all_claims` is empty | Task 5 |
+| Record timestamp even when `all_claims` is empty | Task 5 (`test_idle_guard_no_claims_records_timestamp`) |
+| Force-recheck integration (end-to-end) | Task 5 (`test_idle_guard_force_recheck_bypasses_stable_vault`) |
+| Empty vault does not write timestamp | Task 5 (`test_idle_guard_empty_vault_does_not_record_timestamp`) |
 
 All spec requirements covered. No gaps.
