@@ -201,14 +201,16 @@ def init(vault_path: Path) -> None:
 
 
 @cli.command()
+@click.argument("vault_path", type=click.Path(exists=True, path_type=Path), required=False, default=None)
 @click.option(
-    "--vault", "vault_path", type=click.Path(exists=True, path_type=Path),
+    "--vault", "vault_opt", type=click.Path(exists=True, path_type=Path),
     default=_default_vault_path, help="Path to vault",
 )
-def serve(vault_path: Path) -> None:
+def serve(vault_path: Path | None, vault_opt: Path) -> None:
     """Start the daemon in the foreground."""
+    effective = vault_path or vault_opt
     from llm_wiki.daemon.__main__ import main as daemon_main
-    sys.argv = ["llm-wiki-daemon", str(vault_path.resolve())]
+    sys.argv = ["llm-wiki-daemon", str(effective.resolve())]
     daemon_main()
 
 
