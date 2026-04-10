@@ -48,10 +48,16 @@ class DaemonServer:
         self._page_write_service = None  # type: ignore[assignment]
         self._write_coordinator = None  # type: ignore[assignment]
         self._inactivity_task: asyncio.Task | None = None
+        self._title_to_slug: dict[str, str] = {}
 
     async def start(self) -> None:
         """Scan vault, construct maintenance substrate, start listening."""
         self._vault = Vault.scan(self._vault_root)
+        self._title_to_slug = {
+            e.title: e.name
+            for e in self._vault.manifest_entries().values()
+            if e.title
+        }
 
         # Phase 5b substrate
         from llm_wiki.audit.compliance import ComplianceReviewer
@@ -227,6 +233,11 @@ class DaemonServer:
     async def rescan(self) -> None:
         """Re-scan the vault (called by file watcher)."""
         self._vault = Vault.scan(self._vault_root)
+        self._title_to_slug = {
+            e.title: e.name
+            for e in self._vault.manifest_entries().values()
+            if e.title
+        }
         logger.info("Rescanned: %d pages", self._vault.page_count)
 
     def _register_maintenance_workers(self) -> None:
@@ -438,6 +449,84 @@ class DaemonServer:
             "Compliance review %s: auto_approved=%s reasons=%s issues=%d",
             path.stem, result.auto_approved, result.reasons, len(result.issues_filed),
         )
+        await self._run_wikilink_audit(path)
+
+    async def _run_wikilink_audit(self, path: Path) -> None:
+        """Add [[wikilinks]] to unlinked title occurrences in `path`.
+
+        Only runs on pages inside wiki_dir. Skips pages with an active write
+        lock. Commits directly via CommitService (no session, no LLM call).
+        """
+        from llm_wiki.audit.wikilink_audit import apply_wikilinks, build_link_pattern
+
+        # Only audit pages inside wiki/
+        wiki_dir = self._vault_root / self._config.vault.wiki_dir.rstrip("/")
+        try:
+            path.relative_to(wiki_dir)
+        except ValueError:
+            return
+
+        if not path.exists():
+            return
+
+        # Conflict guard: skip if a write is in progress for this page
+        if self._write_coordinator is not None:
+            if self._write_coordinator.lock_for(path.stem).locked():
+                logger.debug(
+                    "Wikilink audit: skipping %s — write in progress", path.stem
+                )
+                return
+
+        if not self._title_to_slug:
+            return
+
+        pattern = build_link_pattern(self._title_to_slug)
+        if pattern is None:
+            return
+
+        try:
+            text = path.read_text(encoding="utf-8")
+        except OSError:
+            logger.exception("Wikilink audit: failed to read %s", path)
+            return
+
+        new_text, count = apply_wikilinks(text, self._title_to_slug, path.stem, pattern)
+
+        # Three guards before write
+        if count == 0:
+            return
+        if len(new_text) < len(text):
+            logger.warning(
+                "Wikilink audit: aborting — new_text shorter than original for %s",
+                path.stem,
+            )
+            return
+        if new_text.count("[[") < text.count("[["):
+            logger.warning(
+                "Wikilink audit: aborting — wikilink count shrank for %s", path.stem
+            )
+            return
+
+        try:
+            path.write_text(new_text, encoding="utf-8")
+        except OSError:
+            logger.exception("Wikilink audit: failed to write %s", path)
+            return
+
+        if self._commit_service is not None:
+            rel_path = str(path.relative_to(self._vault_root))
+            msg = f"audit: add {count} wikilink(s) to {path.stem}"
+            try:
+                sha = await self._commit_service.commit_direct([rel_path], msg)
+                if sha:
+                    logger.info(
+                        "Wikilink audit: %s — %d link(s) → %s",
+                        path.stem, count, sha[:8],
+                    )
+            except Exception:
+                logger.exception(
+                    "Wikilink audit: commit failed for %s", path.stem
+                )
 
     async def _handle_client(
         self, reader: asyncio.StreamReader, writer: asyncio.StreamWriter
