@@ -685,6 +685,50 @@ def _setup_embeddings(openai_key: str = "") -> tuple[str, bool, str | None]:
     return model_str, True, api_key or None
 
 
+# ── Section menu ──────────────────────────────────────────────────────────────
+
+_UPDATE_CHOICES = [
+    "Everything",
+    "LLM backends  (smart + fast model)",
+    "Embeddings",
+    "Agent framework",
+]
+
+
+def _show_existing_summary(existing: dict) -> None:
+    """Print a compact summary of the current config to orient the user."""
+    llm = existing.get("llm", {})
+    backends = llm.get("backends", {})
+    smart = backends.get("smart", {})
+    fast = backends.get("fast", {})
+    embed_enabled = existing.get("search", {}).get("embeddings_enabled", False)
+    embed_model = llm.get("embeddings", "")
+
+    _info("Current settings:")
+    _info(f"  Smart model:  {smart.get('model', '(none)')}")
+    if fast:
+        _info(f"  Fast model:   {fast.get('model', '(none)')}")
+    else:
+        _info("  Fast model:   (using smart for all tasks)")
+    embed_status = "enabled" if embed_enabled else "disabled"
+    _info(f"  Embeddings:   {embed_status}" + (f"  ({embed_model})" if embed_model else ""))
+
+
+def _section_choice(existing: dict) -> tuple[bool, bool, bool]:
+    """Show section menu and return (run_llm, run_embed, run_agent)."""
+    _show_existing_summary(existing)
+    print()
+    idx = _choice("What would you like to update?", _UPDATE_CHOICES, default=0)
+    print()
+    if idx == 0:
+        return True, True, True
+    if idx == 1:
+        return True, False, False
+    if idx == 2:
+        return False, True, False
+    return False, False, True  # Agent framework only
+
+
 # ── Main wizard ───────────────────────────────────────────────────────────────
 
 def run_wizard(vault_path: Path) -> None:

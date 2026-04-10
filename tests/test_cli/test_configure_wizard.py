@@ -143,3 +143,60 @@ def test_merge_claude_code_mcp_preserves_existing(tmp_path):
     data = json.loads(mcp_path.read_text())
     assert "other" in data["mcpServers"]
     assert "llm-wiki" in data["mcpServers"]
+
+
+def test_section_choice_everything(monkeypatch):
+    monkeypatch.setattr("llm_wiki.cli.configure._choice", lambda *a, **kw: 0)
+    monkeypatch.setattr("llm_wiki.cli.configure._show_existing_summary", lambda x: None)
+    from llm_wiki.cli.configure import _section_choice
+    assert _section_choice({}) == (True, True, True)
+
+
+def test_section_choice_llm_only(monkeypatch):
+    monkeypatch.setattr("llm_wiki.cli.configure._choice", lambda *a, **kw: 1)
+    monkeypatch.setattr("llm_wiki.cli.configure._show_existing_summary", lambda x: None)
+    from llm_wiki.cli.configure import _section_choice
+    assert _section_choice({}) == (True, False, False)
+
+
+def test_section_choice_embed_only(monkeypatch):
+    monkeypatch.setattr("llm_wiki.cli.configure._choice", lambda *a, **kw: 2)
+    monkeypatch.setattr("llm_wiki.cli.configure._show_existing_summary", lambda x: None)
+    from llm_wiki.cli.configure import _section_choice
+    assert _section_choice({}) == (False, True, False)
+
+
+def test_section_choice_agent_only(monkeypatch):
+    monkeypatch.setattr("llm_wiki.cli.configure._choice", lambda *a, **kw: 3)
+    monkeypatch.setattr("llm_wiki.cli.configure._show_existing_summary", lambda x: None)
+    from llm_wiki.cli.configure import _section_choice
+    assert _section_choice({}) == (False, False, True)
+
+
+def test_show_existing_summary_with_fast(capsys):
+    from llm_wiki.cli.configure import _show_existing_summary
+    existing = {
+        "llm": {
+            "backends": {
+                "smart": {"model": "openai/gpt-4o"},
+                "fast": {"model": "openai/gpt-4o-mini"},
+            }
+        },
+        "search": {"embeddings_enabled": True},
+    }
+    _show_existing_summary(existing)
+    out = capsys.readouterr().out
+    assert "gpt-4o" in out
+    assert "gpt-4o-mini" in out
+    assert "enabled" in out
+
+
+def test_show_existing_summary_no_fast(capsys):
+    from llm_wiki.cli.configure import _show_existing_summary
+    _show_existing_summary({
+        "llm": {"backends": {"smart": {"model": "openai/x"}}},
+        "search": {"embeddings_enabled": False},
+    })
+    out = capsys.readouterr().out
+    assert "using smart" in out
+    assert "disabled" in out
