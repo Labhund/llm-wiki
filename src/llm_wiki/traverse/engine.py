@@ -100,7 +100,17 @@ class TraversalEngine:
             ))
 
             outcome = self._check_done(memory, ceiling)
-            if outcome:
+            # After turn 0 we've only seen search results / the manifest — no page
+            # has been read yet. If the model declares "complete" but there are
+            # candidates worth reading, don't trust it: fall through to the read
+            # loop so at least the top page is examined. If candidates is empty the
+            # model has nothing left to look at, so honour the early exit.
+            turn0_premature = (
+                outcome == "complete"
+                and not memory.pages_read
+                and bool(memory.next_candidates)
+            )
+            if outcome and not turn0_premature:
                 return await self._finish(
                     question, memory, outcome, log, synthesize_prompt
                 )
