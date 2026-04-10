@@ -318,20 +318,12 @@ def ingest(source_path: Path, vault_path: Path, dry_run: bool) -> None:
     if dry_run:
         click.echo("DRY RUN — no pages written")
         click.echo(f"Source: {resp['source_path']} ({resp['source_chars']} chars)")
-        click.echo(f"Concepts found: {resp['concepts_found']}")
+        if resp.get("extraction_warning"):
+            click.echo(f"  Warning: {resp['extraction_warning']}")
         for c in resp.get("concepts", []):
-            action = "UPDATE" if c["action"] == "update" else "NEW"
-            click.echo(f"  [{action}] {c['name']} ({c['title']})")
-            click.echo(
-                f"    {c['section_count']} sections, "
-                f"{c['content_chars']} chars, "
-                f"{c['passage_count']} passages"
-            )
-            for s in c.get("sections", []):
-                click.echo(f"    ## {s['heading']} ({s['content_chars']} chars)")
-                preview = s["preview"]
-                for line in preview.split("\n"):
-                    click.echo(f"      {line}")
+            action = "UPD" if c["action"] == "update" else "NEW"
+            click.echo(f"  [{action}] {c['name']}  \"{c['title']}\"  ({c['passage_count']} passages)")
+        click.echo(f"{resp['concepts_found']} concepts total")
         return
 
     created = resp.get("created", [])

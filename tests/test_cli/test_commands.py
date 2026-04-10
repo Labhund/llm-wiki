@@ -242,3 +242,39 @@ def test_get_client_reports_daemon_exit_immediately(tmp_path, monkeypatch):
 
     error_msg = exc_info.value.format_message()
     assert "vault config missing" in error_msg
+
+
+def test_ingest_dry_run_output(daemon_for_cli, monkeypatch, tmp_path):
+    """Dry-run output shows concept list without section details."""
+    from llm_wiki.daemon.client import DaemonClient
+
+    def fake_request(self, msg):
+        if msg.get("type") != "ingest":
+            return {"status": "ok"}
+        return {
+            "status": "ok",
+            "dry_run": True,
+            "source_path": msg["source_path"],
+            "source_chars": 1000,
+            "extraction_warning": None,
+            "concepts_found": 2,
+            "concepts": [
+                {"name": "pca", "title": "PCA", "action": "create", "passage_count": 3},
+                {"name": "k-means", "title": "K-Means", "action": "update", "passage_count": 2},
+            ],
+        }
+
+    monkeypatch.setattr(DaemonClient, "request", fake_request)
+
+    vault_path = daemon_for_cli
+    source = vault_path / "test.md"
+    source.write_text("# Test")
+
+    runner = CliRunner()
+    result = runner.invoke(cli, ["ingest", str(source), "--dry-run", "--vault", str(vault_path)])
+    assert result.exit_code == 0, result.output
+    assert "[NEW]" in result.output
+    assert "[UPD]" in result.output
+    assert "2 concepts total" in result.output
+    assert "section" not in result.output
+    assert "content_chars" not in result.output

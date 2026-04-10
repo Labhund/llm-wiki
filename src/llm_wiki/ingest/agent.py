@@ -31,24 +31,13 @@ class ConceptPlan:
 
 
 @dataclass
-class SectionPreview:
-    """A single section generated during dry-run."""
-    heading: str
-    content: str
-
-
-@dataclass
 class ConceptPreview:
     """Preview of a concept that would be created/updated (dry-run only)."""
     name: str
     title: str
     is_update: bool
     passages: list[str] = field(default_factory=list)
-    sections: list[SectionPreview] = field(default_factory=list)
-
-    @property
-    def content_chars(self) -> int:
-        return sum(len(s.content) for s in self.sections)
+    sections: list = field(default_factory=list)
 
 
 @dataclass
@@ -153,7 +142,22 @@ class IngestAgent:
             logger.info("No concepts identified in %s", source_path)
             return result
 
-        for concept in concepts:
+        # Dry-run: stop here — no page-content generation
+        if dry_run:
+            for concept in concepts:
+                page_path = wiki_dir / f"{concept.name}.md"
+                result.concepts_planned.append(ConceptPreview(
+                    name=concept.name,
+                    title=concept.title,
+                    is_update=page_path.exists(),
+                    passages=concept.passages,
+                    sections=[],
+                ))
+            return result
+
+        # Live ingest: generate page content and write
+        # Note: enumerate used because Task 3 (on_progress) needs the index
+        for i, concept in enumerate(concepts):
             page_messages = compose_page_content_messages(
                 concept_title=concept.title,
                 passages=concept.passages,
@@ -170,21 +174,7 @@ class IngestAgent:
                 )
                 continue
 
-            section_previews = [
-                SectionPreview(heading=s.heading, content=s.content)
-                for s in sections
-            ]
-
-            if dry_run:
-                page_path = wiki_dir / f"{concept.name}.md"
-                result.concepts_planned.append(ConceptPreview(
-                    name=concept.name,
-                    title=concept.title,
-                    is_update=page_path.exists(),
-                    passages=concept.passages,
-                    sections=section_previews,
-                ))
-            elif write_service is not None:
+            if write_service is not None:
                 await self._write_via_service(
                     write_service, wiki_dir, concept, sections, source_ref,
                     author=author, connection_id=connection_id, result=result,

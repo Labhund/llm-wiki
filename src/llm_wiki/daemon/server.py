@@ -1214,24 +1214,11 @@ class DaemonServer:
         if dry_run:
             concepts = []
             for cp in result.concepts_planned:
-                sections = []
-                for s in cp.sections:
-                    preview_text = s.content[:200]
-                    if len(s.content) > 200:
-                        preview_text += "..."
-                    sections.append({
-                        "heading": s.heading,
-                        "content_chars": len(s.content),
-                        "preview": preview_text,
-                    })
                 concepts.append({
                     "name": cp.name,
                     "title": cp.title,
                     "action": "update" if cp.is_update else "create",
                     "passage_count": len(cp.passages),
-                    "section_count": len(cp.sections),
-                    "content_chars": cp.content_chars,
-                    "sections": sections,
                 })
             return {
                 "status": "ok",
@@ -1239,6 +1226,7 @@ class DaemonServer:
                 "source_path": str(source_path),
                 "source_chars": result.source_chars,
                 "concepts_found": result.concepts_found,
+                "extraction_warning": result.extraction_warning,
                 "concepts": concepts,
                 "message": "DRY RUN — no pages written",
             }

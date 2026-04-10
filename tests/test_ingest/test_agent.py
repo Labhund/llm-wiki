@@ -249,3 +249,57 @@ async def test_ingest_result_extraction_warning_absent_on_clean_extraction(tmp_p
         )
 
     assert result.extraction_warning is None
+
+
+@pytest.mark.asyncio
+async def test_dry_run_makes_only_one_llm_call(tmp_path: Path):
+    """Dry-run stops after concept extraction — no page-content LLM calls."""
+    (tmp_path / "raw").mkdir()
+    (tmp_path / "wiki").mkdir()
+    source = tmp_path / "raw" / "paper.md"
+    source.write_text("# Paper\n\nPCA reduces dimensions. k-means clusters data.")
+
+    concept_response = _concept_json([
+        {"name": "pca", "title": "PCA", "passages": ["PCA reduces dimensions."]},
+        {"name": "k-means", "title": "K-Means", "passages": ["k-means clusters data."]},
+    ])
+    mock_llm = MockLLMClient([concept_response])  # only 1 response scripted
+    agent = IngestAgent(mock_llm, WikiConfig())
+
+    result = await agent.ingest(source, tmp_path, dry_run=True)
+
+    assert len(mock_llm.calls) == 1   # concept extraction only
+    assert result.concepts_found == 2
+
+
+@pytest.mark.asyncio
+async def test_dry_run_returns_previews_without_sections(tmp_path: Path):
+    """Dry-run ConceptPreview has name/title/is_update/passages but no sections."""
+    (tmp_path / "raw").mkdir()
+    wiki_dir = tmp_path / "wiki"
+    wiki_dir.mkdir()
+
+    # One existing page, one new
+    (wiki_dir / "pca.md").write_text("---\ntitle: PCA\n---\n\nExisting.")
+
+    source = tmp_path / "raw" / "paper.md"
+    source.write_text("# Paper\n\nPCA content. K-Means content.")
+
+    concept_response = _concept_json([
+        {"name": "pca", "title": "PCA", "passages": ["PCA content."]},
+        {"name": "k-means", "title": "K-Means", "passages": ["K-Means content."]},
+    ])
+    mock_llm = MockLLMClient([concept_response])
+    agent = IngestAgent(mock_llm, WikiConfig())
+
+    result = await agent.ingest(source, tmp_path, dry_run=True)
+
+    assert len(result.concepts_planned) == 2
+    pca = next(c for c in result.concepts_planned if c.name == "pca")
+    km = next(c for c in result.concepts_planned if c.name == "k-means")
+
+    assert pca.is_update is True
+    assert km.is_update is False
+    assert pca.passages == ["PCA content."]
+    assert pca.sections == []   # no section generation in dry-run
+    assert km.sections == []
