@@ -651,12 +651,13 @@ def maintenance_status(vault_path: Path) -> None:
         
         failures = worker.get("consecutive_failures", 0)
         last = worker["last_run"] or "never"
+        last_attempt = worker.get("last_attempt")
         reachable = worker.get("backend_reachable")
         reachable_str = "" if reachable is None else (" [backend DOWN]" if not reachable else "")
-        
+
         ago, next_calc = _relative_time(last)
         if next_calc is None:
-            # Calculate next scheduled time from interval
+            # Worker has run — calculate next from interval
             next_seconds = interval
             next_str = "—"
             if next_seconds < 60:
@@ -667,8 +668,23 @@ def maintenance_status(vault_path: Path) -> None:
                 next_str = f"in {int(next_seconds/3600)}h"
             else:
                 next_str = f"in {int(next_seconds/86400)}d"
+        elif reachable is False:
+            next_str = "skipped"   # health probe failing — backend down
+        elif failures > 0:
+            # Failed at least once; waiting for next interval retry
+            next_seconds = interval
+            if next_seconds < 60:
+                next_str = f"in {int(next_seconds)}s"
+            elif next_seconds < 3600:
+                next_str = f"in {int(next_seconds/60)}m"
+            elif next_seconds < 86400:
+                next_str = f"in {int(next_seconds/3600)}h"
+            else:
+                next_str = f"in {int(next_seconds/86400)}d"
+        elif last_attempt:
+            next_str = "running"   # first run in progress (no successful completion yet)
         else:
-            next_str = next_calc
+            next_str = "pending"   # task created but hasn't started yet
         
         click.echo(
             f"{worker['name']:<16} {interval_str:<10} {failures:<10} {ago:<16} {next_str:<12}{reachable_str}".rstrip()

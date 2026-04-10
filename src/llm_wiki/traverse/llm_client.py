@@ -55,11 +55,13 @@ class LLMClient:
         model: str,
         api_base: str | None = None,
         api_key: str | None = None,
+        timeout: float | None = None,
     ) -> None:
         self._queue = queue
         self._model = model
         self._api_base = api_base
         self._api_key = api_key
+        self._timeout = timeout
 
     async def complete(
         self,
@@ -82,6 +84,8 @@ class LLMClient:
                         kwargs["api_base"] = self._api_base
                     if self._api_key is not None:
                         kwargs["api_key"] = self._api_key
+                    if self._timeout is not None:
+                        kwargs["timeout"] = self._timeout
 
                     response = await litellm.acompletion(**kwargs)
                     content = response.choices[0].message.content
