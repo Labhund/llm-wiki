@@ -1,18 +1,34 @@
 from __future__ import annotations
 
+import datetime
 import logging
+import re as _re
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Awaitable, Callable
 
 from llm_wiki.config import WikiConfig
+from llm_wiki.ingest.chunker import chunk_text
 from llm_wiki.ingest.extractor import extract_text
+from llm_wiki.ingest.grounding import ground_passage
 from llm_wiki.ingest.page_writer import write_page
+from llm_wiki.ingest.proposals import (
+    Proposal,
+    ProposalPassage,
+    cluster_dirs as _get_cluster_dirs,
+    write_proposal,
+)
 from llm_wiki.ingest.prompts import (
     compose_concept_extraction_messages,
+    compose_content_synthesis_messages,
+    compose_overview_messages,
     compose_page_content_messages,
+    compose_passage_collection_messages,
     parse_concept_extraction,
+    parse_content_synthesis,
+    parse_overview_extraction,
     parse_page_content,
+    parse_passage_collection,
 )
 
 if TYPE_CHECKING:
@@ -28,13 +44,9 @@ class ConceptPlan:
     name: str                                   # URL-safe slug: "srna-embeddings"
     title: str                                  # Human-readable: "sRNA Embeddings"
     passages: list[str] = field(default_factory=list)
-
-
-@dataclass
-class SectionPreview:
-    """A single section generated during dry-run."""
-    heading: str
-    content: str
+    action: str = "create"                      # "create" | "update"
+    section_names: list[str] = field(default_factory=list)
+    cluster: str = ""                           # target wiki/ subdirectory; "" = root
 
 
 @dataclass
@@ -44,11 +56,7 @@ class ConceptPreview:
     title: str
     is_update: bool
     passages: list[str] = field(default_factory=list)
-    sections: list[SectionPreview] = field(default_factory=list)
-
-    @property
-    def content_chars(self) -> int:
-        return sum(len(s.content) for s in self.sections)
+    sections: list = field(default_factory=list)
 
 
 @dataclass
@@ -93,6 +101,7 @@ class IngestAgent:
         write_service: "PageWriteService | None" = None,
         dry_run: bool = False,
         source_type: str = "paper",
+        on_progress: "Callable[[dict], Awaitable[None]] | None" = None,
     ) -> IngestResult:
         """Ingest one source file into the wiki.
 
@@ -119,6 +128,9 @@ class IngestAgent:
             source_ref = str(source_path.relative_to(vault_root))
         except ValueError:
             source_ref = source_path.name
+
+        if on_progress:
+            await on_progress({"stage": "extracting"})
 
         extraction = await extract_text(
             source_path,
@@ -149,11 +161,29 @@ class IngestAgent:
         response = await self._llm.complete(messages, temperature=0.3, priority="ingest")
         concepts = parse_concept_extraction(response.content)
 
+        if on_progress:
+            await on_progress({"stage": "concepts_found", "count": len(concepts)})
+
         if not concepts:
             logger.info("No concepts identified in %s", source_path)
             return result
 
-        for concept in concepts:
+        # Dry-run: stop here — no page-content generation
+        if dry_run:
+            for concept in concepts:
+                page_path = wiki_dir / f"{concept.name}.md"
+                result.concepts_planned.append(ConceptPreview(
+                    name=concept.name,
+                    title=concept.title,
+                    is_update=page_path.exists(),
+                    passages=concept.passages,
+                    sections=[],
+                ))
+            return result
+
+        # Live ingest: generate page content and write
+        # Note: enumerate used because Task 3 (on_progress) needs the index
+        for i, concept in enumerate(concepts):
             page_messages = compose_page_content_messages(
                 concept_title=concept.title,
                 passages=concept.passages,
@@ -170,21 +200,9 @@ class IngestAgent:
                 )
                 continue
 
-            section_previews = [
-                SectionPreview(heading=s.heading, content=s.content)
-                for s in sections
-            ]
+            created_before = len(result.pages_created)
 
-            if dry_run:
-                page_path = wiki_dir / f"{concept.name}.md"
-                result.concepts_planned.append(ConceptPreview(
-                    name=concept.name,
-                    title=concept.title,
-                    is_update=page_path.exists(),
-                    passages=concept.passages,
-                    sections=section_previews,
-                ))
-            elif write_service is not None:
+            if write_service is not None:
                 await self._write_via_service(
                     write_service, wiki_dir, concept, sections, source_ref,
                     author=author, connection_id=connection_id, result=result,
@@ -199,6 +217,17 @@ class IngestAgent:
                     result.pages_updated.append(concept.name)
                 else:
                     result.pages_created.append(concept.name)
+
+            if on_progress:
+                action = "created" if len(result.pages_created) > created_before else "updated"
+                await on_progress({
+                    "stage": "concept_done",
+                    "name": concept.name,
+                    "title": concept.title,
+                    "action": action,
+                    "num": i + 1,
+                    "total": len(concepts),
+                })
 
         # Resonance matching post-step (gated by config)
         # pages_created only — resonance seeds new pages, not updates to existing ones
@@ -261,10 +290,160 @@ class IngestAgent:
             if wr.status == "ok":
                 result.pages_updated.append(concept.name)
 
+    async def ingest_as_proposals(
+        self,
+        source_path: Path,
+        vault_root: Path,
+        proposals_dir: Path,
+        manifest_lines: list[str],
+        *,
+        author: str = "cli",
+    ) -> IngestResult:
+        """Multi-chunk wiki-aware ingest that writes proposals instead of direct pages.
+
+        Args:
+            source_path:    Absolute path to source (must be inside vault_root/raw/).
+            vault_root:     Vault root directory.
+            proposals_dir:  Where to write proposal files (inbox/proposals/).
+            manifest_lines: Existing wiki manifest, one "slug  title" line each.
+            author:         Who triggered the ingest (for proposal metadata).
+        """
+        from llm_wiki.ingest.source_meta import init_companion, write_companion_body
+
+        result = IngestResult(source_path=source_path, dry_run=False)
+
+        try:
+            source_ref = str(source_path.relative_to(vault_root))
+        except ValueError:
+            source_ref = source_path.name
+
+        extraction = await extract_text(source_path, ingest_config=self._config.ingest)
+        if not extraction.success:
+            logger.warning("Extraction failed for %s: %s", source_path, extraction.error)
+            return result
+
+        result.source_chars = len(extraction.content)
+        if extraction.quality_warning:
+            result.extraction_warning = extraction.quality_warning
+
+        companion = init_companion(source_path, vault_root)
+        if companion:
+            try:
+                write_companion_body(companion, extraction.content)
+            except Exception as exc:
+                logger.warning("Failed to write companion for %s: %s", source_path, exc)
+
+        chunks = chunk_text(
+            extraction.content,
+            chunk_tokens=self._config.ingest.chunk_tokens,
+            overlap=self._config.ingest.chunk_overlap,
+        )
+        if not chunks:
+            return result
+
+        wiki_dir = vault_root / self._config.vault.wiki_dir.rstrip("/")
+        existing_clusters = _get_cluster_dirs(wiki_dir)
+
+        # Overview pass on chunk 0
+        overview_msgs = compose_overview_messages(
+            chunk_text=chunks[0],
+            manifest_lines=manifest_lines,
+            source_ref=source_ref,
+            cluster_dir_names=existing_clusters,
+        )
+        overview_resp = await self._llm.complete(overview_msgs, temperature=0.2, priority="ingest")
+        concepts = parse_overview_extraction(overview_resp.content)
+
+        if not concepts:
+            logger.info("No concepts identified in %s", source_path)
+            return result
+
+        # Passage collection across all chunks
+        concept_passages: dict[str, list[str]] = {c.name: [] for c in concepts}
+        max_passages = self._config.ingest.max_passages_per_concept
+
+        for chunk in chunks:
+            still_need = [c for c in concepts if len(concept_passages[c.name]) < max_passages]
+            if not still_need:
+                break
+            coll_msgs = compose_passage_collection_messages(
+                chunk_text=chunk,
+                concepts=still_need,
+            )
+            coll_resp = await self._llm.complete(coll_msgs, temperature=0.1, priority="ingest")
+            found = parse_passage_collection(
+                coll_resp.content,
+                concept_names=[c.name for c in still_need],
+            )
+            for name, passages in found.items():
+                existing = concept_passages[name]
+                for p in passages:
+                    if p not in existing and len(existing) < max_passages:
+                        existing.append(p)
+
+        source_slug = _re.sub(r"[^a-z0-9-]", "-", source_path.stem.lower()).strip("-")
+        ocr_sourced = extraction.extraction_method == "image_ocr"
+
+        # Content synthesis + proposal write per concept
+        for concept in concepts:
+            passages = concept_passages.get(concept.name, [])
+            if not passages:
+                logger.warning("No passages collected for concept %r — skipping", concept.name)
+                continue
+
+            synth_msgs = compose_content_synthesis_messages(
+                concept=concept,
+                passages=passages,
+                source_ref=source_ref,
+                manifest_lines=manifest_lines,
+                batch_concepts=concepts,
+            )
+            synth_resp = await self._llm.complete(synth_msgs, temperature=0.3, priority="ingest")
+            sections = parse_content_synthesis(synth_resp.content)
+            if not sections:
+                logger.warning("No sections generated for %r — skipping", concept.name)
+                continue
+
+            proposal_passages: list[ProposalPassage] = []
+            for idx, passage_text in enumerate(passages):
+                gr = ground_passage(passage_text, extraction.content, ocr_sourced=ocr_sourced)
+                claim = sections[0].content.split(".")[0] if sections else passage_text[:80]
+                proposal_passages.append(ProposalPassage(
+                    id=f"p{idx + 1}",
+                    text=gr.passage,
+                    claim=claim,
+                    score=gr.score,
+                    method=gr.method,
+                    verifiable=gr.verifiable,
+                    ocr_sourced=gr.ocr_sourced,
+                ))
+
+            proposal = Proposal(
+                source=source_ref,
+                target_page=concept.name,
+                action=concept.action,
+                proposed_by=author,
+                created=datetime.datetime.now(datetime.timezone.utc).isoformat(),
+                extraction_method=extraction.extraction_method,
+                sections=sections,
+                passages=proposal_passages,
+                quality_warning=result.extraction_warning,
+                target_cluster=concept.cluster,
+            )
+            write_proposal(proposals_dir, proposal, source_slug=source_slug)
+
+            if concept.action == "create":
+                result.pages_created.append(concept.name)
+            else:
+                result.pages_updated.append(concept.name)
+
+        return result
+
     @staticmethod
     def _sections_to_body(sections: list) -> str:
         parts = []
         for s in sections:
+            parts.append(f"%% section: {s.name} %%")
             parts.append(f"## {s.heading}")
             parts.append("")
             parts.append(s.content)

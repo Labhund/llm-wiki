@@ -90,3 +90,48 @@ async def test_arequest_round_trips_through_async_path(tmp_path):
     finally:
         server.close()
         await server.wait_closed()
+
+
+def test_stream_ingest_sync_receives_all_frames(tmp_path):
+    """stream_ingest_sync calls on_frame for each frame including done."""
+    import asyncio
+    import threading
+
+    sock_path = tmp_path / "stream_test.sock"
+
+    async def run_server():
+        from llm_wiki.daemon.protocol import read_message, write_message as wm
+
+        async def handle(reader, writer):
+            await read_message(reader)  # consume the request
+            await wm(writer, {"type": "progress", "stage": "extracting"})
+            await wm(writer, {"type": "progress", "stage": "concepts_found", "count": 1})
+            await wm(writer, {"type": "done", "status": "ok", "pages_created": 1,
+                               "pages_updated": 0, "created": ["foo"],
+                               "updated": [], "concepts_found": 1})
+            writer.close()
+            await writer.wait_closed()
+
+        server = await asyncio.start_unix_server(handle, path=str(sock_path))
+        return server
+
+    loop = asyncio.new_event_loop()
+    server = loop.run_until_complete(run_server())
+    thread = threading.Thread(target=loop.run_forever, daemon=True)
+    thread.start()
+
+    try:
+        client = DaemonClient(sock_path)
+        frames = []
+        client.stream_ingest_sync({"type": "ingest", "stream": True}, frames.append)
+
+        assert len(frames) == 3
+        assert frames[0] == {"type": "progress", "stage": "extracting"}
+        assert frames[1]["stage"] == "concepts_found"
+        assert frames[2]["type"] == "done"
+        assert frames[2]["status"] == "ok"
+    finally:
+        loop.call_soon_threadsafe(server.close)
+        loop.call_soon_threadsafe(loop.stop)
+        thread.join(timeout=2)
+        loop.close()

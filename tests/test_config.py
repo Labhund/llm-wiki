@@ -3,7 +3,7 @@ from pathlib import Path
 import pytest
 import yaml
 
-from llm_wiki.config import WikiConfig
+from llm_wiki.config import WikiConfig, IngestConfig
 
 
 def test_default_config():
@@ -159,3 +159,28 @@ def test_maintenance_config_synthesis_authority_boost_default():
     """synthesis_authority_boost defaults to 1.5."""
     cfg = WikiConfig()
     assert cfg.maintenance.synthesis_authority_boost == 1.5
+
+
+def test_ingest_config_new_defaults():
+    cfg = IngestConfig()
+    assert cfg.chunk_tokens == 6000
+    assert cfg.chunk_overlap == 0.15
+    assert cfg.max_passages_per_concept == 6
+    assert cfg.grounding_auto_merge == 0.75
+    assert cfg.grounding_flag == 0.50
+    assert cfg.auto_copy_to_raw is True
+
+
+def test_ingest_config_loads_new_fields_from_yaml(tmp_path):
+    cfg_file = tmp_path / "config.yaml"
+    cfg_file.write_text(
+        "ingest:\n"
+        "  chunk_tokens: 4000\n"
+        "  grounding_auto_merge: 0.8\n"
+        "  auto_copy_to_raw: false\n"
+    )
+    c = WikiConfig.load(cfg_file)
+    assert c.ingest.chunk_tokens == 4000
+    assert c.ingest.grounding_auto_merge == 0.8
+    assert c.ingest.auto_copy_to_raw is False
+    assert c.ingest.grounding_flag == 0.50  # default preserved

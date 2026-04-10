@@ -48,10 +48,16 @@ class DaemonServer:
         self._page_write_service = None  # type: ignore[assignment]
         self._write_coordinator = None  # type: ignore[assignment]
         self._inactivity_task: asyncio.Task | None = None
+        self._title_to_slug: dict[str, str] = {}
 
     async def start(self) -> None:
         """Scan vault, construct maintenance substrate, start listening."""
         self._vault = Vault.scan(self._vault_root)
+        self._title_to_slug = {
+            e.title: e.name
+            for e in self._vault.manifest_entries().values()
+            if e.title
+        }
 
         # Phase 5b substrate
         from llm_wiki.audit.compliance import ComplianceReviewer
@@ -227,6 +233,11 @@ class DaemonServer:
     async def rescan(self) -> None:
         """Re-scan the vault (called by file watcher)."""
         self._vault = Vault.scan(self._vault_root)
+        self._title_to_slug = {
+            e.title: e.name
+            for e in self._vault.manifest_entries().values()
+            if e.title
+        }
         logger.info("Rescanned: %d pages", self._vault.page_count)
 
     def _register_maintenance_workers(self) -> None:
@@ -240,15 +251,26 @@ class DaemonServer:
 
         async def run_auditor() -> None:
             from llm_wiki.audit.auditor import Auditor
+            from llm_wiki.audit.checks import execute_proposal_merges
             from llm_wiki.issues.queue import IssueQueue
             wiki_dir = self._vault_root / self._config.vault.wiki_dir.rstrip("/")
             queue = IssueQueue(wiki_dir)
-            auditor = Auditor(self._vault, queue, self._vault_root)
+            auditor = Auditor(self._vault, queue, self._vault_root, self._config)
             report = auditor.audit()
             logger.info(
                 "Auditor: %d new issues, %d existing",
                 len(report.new_issue_ids), len(report.existing_issue_ids),
             )
+            # Apply merge-ready proposals after audit — write phase only
+            try:
+                merged = execute_proposal_merges(
+                    self._vault_root,
+                    auto_merge_threshold=self._config.ingest.grounding_auto_merge,
+                )
+                if merged:
+                    logger.info("Auto-merged %d proposal(s): %s", len(merged), merged)
+            except Exception:
+                logger.exception("execute_proposal_merges failed — audit result unaffected")
 
         async def run_librarian() -> None:
             from llm_wiki.issues.queue import IssueQueue
@@ -427,12 +449,93 @@ class DaemonServer:
             "Compliance review %s: auto_approved=%s reasons=%s issues=%d",
             path.stem, result.auto_approved, result.reasons, len(result.issues_filed),
         )
+        await self._run_wikilink_audit(path)
+
+    async def _run_wikilink_audit(self, path: Path) -> None:
+        """Add [[wikilinks]] to unlinked title occurrences in `path`.
+
+        Only runs on pages inside wiki_dir. Skips pages with an active write
+        lock. Commits directly via CommitService (no session, no LLM call).
+        """
+        from llm_wiki.audit.wikilink_audit import apply_wikilinks, build_link_pattern
+
+        # Only audit pages inside wiki/
+        wiki_dir = self._vault_root / self._config.vault.wiki_dir.rstrip("/")
+        try:
+            path.relative_to(wiki_dir)
+        except ValueError:
+            return
+
+        if not path.exists():
+            return
+
+        # Conflict guard: skip if a write is in progress for this page
+        if self._write_coordinator is not None:
+            if self._write_coordinator.lock_for(path.stem).locked():
+                logger.debug(
+                    "Wikilink audit: skipping %s — write in progress", path.stem
+                )
+                return
+
+        if not self._title_to_slug:
+            return
+
+        pattern = build_link_pattern(self._title_to_slug)
+        if pattern is None:
+            return
+
+        try:
+            text = path.read_text(encoding="utf-8")
+        except OSError:
+            logger.exception("Wikilink audit: failed to read %s", path)
+            return
+
+        new_text, count = apply_wikilinks(text, self._title_to_slug, path.stem, pattern)
+
+        # Three guards before write
+        if count == 0:
+            return
+        if len(new_text) < len(text):
+            logger.warning(
+                "Wikilink audit: aborting — new_text shorter than original for %s",
+                path.stem,
+            )
+            return
+        if new_text.count("[[") < text.count("[["):
+            logger.warning(
+                "Wikilink audit: aborting — wikilink count shrank for %s", path.stem
+            )
+            return
+
+        try:
+            path.write_text(new_text, encoding="utf-8")
+        except OSError:
+            logger.exception("Wikilink audit: failed to write %s", path)
+            return
+
+        if self._commit_service is not None:
+            rel_path = str(path.relative_to(self._vault_root))
+            msg = f"audit: add {count} wikilink(s) to {path.stem}"
+            try:
+                sha = await self._commit_service.commit_direct([rel_path], msg)
+                if sha:
+                    logger.info(
+                        "Wikilink audit: %s — %d link(s) → %s",
+                        path.stem, count, sha[:8],
+                    )
+            except Exception:
+                logger.exception(
+                    "Wikilink audit: commit failed for %s", path.stem
+                )
 
     async def _handle_client(
         self, reader: asyncio.StreamReader, writer: asyncio.StreamWriter
     ) -> None:
         try:
             request = await read_message(reader)
+            if request.get("type") == "ingest" and request.get("stream"):
+                await self._handle_ingest_stream(request, writer)
+                return
             response = await self._route(request)
             await write_message(writer, response)
         except Exception as exc:
@@ -501,6 +604,12 @@ class DaemonServer:
                 return await self._handle_inbox_write(request)
             case "inbox-list":
                 return await self._handle_inbox_list(request)
+            case "proposals-list":
+                return self._handle_proposals_list()
+            case "proposals-approve":
+                return self._handle_proposals_approve(request)
+            case "proposals-reject":
+                return self._handle_proposals_reject(request)
             case _:
                 return {"status": "error", "message": f"Unknown request type: {req_type}"}
 
@@ -718,6 +827,65 @@ class DaemonServer:
                 "unchecked_claims": count_unchecked_claims(content),
             })
         return {"status": "ok", "plans": plans}
+
+    def _handle_proposals_list(self) -> dict:
+        from llm_wiki.ingest.proposals import list_pending_proposals, read_proposal_meta
+        proposals_dir = self._vault_root / "inbox" / "proposals"
+        items = []
+        for p in list_pending_proposals(proposals_dir):
+            meta = read_proposal_meta(p)
+            items.append({
+                "path": str(p.relative_to(self._vault_root)),
+                "target_page": meta.get("target_page", ""),
+                "action": meta.get("action", ""),
+                "status": meta.get("status", ""),
+                "source": meta.get("source", ""),
+            })
+        return {"status": "ok", "proposals": items}
+
+    def _handle_proposals_approve(self, request: dict) -> dict:
+        if "path" not in request:
+            return {"status": "error", "message": "Missing required field: path"}
+        from llm_wiki.ingest.proposals import (
+            read_proposal_meta, read_proposal_body, update_proposal_status, find_wiki_page,
+        )
+        from llm_wiki.ingest.page_writer import patch_token_estimates
+        import yaml as _yaml
+        p = self._vault_root / request["path"]
+        if not p.exists():
+            return {"status": "error", "message": f"Proposal not found: {request['path']}"}
+        meta = read_proposal_meta(p)
+        wiki_dir = self._vault_root / self._config.vault.wiki_dir.rstrip("/")
+        target_page = meta["target_page"]
+        target_cluster = meta.get("target_cluster") or ""
+        body = read_proposal_body(p)
+        target = find_wiki_page(wiki_dir, target_page)
+        if target is not None and body:
+            existing = target.read_text(encoding="utf-8")
+            if body not in existing:
+                target.write_text(existing.rstrip() + "\n\n" + body + "\n", encoding="utf-8")
+                patch_token_estimates(target)
+        elif target is None and meta.get("action") == "create":
+            cluster_dir = wiki_dir / target_cluster if target_cluster else wiki_dir
+            cluster_dir.mkdir(parents=True, exist_ok=True)
+            new_path = cluster_dir / f"{target_page}.md"
+            fm = {"title": meta["target_page"], "source": f"[[{meta['source']}]]",
+                  "created_by": "ingest"}
+            fm_text = "---\n" + _yaml.dump(fm, default_flow_style=False).strip() + "\n---\n\n"
+            new_path.write_text(fm_text + body + "\n", encoding="utf-8")
+            patch_token_estimates(new_path)
+        update_proposal_status(p, "merged")
+        return {"status": "ok", "merged": str(request["path"])}
+
+    def _handle_proposals_reject(self, request: dict) -> dict:
+        if "path" not in request:
+            return {"status": "error", "message": "Missing required field: path"}
+        from llm_wiki.ingest.proposals import update_proposal_status
+        p = self._vault_root / request["path"]
+        if not p.exists():
+            return {"status": "error", "message": f"Proposal not found: {request['path']}"}
+        update_proposal_status(p, "rejected")
+        return {"status": "ok", "rejected": str(request["path"])}
 
     async def _handle_page_create(self, request: dict) -> dict:
         if self._page_write_service is None:
@@ -1170,6 +1338,8 @@ class DaemonServer:
         }
 
     async def _handle_ingest(self, request: dict) -> dict:
+        if request.get("proposal_mode"):
+            return await self._handle_ingest_proposals(request)
         if "source_path" not in request:
             return {"status": "error", "message": "Missing required field: source_path"}
         if "connection_id" not in request:
@@ -1214,24 +1384,11 @@ class DaemonServer:
         if dry_run:
             concepts = []
             for cp in result.concepts_planned:
-                sections = []
-                for s in cp.sections:
-                    preview_text = s.content[:200]
-                    if len(s.content) > 200:
-                        preview_text += "..."
-                    sections.append({
-                        "heading": s.heading,
-                        "content_chars": len(s.content),
-                        "preview": preview_text,
-                    })
                 concepts.append({
                     "name": cp.name,
                     "title": cp.title,
                     "action": "update" if cp.is_update else "create",
                     "passage_count": len(cp.passages),
-                    "section_count": len(cp.sections),
-                    "content_chars": cp.content_chars,
-                    "sections": sections,
                 })
             return {
                 "status": "ok",
@@ -1239,12 +1396,20 @@ class DaemonServer:
                 "source_path": str(source_path),
                 "source_chars": result.source_chars,
                 "concepts_found": result.concepts_found,
+                "extraction_warning": result.extraction_warning,
                 "concepts": concepts,
                 "message": "DRY RUN — no pages written",
             }
 
-        # Live ingest response (unchanged)
-        # Apply response cap (mcp.ingest_response_max_pages)
+        # Live ingest response
+        return self._ingest_result_to_response(result)
+
+    def _ingest_result_to_response(self, result: "IngestResult") -> dict:
+        """Build the live-ingest response dict from an IngestResult.
+
+        Shared by _handle_ingest (sync response) and _handle_ingest_stream
+        (done frame). The streaming path adds "type": "done" on top.
+        """
         cap = self._config.mcp.ingest_response_max_pages
         all_pages = result.pages_created + result.pages_updated
         truncated = len(all_pages) > cap
@@ -1265,7 +1430,6 @@ class DaemonServer:
                 "code": "extraction-quality",
                 "message": result.extraction_warning,
             })
-
         response = {
             "status": "ok",
             "pages_created": len(result.pages_created),
@@ -1280,6 +1444,123 @@ class DaemonServer:
         if warnings:
             response["warnings"] = warnings
         return response
+
+    async def _handle_ingest_proposals(self, request: dict) -> dict:
+        """Route ingest to the proposal pipeline (proposal_mode=True)."""
+        if "source_path" not in request:
+            return {"status": "error", "message": "Missing required field: source_path"}
+
+        from llm_wiki.ingest.agent import IngestAgent
+        from llm_wiki.traverse.llm_client import LLMClient
+        from llm_wiki.vault import Vault
+
+        source_path = Path(request["source_path"])
+        author = request.get("author", "cli")
+        proposals_dir = self._vault_root / "inbox" / "proposals"
+
+        backend = self._config.llm.resolve("ingest")
+        llm = LLMClient(
+            self._llm_queue,
+            model=backend.model,
+            api_base=backend.api_base,
+            api_key=backend.api_key,
+        )
+
+        vault = Vault.scan(self._vault_root, self._config)
+        manifest_lines = [
+            f"{name}  '{entry.title}'"
+            for name, entry in vault.manifest_entries().items()
+        ]
+
+        agent = IngestAgent(llm, self._config)
+        result = await agent.ingest_as_proposals(
+            source_path=source_path,
+            vault_root=self._vault_root,
+            proposals_dir=proposals_dir,
+            manifest_lines=manifest_lines,
+            author=author,
+        )
+
+        return {
+            "status": "ok",
+            "concepts_found": result.concepts_found,
+            "created": result.pages_created,
+            "updated": result.pages_updated,
+            "extraction_warning": result.extraction_warning,
+            "proposal_mode": True,
+        }
+
+    async def _handle_ingest_stream(
+        self,
+        request: dict,
+        writer: asyncio.StreamWriter,
+    ) -> None:
+        """Handle a streaming ingest request, writing frames directly to writer."""
+        if "source_path" not in request:
+            await write_message(writer, {
+                "type": "error", "status": "error",
+                "message": "Missing required field: source_path",
+            })
+            return
+        if "connection_id" not in request:
+            await write_message(writer, {
+                "type": "error", "status": "error",
+                "message": "Missing required field: connection_id",
+            })
+            return
+
+        from llm_wiki.ingest.agent import IngestAgent
+        from llm_wiki.traverse.llm_client import LLMClient
+
+        author = request.get("author", "cli")
+        connection_id = request["connection_id"]
+        source_path = Path(request["source_path"])
+        source_type = request.get("source_type", "paper")
+        backend = self._config.llm.resolve("ingest")
+        llm = LLMClient(
+            self._llm_queue,
+            model=backend.model,
+            api_base=backend.api_base,
+            api_key=backend.api_key,
+        )
+        agent = IngestAgent(llm, self._config)
+
+        concepts_written = 0
+
+        async def on_progress(frame: dict) -> None:
+            nonlocal concepts_written
+            await write_message(writer, {"type": "progress", **frame})
+            if frame.get("stage") == "concept_done":
+                concepts_written += 1
+
+        try:
+            result = await agent.ingest(
+                source_path, self._vault_root,
+                author=author,
+                connection_id=connection_id,
+                write_service=self._page_write_service,
+                dry_run=False,
+                source_type=source_type,
+                on_progress=on_progress,
+            )
+        except Exception as exc:
+            logger.exception("Streaming ingest failed after %d concepts", concepts_written)
+            await write_message(writer, {
+                "type": "error",
+                "status": "error",
+                "message": str(exc),
+                "concepts_written": concepts_written,
+            })
+            return
+        finally:
+            try:
+                await self.rescan()
+            except Exception:
+                logger.warning("Failed to rescan vault after streaming ingest")
+
+        done_frame = self._ingest_result_to_response(result)
+        done_frame["type"] = "done"
+        await write_message(writer, done_frame)
 
 
 def _serialize_result(r: SearchResult) -> dict:

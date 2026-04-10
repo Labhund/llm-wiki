@@ -1,9 +1,11 @@
 from __future__ import annotations
 
+import itertools
 import os
 import subprocess
 import sys
 import tempfile
+import threading
 import time
 from datetime import datetime, timezone
 from pathlib import Path
@@ -111,6 +113,60 @@ def _get_client(vault_path: Path, auto_start: bool = True) -> DaemonClient:
         if stderr_fd >= 0:
             os.close(stderr_fd)
         stderr_path.unlink(missing_ok=True)
+
+
+class _Spinner:
+    """Braille spinner for TTY progress display.
+
+    Uses a threading.RLock so concept lines can be printed atomically
+    without interleaving with spinner writes.
+    """
+
+    FRAMES = "⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏"
+
+    def __init__(self) -> None:
+        self._label = ""
+        self._running = False
+        self._lock = threading.RLock()
+        self._thread: threading.Thread | None = None
+        self._line_width = 0
+
+    def start(self, label: str = "") -> None:
+        self._label = label
+        self._running = True
+        self._thread = threading.Thread(target=self._spin, daemon=True)
+        self._thread.start()
+
+    def update(self, label: str) -> None:
+        with self._lock:
+            self._label = label
+
+    def print_line(self, line: str) -> None:
+        """Clear spinner, print a line, let spinner resume."""
+        with self._lock:
+            sys.stdout.write("\r" + " " * (self._line_width + 2) + "\r")
+            sys.stdout.flush()
+            print(line)
+
+    def stop(self) -> None:
+        with self._lock:
+            self._running = False
+        if self._thread:
+            self._thread.join(timeout=1)
+        with self._lock:
+            sys.stdout.write("\r" + " " * (self._line_width + 2) + "\r")
+            sys.stdout.flush()
+
+    def _spin(self) -> None:
+        for frame in itertools.cycle(self.FRAMES):
+            if not self._running:
+                break
+            with self._lock:
+                line = f"{frame}  {self._label}"
+                self._line_width = len(line)
+                sys.stdout.write(f"\r{line}")
+                sys.stdout.flush()
+            time.sleep(0.08)
 
 
 @click.group()
@@ -328,6 +384,15 @@ def lint(vault_path: Path) -> None:
             click.echo(f"  - {issue_id}")
 
 
+def _is_inside(path: Path, parent: Path) -> bool:
+    """Return True if path is inside (or equal to) parent."""
+    try:
+        path.relative_to(parent)
+        return True
+    except ValueError:
+        return False
+
+
 @cli.command()
 @click.argument("source_path", type=click.Path(exists=True, path_type=Path))
 @click.option(
@@ -340,46 +405,109 @@ def lint(vault_path: Path) -> None:
 )
 def ingest(source_path: Path, vault_path: Path, dry_run: bool) -> None:
     """Ingest a source document — extracts concepts and creates wiki pages."""
+    import shutil
     import uuid as _uuid
+    from llm_wiki.config import WikiConfig
+
+    source_path = source_path.resolve()
+    vault_path = vault_path.resolve()
+
+    # Auto-copy source to raw/ if it's outside the vault
+    if not _is_inside(source_path, vault_path):
+        config = WikiConfig.load(vault_path / "schema" / "config.yaml")
+        if not config.ingest.auto_copy_to_raw:
+            raise click.ClickException(
+                f"Source must be inside vault raw/ directory. "
+                f"Move it first or set auto_copy_to_raw: true in config."
+            )
+        raw_dir = vault_path / config.vault.raw_dir.rstrip("/")
+        raw_dir.mkdir(parents=True, exist_ok=True)
+        dest = raw_dir / source_path.name
+        if not dest.exists():
+            shutil.copy2(source_path, dest)
+            click.echo(f"Copied {source_path.name} → raw/{source_path.name}")
+        else:
+            click.echo(f"Already in raw/: {source_path.name}")
+        source_path = dest
+
     client = _get_client(vault_path)
-    resp = client.request({
+    msg: dict = {
         "type": "ingest",
-        "source_path": str(source_path.resolve()),
+        "source_path": str(source_path),
         "author": "cli",
         "connection_id": _uuid.uuid4().hex,
         "dry_run": dry_run,
-    })
-    if resp["status"] != "ok":
-        raise click.ClickException(resp.get("message", "Ingest failed"))
+        "proposal_mode": True,
+    }
 
     if dry_run:
-        click.echo("DRY RUN — no pages written")
-        click.echo(f"Source: {resp['source_path']} ({resp['source_chars']} chars)")
-        click.echo(f"Concepts found: {resp['concepts_found']}")
+        resp = client.request(msg)
+        if resp["status"] != "ok":
+            raise click.ClickException(resp.get("message", "Ingest failed"))
+        source_name = Path(resp["source_path"]).name
+        source_chars = f"{resp['source_chars']:,}"
+        click.echo(f"DRY RUN — {source_name} ({source_chars} chars)")
+        if resp.get("extraction_warning"):
+            click.echo(f"  Warning: {resp['extraction_warning']}")
         for c in resp.get("concepts", []):
-            action = "UPDATE" if c["action"] == "update" else "NEW"
-            click.echo(f"  [{action}] {c['name']} ({c['title']})")
-            click.echo(
-                f"    {c['section_count']} sections, "
-                f"{c['content_chars']} chars, "
-                f"{c['passage_count']} passages"
-            )
-            for s in c.get("sections", []):
-                click.echo(f"    ## {s['heading']} ({s['content_chars']} chars)")
-                preview = s["preview"]
-                for line in preview.split("\n"):
-                    click.echo(f"      {line}")
+            action = "UPD" if c["action"] == "update" else "NEW"
+            click.echo(f"  [{action}] {c['name']}  \"{c['title']}\"  ({c['passage_count']} passages)")
+        click.echo(f"  {resp['concepts_found']} concepts total")
         return
 
-    created = resp.get("created", [])
-    updated = resp.get("updated", [])
-    click.echo(f"Ingested: {resp['concepts_found']} concept(s) identified.")
-    if created:
-        click.echo(f"  Created: {', '.join(created)}")
-    if updated:
-        click.echo(f"  Updated: {', '.join(updated)}")
-    if not created and not updated:
-        click.echo("  No pages created — no concepts identified in source.")
+    # Live streaming ingest
+    msg["stream"] = True
+    is_tty = sys.stdout.isatty()
+    spinner: _Spinner | None = _Spinner() if is_tty else None
+    error_seen: list[str] = []
+
+    def on_frame(frame: dict) -> None:
+        ftype = frame.get("type")
+        stage = frame.get("stage", "")
+
+        if ftype == "progress":
+            if stage == "extracting":
+                if spinner:
+                    spinner.start("Extracting...")
+                # no output line for extracting — spinner alone is enough on TTY
+            elif stage == "concepts_found":
+                count = frame["count"]
+                line = f"[PROGRESS] concepts_found: {count}"
+                if spinner:
+                    spinner.update(f"Found {count} concept(s) — writing pages...")
+                    spinner.print_line(line)
+                else:
+                    click.echo(line)
+            elif stage == "concept_done":
+                name = frame["name"]
+                action = frame["action"]
+                line = f"[DONE] {name} ({action})"
+                if spinner:
+                    spinner.print_line(line)
+                else:
+                    click.echo(line)
+
+        elif ftype == "done":
+            if spinner:
+                spinner.stop()
+            created = frame.get("pages_created", 0)
+            updated = frame.get("pages_updated", 0)
+            click.echo(f"[SUMMARY] {created} created, {updated} updated")
+            if frame.get("warnings"):
+                for w in frame["warnings"]:
+                    click.echo(f"  Warning: {w['message']}")
+
+        elif ftype == "error":
+            if spinner:
+                spinner.stop()
+            msg_text = frame.get("message", "Unknown error")
+            written = frame.get("concepts_written", 0)
+            error_seen.append(f"{msg_text} ({written} concept(s) written before error)")
+
+    client.stream_ingest_sync(msg, on_frame)
+
+    if error_seen:
+        raise click.ClickException(error_seen[0])
 
 
 @cli.group()
@@ -531,6 +659,63 @@ def maintenance_status(vault_path: Path) -> None:
         click.echo(
             f"{worker['name']:<16} {interval_str:<10} {failures:<10} {ago:<16} {next_str:<12}{reachable_str}".rstrip()
         )
+
+
+@cli.group()
+def proposals() -> None:
+    """List, approve, or reject ingest proposals."""
+    pass
+
+
+@proposals.command("list")
+@click.option(
+    "--vault", "vault_path", type=click.Path(exists=True, path_type=Path),
+    default=_default_vault_path, help="Path to vault",
+)
+def proposals_list(vault_path: Path) -> None:
+    """List pending ingest proposals."""
+    client = _get_client(vault_path)
+    resp = client.request({"type": "proposals-list"})
+    if resp["status"] != "ok":
+        raise click.ClickException(resp.get("message", "Failed"))
+    items = resp.get("proposals", [])
+    if not items:
+        click.echo("No pending proposals.")
+        return
+    click.echo(f"{len(items)} pending proposal(s):\n")
+    for item in items:
+        click.echo(f"  {item['path']}")
+        click.echo(f"    target: {item['target_page']} | action: {item['action']} | source: {item['source']}")
+
+
+@proposals.command("approve")
+@click.argument("proposal_path")
+@click.option(
+    "--vault", "vault_path", type=click.Path(exists=True, path_type=Path),
+    default=_default_vault_path, help="Path to vault",
+)
+def proposals_approve(proposal_path: str, vault_path: Path) -> None:
+    """Approve and merge an ingest proposal."""
+    client = _get_client(vault_path)
+    resp = client.request({"type": "proposals-approve", "path": proposal_path})
+    if resp["status"] != "ok":
+        raise click.ClickException(resp.get("message", "Approve failed"))
+    click.echo(f"Approved and merged: {proposal_path}")
+
+
+@proposals.command("reject")
+@click.argument("proposal_path")
+@click.option(
+    "--vault", "vault_path", type=click.Path(exists=True, path_type=Path),
+    default=_default_vault_path, help="Path to vault",
+)
+def proposals_reject(proposal_path: str, vault_path: Path) -> None:
+    """Reject an ingest proposal."""
+    client = _get_client(vault_path)
+    resp = client.request({"type": "proposals-reject", "path": proposal_path})
+    if resp["status"] != "ok":
+        raise click.ClickException(resp.get("message", "Reject failed"))
+    click.echo(f"Rejected: {proposal_path}")
 
 
 @cli.group()

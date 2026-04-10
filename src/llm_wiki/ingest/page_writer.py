@@ -6,6 +6,8 @@ from pathlib import Path
 
 import yaml
 
+from llm_wiki.tokens import count_tokens
+
 
 @dataclass
 class PageSection:
@@ -79,6 +81,7 @@ def _create_page(
 
     page_path.parent.mkdir(parents=True, exist_ok=True)
     page_path.write_text(frontmatter + "\n\n" + "\n".join(body_parts).strip() + "\n")
+    patch_token_estimates(page_path)
     return WrittenPage(path=page_path, was_update=False)
 
 
@@ -95,11 +98,14 @@ def _append_source(
     """
     raw_stem = Path(source_ref).stem  # "raw/paper.pdf" → "paper"
     source_slug = re.sub(r"[^a-z0-9-]", "-", raw_stem.lower())  # "my.paper.2024" → "my-paper-2024"
-    section_marker = f"%% section: from-{source_slug} %%"
+    # Use prefix match so it works whether or not tokens have been patched in
+    section_marker_prefix = f"%% section: from-{source_slug}"
 
     existing = page_path.read_text(encoding="utf-8")
-    if section_marker in existing:
+    if section_marker_prefix in existing:
         return WrittenPage(path=page_path, was_update=True)
+
+    section_marker = f"%% section: from-{source_slug} %%"
 
     appended_parts = [f"\n{section_marker}", f"## From {source_slug}", ""]
     for section in sections:
@@ -109,4 +115,75 @@ def _append_source(
             appended_parts.append("")
 
     page_path.write_text(existing.rstrip() + "\n" + "\n".join(appended_parts))
+    patch_token_estimates(page_path)
     return WrittenPage(path=page_path, was_update=True)
+
+
+# Matches %% section: name %% or %% section: name, tokens: N %%
+_SECTION_MARKER_RE = re.compile(
+    r"^(%% section:\s*)([^,%]+?)\s*(?:,\s*tokens:\s*\d+\s*)?(%%)$",
+    re.MULTILINE,
+)
+
+
+def patch_token_estimates(path: Path) -> None:
+    """Rewrite %% section: name %% markers to include token counts.
+
+    Reads the file, counts tokens in each section's content block, then
+    rewrites each marker as %% section: name, tokens: N %%. This is a
+    pure Python operation — no LLM calls.
+    """
+    text = path.read_text(encoding="utf-8")
+    lines = text.splitlines()
+
+    # Split into segments: each starts with a %% section: ... %% marker line
+    segments: list[tuple[str, list[str]]] = []  # (marker_line, content_lines)
+    current_marker: str | None = None
+    current_lines: list[str] = []
+
+    for line in lines:
+        if _SECTION_MARKER_RE.match(line.strip()):
+            if current_marker is not None:
+                segments.append((current_marker, current_lines))
+            current_marker = line.strip()
+            current_lines = []
+        else:
+            if current_marker is not None:
+                current_lines.append(line)
+            # Lines before the first marker (frontmatter etc.) are preserved
+            # by carrying them as the "header" segment with marker=None below
+
+    if current_marker is not None:
+        segments.append((current_marker, current_lines))
+
+    if not segments:
+        return  # No section markers — nothing to patch
+
+    # Identify the header (everything before the first marker)
+    first_marker_line = None
+    for i, line in enumerate(lines):
+        if _SECTION_MARKER_RE.match(line.strip()):
+            first_marker_line = i
+            break
+
+    header_lines = lines[:first_marker_line] if first_marker_line is not None else []
+
+    # Rebuild with token counts injected
+    output_parts = header_lines[:]
+    for marker_line, content_lines in segments:
+        m = _SECTION_MARKER_RE.match(marker_line.strip())
+        if m:
+            section_name = m.group(2).strip()
+            section_content = "\n".join(content_lines)
+            tokens = count_tokens(section_content)
+            new_marker = f"%% section: {section_name}, tokens: {tokens} %%"
+        else:
+            new_marker = marker_line.strip()
+        output_parts.append(new_marker)
+        output_parts.extend(content_lines)
+
+    new_text = "\n".join(output_parts)
+    if not new_text.endswith("\n"):
+        new_text += "\n"
+    if new_text != text:
+        path.write_text(new_text, encoding="utf-8")

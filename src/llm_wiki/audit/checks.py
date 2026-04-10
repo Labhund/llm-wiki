@@ -141,16 +141,21 @@ def find_missing_markers(vault: Vault) -> CheckResult:
 _RAW_CITATION_RE = re.compile(r"\[\[(raw/[^\]|]+)(?:\|[^\]]+)?\]\]")
 # Frontmatter source values are stored as the literal string "[[raw/...]]".
 _FRONTMATTER_LINK_RE = re.compile(r"\[\[([^\]|]+)(?:\|[^\]]+)?\]\]")
+# Binary file extensions that should always live under raw/ — catches [[boltz2.pdf]] etc.
+_BINARY_EXTENSIONS = {".pdf", ".docx", ".xlsx", ".pptx", ".epub", ".zip", ".gz"}
+_BARE_BINARY_RE = re.compile(r"\[\[([^\]/\]|]+\.[a-zA-Z0-9]+)(?:\|[^\]]+)?\]\]")
 
 
 def find_broken_citations(vault: Vault, vault_root: Path) -> CheckResult:
-    """References to raw/ source files that don't exist on disk.
+    """References to raw/ source files that don't exist on disk, plus bare
+    filename citations (missing the required raw/ prefix) in frontmatter.
 
     Scans two places:
       1. page.raw_content for inline `[[raw/<path>]]` references
       2. page.frontmatter['source'] (and 'sources' as a list) for raw refs
 
     Each missing target produces one Issue keyed by (page, target).
+    Bare binary citations produce a separate 'bare-filename-citation' issue.
     """
     issues: list[Issue] = []
     for name, entry in vault.manifest_entries().items():
@@ -158,26 +163,33 @@ def find_broken_citations(vault: Vault, vault_root: Path) -> CheckResult:
         if page is None:
             continue
         targets: set[str] = set()
+        bare_filenames: set[str] = set()
 
         for match in _RAW_CITATION_RE.finditer(page.raw_content):
             targets.add(match.group(1))
 
-        source_field = page.frontmatter.get("source")
-        if isinstance(source_field, str):
-            for match in _FRONTMATTER_LINK_RE.finditer(source_field):
+        def _scan_frontmatter_field(value: str) -> None:
+            for match in _FRONTMATTER_LINK_RE.finditer(value):
                 inner = match.group(1)
                 if inner.startswith("raw/"):
                     targets.add(inner)
+                    return
+            # Check for bare binary filename (no raw/ prefix, has binary extension)
+            for match in _BARE_BINARY_RE.finditer(value):
+                inner = match.group(1)
+                suffix = "." + inner.rsplit(".", 1)[-1].lower() if "." in inner else ""
+                if suffix in _BINARY_EXTENSIONS and not inner.startswith("raw/"):
+                    bare_filenames.add(inner)
+
+        source_field = page.frontmatter.get("source")
+        if isinstance(source_field, str):
+            _scan_frontmatter_field(source_field)
 
         sources_field = page.frontmatter.get("sources")
         if isinstance(sources_field, list):
             for entry_str in sources_field:
-                if not isinstance(entry_str, str):
-                    continue
-                for match in _FRONTMATTER_LINK_RE.finditer(entry_str):
-                    inner = match.group(1)
-                    if inner.startswith("raw/"):
-                        targets.add(inner)
+                if isinstance(entry_str, str):
+                    _scan_frontmatter_field(entry_str)
 
         for target in sorted(targets):
             absolute = vault_root / target
@@ -201,6 +213,28 @@ def find_broken_citations(vault: Vault, vault_root: Path) -> CheckResult:
                     metadata={"target": target},
                 )
             )
+
+        for filename in sorted(bare_filenames):
+            issues.append(
+                Issue(
+                    id=Issue.make_id("bare-filename-citation", name, filename),
+                    type="bare-filename-citation",
+                    status="open",
+                    severity="moderate",
+                    title=f"Citation '[[{filename}]]' missing raw/ prefix",
+                    page=name,
+                    body=(
+                        f"The page [[{name}]] has `[[{filename}]]` in its frontmatter. "
+                        f"Source files must live under `raw/` and be cited as "
+                        f"`[[raw/{filename}]]`. Move the file to `raw/{filename}` "
+                        f"and re-ingest, or correct the citation manually."
+                    ),
+                    created=Issue.now_iso(),
+                    detected_by="auditor",
+                    metadata={"target": filename},
+                )
+            )
+
     return CheckResult(check="broken-citations", issues=issues)
 
 
@@ -519,3 +553,189 @@ def find_inbox_staleness(vault_root: Path) -> CheckResult:
             metadata={"path": f"inbox/{file.name}", "started": started, "source": source},
         ))
     return CheckResult(check="inbox-staleness", issues=issues)
+
+
+def find_pending_proposals(
+    vault_root: Path,
+    wiki_dir: Path | None = None,
+    auto_merge_threshold: float = 0.75,
+    flag_threshold: float = 0.50,
+) -> CheckResult:
+    """Read-only check: classify pending proposals and return issues.
+
+    This function NEVER mutates wiki pages — it is safe to call from lint.
+
+    Issue types returned:
+      - 'merge-ready':                  action=update, all verifiable scores >= auto_merge_threshold
+      - 'proposal':                     action=create (requires human review), or target missing
+      - 'proposal-verification-failed': any verifiable score < flag_threshold
+    """
+    import json as _json
+    from llm_wiki.ingest.proposals import (
+        list_pending_proposals,
+        read_proposal_meta,
+        find_wiki_page,
+    )
+
+    _ev_re = re.compile(r"```evidence\s*\n(.*?)\n```", re.DOTALL)
+    proposals_dir = vault_root / "inbox" / "proposals"
+    if wiki_dir is None:
+        wiki_dir = vault_root / "wiki"
+
+    issues: list[Issue] = []
+
+    for proposal_path in list_pending_proposals(proposals_dir):
+        meta = read_proposal_meta(proposal_path)
+        if not meta:
+            continue
+
+        action = meta.get("action", "update")
+        target_page = meta.get("target_page", "")
+        source = meta.get("source", "")
+
+        raw = proposal_path.read_text(encoding="utf-8")
+        ev_match = _ev_re.search(raw)
+        scores: list[float] = []
+        if ev_match:
+            try:
+                evidence = _json.loads(ev_match.group(1))
+                scores = [e["score"] for e in evidence if e.get("verifiable", True)]
+            except (_json.JSONDecodeError, KeyError, TypeError):
+                pass
+
+        min_score = min(scores) if scores else 1.0
+
+        if action == "create":
+            issues.append(Issue(
+                id=Issue.make_id("proposal", target_page, source),
+                type="proposal",
+                status="open",
+                severity="minor",
+                title=f"New page proposal: '{target_page}' from {source}",
+                page=target_page,
+                body=(
+                    f"The ingest pipeline proposes creating [[{target_page}]] from "
+                    f"`{source}`. Review `{proposal_path.relative_to(vault_root)}` "
+                    f"and approve with `llm-wiki proposals approve` or reject with "
+                    f"`llm-wiki proposals reject`."
+                ),
+                created=Issue.now_iso(),
+                detected_by="auditor",
+                metadata={"proposal_path": str(proposal_path), "source": source},
+            ))
+            continue
+
+        if min_score < flag_threshold:
+            issues.append(Issue(
+                id=Issue.make_id("proposal-verification-failed", target_page, source),
+                type="proposal-verification-failed",
+                status="open",
+                severity="moderate",
+                title=f"Proposal for '{target_page}' has low grounding score ({min_score:.2f})",
+                page=target_page,
+                body=(
+                    f"The proposal to update [[{target_page}]] from `{source}` "
+                    f"has a minimum passage verification score of {min_score:.2f} "
+                    f"(threshold: {flag_threshold}). Review `{proposal_path.relative_to(vault_root)}`."
+                ),
+                created=Issue.now_iso(),
+                detected_by="auditor",
+                metadata={"proposal_path": str(proposal_path), "min_score": min_score},
+            ))
+            continue
+
+        target_path = find_wiki_page(wiki_dir, target_page)
+        if target_path is None:
+            issues.append(Issue(
+                id=Issue.make_id("proposal", target_page, source),
+                type="proposal",
+                status="open",
+                severity="minor",
+                title=f"Proposal target page not found: '{target_page}'",
+                page=target_page,
+                body=f"Proposal at `{proposal_path.relative_to(vault_root)}` targets [[{target_page}]] which does not exist.",
+                created=Issue.now_iso(),
+                detected_by="auditor",
+                metadata={"proposal_path": str(proposal_path)},
+            ))
+            continue
+
+        # Clean update above both thresholds — flag as merge-ready
+        issues.append(Issue(
+            id=Issue.make_id("merge-ready", target_page, source),
+            type="merge-ready",
+            status="open",
+            severity="minor",
+            title=f"Proposal ready to merge: '{target_page}' (score {min_score:.2f})",
+            page=target_page,
+            body=f"Proposal at `{proposal_path.relative_to(vault_root)}` is verified and ready to merge.",
+            created=Issue.now_iso(),
+            detected_by="auditor",
+            metadata={"proposal_path": str(proposal_path), "min_score": min_score},
+        ))
+
+    return CheckResult(check="pending-proposals", issues=issues)
+
+
+def execute_proposal_merges(
+    vault_root: Path,
+    wiki_dir: Path | None = None,
+    auto_merge_threshold: float = 0.75,
+) -> list[str]:
+    """Apply merge-ready proposals to their target wiki pages.
+
+    Called by the auditor scheduler AFTER audit() — NOT called during lint.
+    Returns list of target page slugs that were updated.
+    """
+    from llm_wiki.ingest.proposals import (
+        read_proposal_meta,
+        read_proposal_body,
+        update_proposal_status,
+        find_wiki_page,
+    )
+    from llm_wiki.ingest.page_writer import patch_token_estimates
+
+    if wiki_dir is None:
+        wiki_dir = vault_root / "wiki"
+
+    result = find_pending_proposals(
+        vault_root, wiki_dir=wiki_dir,
+        auto_merge_threshold=auto_merge_threshold,
+    )
+    merged: list[str] = []
+
+    for issue in result.issues:
+        if issue.type != "merge-ready":
+            continue
+        proposal_path = Path(issue.metadata["proposal_path"])
+        meta = read_proposal_meta(proposal_path)
+        target_page = issue.page
+        action = meta.get("action", "update")
+        target_cluster = meta.get("target_cluster") or ""
+
+        body = read_proposal_body(proposal_path)
+
+        if action == "update":
+            target_path = find_wiki_page(wiki_dir, target_page)
+            if target_path is None:
+                continue  # page vanished between check and merge — skip
+            existing = target_path.read_text(encoding="utf-8")
+            if body and body not in existing:
+                target_path.write_text(
+                    existing.rstrip() + "\n\n" + body + "\n",
+                    encoding="utf-8",
+                )
+                patch_token_estimates(target_path)
+        else:
+            # create: place in cluster subdir (or root if no cluster assigned)
+            cluster_dir = wiki_dir / target_cluster if target_cluster else wiki_dir
+            cluster_dir.mkdir(parents=True, exist_ok=True)
+            target_path = cluster_dir / f"{target_page}.md"
+            if not target_path.exists() and body:
+                target_path.write_text(body + "\n", encoding="utf-8")
+                patch_token_estimates(target_path)
+
+        update_proposal_status(proposal_path, "merged")
+        merged.append(target_page)
+
+    return merged

@@ -66,6 +66,29 @@ class CommitService:
         async with self._lock:
             return await self._settle_locked(session, entries)
 
+    async def commit_direct(
+        self,
+        paths: list[str],
+        message: str,
+    ) -> str | None:
+        """Stage `paths` and commit with `message`, outside any session.
+
+        Acquires the shared commit lock so this never races with a concurrent
+        session settle. Returns the new commit SHA, or None if nothing staged.
+        """
+        async with self._lock:
+            for path in paths:
+                self._git("add", path)
+            status = self._git("status", "--porcelain", capture=True)
+            staged = [
+                line[3:] for line in status.splitlines()
+                if line[:2] in ("A ", "M ", "D ", "AM", "MM")
+            ]
+            if not staged:
+                return None
+            self._git("commit", "-q", "-m", message)
+            return self._git("rev-parse", "HEAD", capture=True).strip()
+
     async def _settle_locked(
         self,
         session: Session,

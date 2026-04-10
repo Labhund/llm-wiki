@@ -46,12 +46,22 @@ The boundary is *background vs interactive*, not *human vs machine*.
 - A long-running swarm of agents reading and writing the wiki collaboratively — supervised, because each agent identifies itself and the operator is accountable for the swarm.
 
 **What "unsupervised" means:**
-- Anything in the daemon's scheduler — librarian, adversary, auditor, compliance reviewer. These run on cron without a configuring human in the loop for any individual action. They are forbidden from writing body content.
+- Anything in the daemon's scheduler — librarian, adversary, auditor, compliance reviewer. These run on cron without a configuring human in the loop for any individual action. They are forbidden from *originating* body content.
 
 **Consequences:**
 - The daemon's three write routes (`page-create`, `page-update`, `page-append`) are MCP-only. A test enforces this mechanically by AST-walking background-worker code paths.
-- Background workers can still write metadata sidecars, file issues, post to talk pages, and insert invisible structural markers — but never body content.
+- Background workers can still write metadata sidecars, file issues, post to talk pages, and insert invisible structural markers — but never body content they originated themselves.
 - All MCP write tools require an `author` identifier. The daemon refuses writes without one. Self-asserted, not validated; accountability comes from git history, not from a registry.
+
+**Refinement: the boundary is on origination, not delivery.**
+
+A write is supervised if it was initiated by an identified author in a supervised session — regardless of when or by whom it is physically applied. A *proposal file* is the unit of that authority: it carries an explicit author, a specific target, and content that passed validation gates before being queued. A daemon worker that applies a proposal file is acting as courier, delivering an already-authorized write. A daemon worker that decides to modify a page on its own inference is acting as author. Those are different acts.
+
+Consequences of this refinement:
+- The auditor may auto-merge update proposals where all grounding scores meet threshold and wikilinks resolve — because those proposals were generated and attributed during a supervised ingest session, not by the auditor. The auditor commits as the *proposal's attributed author*, not as the auditor.
+- A proposal without a named originating author is anonymous body content from a daemon process. The auditor rejects it rather than applying it.
+- The librarian's refinements still do not qualify: continuous diffuse inference with no discrete proposal file, no named author, no defined target. Sidecar-only.
+- Any background worker seeking write access must produce discrete proposal files attributable to a supervised session. Role alone confers no authority.
 
 ---
 
@@ -225,3 +235,4 @@ A principle that has no consequences in the rest of the system is dead weight. A
 ## Changelog
 
 - **2026-04-08** — Initial document. Principles 1–12 distilled from the Phase 6 design conversation. Captures the load-bearing commitments behind the daemon architecture, the supervised/unsupervised split, the talk-page/issue visibility model, and the git-as-audit-trail decision. No prior version to reference.
+- **2026-04-10** — Principle 3 refined. Added the "origination vs delivery" clarification under the supervised/unsupervised definitions. Motivation: the ingest proposals pipeline design required the auditor to apply proposal files generated during supervised ingest sessions. The original bright line ("unsupervised processes never write body content") was accurate but underspecified — it didn't distinguish between a daemon worker generating content on its own inference vs. delivering content that a supervised process already generated and attributed. The refinement makes that distinction explicit and states its consequences: auditor may apply proposals with a named originating author; librarian refinements still cannot qualify (no discrete proposal, no named author). The constraint that prevents scope creep is the proposal file itself — without one, no delivery authority exists.
