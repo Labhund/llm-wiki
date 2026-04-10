@@ -295,3 +295,4 @@ async def test_synthesis_page_written_after_cited_query(tmp_path):
     assert "type: synthesis" in content
     assert "Boltz-2 uses a diffusion" in content
     assert "created_by: query" in content
+    assert 'query: "How does Boltz-2 work?"' in content

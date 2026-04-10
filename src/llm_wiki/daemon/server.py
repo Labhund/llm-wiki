@@ -1506,6 +1506,10 @@ class DaemonServer:
                 slug=slug,
                 query=question,
                 title=action.get("title", question),
+                # result.answer is the prose after the JSON action block (extracted by
+                # extract_prose_after_action in _finish). The action JSON's "content"
+                # field is intentionally not read — the LLM is instructed to emit the
+                # updated body as prose after the action object, not inside the JSON.
                 answer=result.answer,
                 sources=action.get("sources", [f"wiki/{c}.md" for c in result.citations]),
                 created_at=created_at,
@@ -1517,7 +1521,11 @@ class DaemonServer:
                 return
             page = self._vault.read_page(slug)
             if page is None:
-                return  # Page deleted since search — answer remains as-is
+                # The target page was deleted between search and serve. Falling back to
+                # create is not possible here — the engine discards prose for accept
+                # actions before we can check if the page still exists (answer is "").
+                # The caller gets an empty answer, which is the least-bad outcome.
+                return
             answer_sections = [s for s in page.sections if s.name == "answer"]
             resp["answer"] = answer_sections[0].content if answer_sections else page.raw_content
             resp["synthesis_cache_hit"] = slug
