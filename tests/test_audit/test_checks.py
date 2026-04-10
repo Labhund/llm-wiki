@@ -450,3 +450,79 @@ def test_find_inbox_staleness_skips_missing_status_frontmatter(tmp_path):
     (inbox_dir / "plan.md").write_text("# Plan\n\nNo frontmatter.\n")
     result = find_inbox_staleness(tmp_path)
     assert result.issues == []
+
+
+# ---------------------------------------------------------------------------
+# Proposal checks
+# ---------------------------------------------------------------------------
+
+from llm_wiki.ingest.proposals import Proposal, ProposalPassage, write_proposal
+from llm_wiki.ingest.page_writer import PageSection
+
+
+def _make_proposal(tmp_path, action="update", score=0.9) -> Path:
+    proposals_dir = tmp_path / "inbox" / "proposals"
+    p = Proposal(
+        source="raw/paper.pdf",
+        target_page="boltz-2",
+        action=action,
+        proposed_by="ingest",
+        created="2026-04-10T12:00:00",
+        extraction_method="pdf",
+        sections=[PageSection(name="overview", heading="Overview",
+                              content="[[boltz-2]] text [[raw/paper.pdf]].")],
+        passages=[ProposalPassage(id="p1", text="boltz-2 text", claim="text",
+                                  score=score, method="ngram", verifiable=True,
+                                  ocr_sourced=False)],
+    )
+    return write_proposal(proposals_dir, p, source_slug="paper")
+
+
+def test_find_pending_proposals_update_high_score_returns_merge_ready_issue(tmp_path):
+    """Clean update with high score → merge-ready issue (no page mutation in check)."""
+    from llm_wiki.audit.checks import find_pending_proposals
+    wiki_dir = tmp_path / "wiki"
+    wiki_dir.mkdir(parents=True)
+    target = wiki_dir / "boltz-2.md"
+    target.write_text("---\ntitle: Boltz-2\n---\n\nExisting content.\n")
+    _make_proposal(tmp_path, action="update", score=0.9)
+    result = find_pending_proposals(tmp_path, wiki_dir=wiki_dir)
+    assert result.check == "pending-proposals"
+    # Check is read-only — returns a merge-ready issue, does NOT mutate the page
+    assert any(i.type == "merge-ready" for i in result.issues)
+    assert target.read_text() == "---\ntitle: Boltz-2\n---\n\nExisting content.\n"
+
+
+def test_execute_proposal_merges_applies_high_score_updates(tmp_path):
+    """execute_proposal_merges() applies merge-ready proposals to target pages."""
+    from llm_wiki.audit.checks import execute_proposal_merges
+    wiki_dir = tmp_path / "wiki"
+    wiki_dir.mkdir(parents=True)
+    target = wiki_dir / "boltz-2.md"
+    target.write_text("---\ntitle: Boltz-2\n---\n\nExisting content.\n")
+    _make_proposal(tmp_path, action="update", score=0.9)
+    execute_proposal_merges(tmp_path, wiki_dir=wiki_dir)
+    merged = target.read_text()
+    assert "overview" in merged.lower() or "Overview" in merged
+
+
+def test_find_pending_proposals_create_always_issues(tmp_path):
+    """action=create always raises an issue for human review."""
+    from llm_wiki.audit.checks import find_pending_proposals
+    wiki_dir = tmp_path / "wiki"
+    wiki_dir.mkdir(parents=True)
+    _make_proposal(tmp_path, action="create", score=0.95)
+    result = find_pending_proposals(tmp_path, wiki_dir=wiki_dir)
+    assert any(i.type == "proposal" for i in result.issues)
+
+
+def test_find_pending_proposals_low_score_issues(tmp_path):
+    """action=update with low verification score raises an issue."""
+    from llm_wiki.audit.checks import find_pending_proposals
+    wiki_dir = tmp_path / "wiki"
+    wiki_dir.mkdir(parents=True)
+    target = wiki_dir / "boltz-2.md"
+    target.write_text("---\ntitle: Boltz-2\n---\n\nContent.\n")
+    _make_proposal(tmp_path, action="update", score=0.3)
+    result = find_pending_proposals(tmp_path, wiki_dir=wiki_dir)
+    assert any(i.type == "proposal-verification-failed" for i in result.issues)

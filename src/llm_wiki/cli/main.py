@@ -400,6 +400,7 @@ def ingest(source_path: Path, vault_path: Path, dry_run: bool) -> None:
         "author": "cli",
         "connection_id": _uuid.uuid4().hex,
         "dry_run": dry_run,
+        "proposal_mode": True,
     }
 
     if dry_run:
@@ -598,6 +599,63 @@ def maintenance_status(vault_path: Path) -> None:
         click.echo(
             f"{worker['name']:<16} {interval:<10} {failures:<10} {last}{reachable_str}"
         )
+
+
+@cli.group()
+def proposals() -> None:
+    """List, approve, or reject ingest proposals."""
+    pass
+
+
+@proposals.command("list")
+@click.option(
+    "--vault", "vault_path", type=click.Path(exists=True, path_type=Path),
+    default=_default_vault_path, help="Path to vault",
+)
+def proposals_list(vault_path: Path) -> None:
+    """List pending ingest proposals."""
+    client = _get_client(vault_path)
+    resp = client.request({"type": "proposals-list"})
+    if resp["status"] != "ok":
+        raise click.ClickException(resp.get("message", "Failed"))
+    items = resp.get("proposals", [])
+    if not items:
+        click.echo("No pending proposals.")
+        return
+    click.echo(f"{len(items)} pending proposal(s):\n")
+    for item in items:
+        click.echo(f"  {item['path']}")
+        click.echo(f"    target: {item['target_page']} | action: {item['action']} | source: {item['source']}")
+
+
+@proposals.command("approve")
+@click.argument("proposal_path")
+@click.option(
+    "--vault", "vault_path", type=click.Path(exists=True, path_type=Path),
+    default=_default_vault_path, help="Path to vault",
+)
+def proposals_approve(proposal_path: str, vault_path: Path) -> None:
+    """Approve and merge an ingest proposal."""
+    client = _get_client(vault_path)
+    resp = client.request({"type": "proposals-approve", "path": proposal_path})
+    if resp["status"] != "ok":
+        raise click.ClickException(resp.get("message", "Approve failed"))
+    click.echo(f"Approved and merged: {proposal_path}")
+
+
+@proposals.command("reject")
+@click.argument("proposal_path")
+@click.option(
+    "--vault", "vault_path", type=click.Path(exists=True, path_type=Path),
+    default=_default_vault_path, help="Path to vault",
+)
+def proposals_reject(proposal_path: str, vault_path: Path) -> None:
+    """Reject an ingest proposal."""
+    client = _get_client(vault_path)
+    resp = client.request({"type": "proposals-reject", "path": proposal_path})
+    if resp["status"] != "ok":
+        raise click.ClickException(resp.get("message", "Reject failed"))
+    click.echo(f"Rejected: {proposal_path}")
 
 
 @cli.group()

@@ -4,11 +4,13 @@ from dataclasses import dataclass, field
 from pathlib import Path
 
 from llm_wiki.audit.checks import (
+    execute_proposal_merges,
     find_broken_citations,
     find_broken_wikilinks,
     find_inbox_staleness,
     find_missing_markers,
     find_orphans,
+    find_pending_proposals,
     find_source_gaps,
     find_stale_resonance,
     find_synthesis_without_resonance,
@@ -66,6 +68,11 @@ class Auditor:
             find_stale_resonance(self._vault_root, self._config),
             find_synthesis_without_resonance(self._vault_root, self._config),
             find_inbox_staleness(self._vault_root),
+            find_pending_proposals(
+                self._vault_root,
+                auto_merge_threshold=self._config.ingest.grounding_auto_merge,
+                flag_threshold=self._config.ingest.grounding_flag,
+            ),
         ]
 
         by_check: dict[str, int] = {}

@@ -382,3 +382,45 @@ def test_ingest_auto_copies_source_outside_vault(daemon_for_cli, monkeypatch, tm
     )
     # And the file should actually be there
     assert (vault_path / "raw" / "outside-paper.pdf").exists()
+
+
+def test_cli_ingest_sends_proposal_mode(daemon_for_cli, monkeypatch):
+    """The ingest command sends proposal_mode=True in its request."""
+    from llm_wiki.daemon.client import DaemonClient
+
+    sent_msgs: list[dict] = []
+
+    def fake_stream(self, msg, on_frame):
+        sent_msgs.append(msg)
+        on_frame({"type": "done", "pages_created": 0, "pages_updated": 0, "warnings": []})
+
+    monkeypatch.setattr(DaemonClient, "stream_ingest_sync", fake_stream)
+
+    vault_path = daemon_for_cli
+    source = vault_path / "raw" / "paper.pdf"
+    source.parent.mkdir(exist_ok=True)
+    source.write_bytes(b"%PDF")
+
+    runner = CliRunner()
+    result = runner.invoke(cli, ["ingest", str(source), "--vault", str(vault_path)])
+    assert result.exit_code == 0, result.output
+    assert sent_msgs, "stream_ingest_sync was not called"
+    assert sent_msgs[0].get("proposal_mode") is True
+
+
+def test_proposals_list_shows_pending(daemon_for_cli, monkeypatch):
+    """proposals list outputs pending proposal info."""
+    from llm_wiki.daemon.client import DaemonClient
+
+    monkeypatch.setattr(DaemonClient, "request", lambda self, msg: {
+        "status": "ok",
+        "proposals": [{"path": "inbox/proposals/2026-04-10-paper-boltz-2.md",
+                       "target_page": "boltz-2", "action": "update", "status": "pending",
+                       "source": "raw/paper.pdf"}],
+    })
+
+    vault_path = daemon_for_cli
+    runner = CliRunner()
+    result = runner.invoke(cli, ["proposals", "list", "--vault", str(vault_path)])
+    assert result.exit_code == 0, result.output
+    assert "boltz-2" in result.output

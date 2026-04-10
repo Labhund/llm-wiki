@@ -240,15 +240,26 @@ class DaemonServer:
 
         async def run_auditor() -> None:
             from llm_wiki.audit.auditor import Auditor
+            from llm_wiki.audit.checks import execute_proposal_merges
             from llm_wiki.issues.queue import IssueQueue
             wiki_dir = self._vault_root / self._config.vault.wiki_dir.rstrip("/")
             queue = IssueQueue(wiki_dir)
-            auditor = Auditor(self._vault, queue, self._vault_root)
+            auditor = Auditor(self._vault, queue, self._vault_root, self._config)
             report = auditor.audit()
             logger.info(
                 "Auditor: %d new issues, %d existing",
                 len(report.new_issue_ids), len(report.existing_issue_ids),
             )
+            # Apply merge-ready proposals after audit — write phase only
+            try:
+                merged = execute_proposal_merges(
+                    self._vault_root,
+                    auto_merge_threshold=self._config.ingest.grounding_auto_merge,
+                )
+                if merged:
+                    logger.info("Auto-merged %d proposal(s): %s", len(merged), merged)
+            except Exception:
+                logger.exception("execute_proposal_merges failed — audit result unaffected")
 
         async def run_librarian() -> None:
             from llm_wiki.issues.queue import IssueQueue
@@ -504,6 +515,12 @@ class DaemonServer:
                 return await self._handle_inbox_write(request)
             case "inbox-list":
                 return await self._handle_inbox_list(request)
+            case "proposals-list":
+                return self._handle_proposals_list()
+            case "proposals-approve":
+                return self._handle_proposals_approve(request)
+            case "proposals-reject":
+                return self._handle_proposals_reject(request)
             case _:
                 return {"status": "error", "message": f"Unknown request type: {req_type}"}
 
@@ -721,6 +738,65 @@ class DaemonServer:
                 "unchecked_claims": count_unchecked_claims(content),
             })
         return {"status": "ok", "plans": plans}
+
+    def _handle_proposals_list(self) -> dict:
+        from llm_wiki.ingest.proposals import list_pending_proposals, read_proposal_meta
+        proposals_dir = self._vault_root / "inbox" / "proposals"
+        items = []
+        for p in list_pending_proposals(proposals_dir):
+            meta = read_proposal_meta(p)
+            items.append({
+                "path": str(p.relative_to(self._vault_root)),
+                "target_page": meta.get("target_page", ""),
+                "action": meta.get("action", ""),
+                "status": meta.get("status", ""),
+                "source": meta.get("source", ""),
+            })
+        return {"status": "ok", "proposals": items}
+
+    def _handle_proposals_approve(self, request: dict) -> dict:
+        if "path" not in request:
+            return {"status": "error", "message": "Missing required field: path"}
+        from llm_wiki.ingest.proposals import (
+            read_proposal_meta, read_proposal_body, update_proposal_status, find_wiki_page,
+        )
+        from llm_wiki.ingest.page_writer import patch_token_estimates
+        import yaml as _yaml
+        p = self._vault_root / request["path"]
+        if not p.exists():
+            return {"status": "error", "message": f"Proposal not found: {request['path']}"}
+        meta = read_proposal_meta(p)
+        wiki_dir = self._vault_root / self._config.vault.wiki_dir.rstrip("/")
+        target_page = meta["target_page"]
+        target_cluster = meta.get("target_cluster") or ""
+        body = read_proposal_body(p)
+        target = find_wiki_page(wiki_dir, target_page)
+        if target is not None and body:
+            existing = target.read_text(encoding="utf-8")
+            if body not in existing:
+                target.write_text(existing.rstrip() + "\n\n" + body + "\n", encoding="utf-8")
+                patch_token_estimates(target)
+        elif target is None and meta.get("action") == "create":
+            cluster_dir = wiki_dir / target_cluster if target_cluster else wiki_dir
+            cluster_dir.mkdir(parents=True, exist_ok=True)
+            new_path = cluster_dir / f"{target_page}.md"
+            fm = {"title": meta["target_page"], "source": f"[[{meta['source']}]]",
+                  "created_by": "ingest"}
+            fm_text = "---\n" + _yaml.dump(fm, default_flow_style=False).strip() + "\n---\n\n"
+            new_path.write_text(fm_text + body + "\n", encoding="utf-8")
+            patch_token_estimates(new_path)
+        update_proposal_status(p, "merged")
+        return {"status": "ok", "merged": str(request["path"])}
+
+    def _handle_proposals_reject(self, request: dict) -> dict:
+        if "path" not in request:
+            return {"status": "error", "message": "Missing required field: path"}
+        from llm_wiki.ingest.proposals import update_proposal_status
+        p = self._vault_root / request["path"]
+        if not p.exists():
+            return {"status": "error", "message": f"Proposal not found: {request['path']}"}
+        update_proposal_status(p, "rejected")
+        return {"status": "ok", "rejected": str(request["path"])}
 
     async def _handle_page_create(self, request: dict) -> dict:
         if self._page_write_service is None:
@@ -1173,6 +1249,8 @@ class DaemonServer:
         }
 
     async def _handle_ingest(self, request: dict) -> dict:
+        if request.get("proposal_mode"):
+            return await self._handle_ingest_proposals(request)
         if "source_path" not in request:
             return {"status": "error", "message": "Missing required field: source_path"}
         if "connection_id" not in request:
@@ -1277,6 +1355,51 @@ class DaemonServer:
         if warnings:
             response["warnings"] = warnings
         return response
+
+    async def _handle_ingest_proposals(self, request: dict) -> dict:
+        """Route ingest to the proposal pipeline (proposal_mode=True)."""
+        if "source_path" not in request:
+            return {"status": "error", "message": "Missing required field: source_path"}
+
+        from llm_wiki.ingest.agent import IngestAgent
+        from llm_wiki.traverse.llm_client import LLMClient
+        from llm_wiki.vault import Vault
+
+        source_path = Path(request["source_path"])
+        author = request.get("author", "cli")
+        proposals_dir = self._vault_root / "inbox" / "proposals"
+
+        backend = self._config.llm.resolve("ingest")
+        llm = LLMClient(
+            self._llm_queue,
+            model=backend.model,
+            api_base=backend.api_base,
+            api_key=backend.api_key,
+        )
+
+        vault = Vault.scan(self._vault_root, self._config)
+        manifest_lines = [
+            f"{name}  '{entry.title}'"
+            for name, entry in vault.manifest_entries().items()
+        ]
+
+        agent = IngestAgent(llm, self._config)
+        result = await agent.ingest_as_proposals(
+            source_path=source_path,
+            vault_root=self._vault_root,
+            proposals_dir=proposals_dir,
+            manifest_lines=manifest_lines,
+            author=author,
+        )
+
+        return {
+            "status": "ok",
+            "concepts_found": result.concepts_found,
+            "created": result.pages_created,
+            "updated": result.pages_updated,
+            "extraction_warning": result.extraction_warning,
+            "proposal_mode": True,
+        }
 
     async def _handle_ingest_stream(
         self,
