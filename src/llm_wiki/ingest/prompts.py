@@ -402,11 +402,21 @@ def compose_deep_read_synthesis_messages(
     source_ref: str,
     manifest_lines: list[str],
     batch_concepts: "list[ConceptPlan]",
-) -> list[dict[str, str]]:
-    """Build messages for deep-read synthesis — full paper context, no pre-collected passages."""
+    *,
+    cache_control: bool = False,
+) -> list[dict]:
+    """Build messages for deep-read synthesis — full paper context, no pre-collected passages.
+
+    When ``cache_control=True`` (Anthropic models), the system prompt and paper
+    context block are marked with ``cache_control: {type: ephemeral}`` so that
+    Anthropic's prompt-caching API reuses the KV cache across all per-concept
+    calls in the same batch.  For OpenAI-compatible providers (Step, OpenRouter,
+    etc.) auto-prefix-caching kicks in automatically because the paper context
+    is placed first in the user message.
+    """
     manifest = "\n".join(manifest_lines) if manifest_lines else "(empty wiki)"
     batch_slugs = "\n".join(f"- {c.name}: {c.title}" for c in batch_concepts)
-    system = (
+    system_text = (
         _DEEP_READ_SYNTHESIS_SYSTEM
         .replace("<<<SOURCE_REF>>>", source_ref)
         .replace("<<<MANIFEST>>>", manifest)
@@ -417,19 +427,41 @@ def compose_deep_read_synthesis_messages(
         if concept.section_names
         else ""
     )
-    # Paper context FIRST so it forms a stable prefix across all per-concept
-    # synthesis calls in the same batch — this maximises KV-cache hits on
-    # OpenAI-compatible providers (automatic prefix caching) and is the correct
-    # structure for Anthropic cache_control markers too.
-    user = (
-        f"## Full Paper Context\n{paper_context}\n\n"
-        f"## Concept to write\n{concept.title} (`{concept.name}`)\n\n"
-        f"{section_hint}"
+    concept_block = (
+        f"## Concept to write\n{concept.title} (`{concept.name}`)\n\n{section_hint}"
     ).strip()
-    return [
-        {"role": "system", "content": system},
-        {"role": "user", "content": user},
-    ]
+
+    if cache_control:
+        # Anthropic explicit cache_control: multi-block content format.
+        # System and paper context are cacheable (constant across the batch);
+        # concept block is the variable tail that changes per call.
+        system_msg: dict = {
+            "role": "system",
+            "content": [
+                {"type": "text", "text": system_text, "cache_control": {"type": "ephemeral"}},
+            ],
+        }
+        user_msg: dict = {
+            "role": "user",
+            "content": [
+                {
+                    "type": "text",
+                    "text": f"## Full Paper Context\n{paper_context}\n\n",
+                    "cache_control": {"type": "ephemeral"},
+                },
+                {"type": "text", "text": concept_block},
+            ],
+        }
+    else:
+        # Plain string format — OpenAI-compatible providers auto-cache the
+        # stable paper-context prefix (must be ≥ 1024 tokens, identical across calls).
+        system_msg = {"role": "system", "content": system_text}
+        user_msg = {
+            "role": "user",
+            "content": f"## Full Paper Context\n{paper_context}\n\n{concept_block}",
+        }
+
+    return [system_msg, user_msg]
 
 
 def compose_overview_messages(

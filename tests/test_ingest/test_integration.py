@@ -17,6 +17,8 @@ from llm_wiki.traverse.llm_client import LLMResponse
 
 
 class MockLLMClient:
+    model = "mock/test"  # satisfies _is_anthropic_model check in agent
+
     def __init__(self, responses: list[str]) -> None:
         self._responses = list(responses)
         self._idx = 0

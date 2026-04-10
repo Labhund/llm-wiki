@@ -41,6 +41,7 @@ class LLMResponse:
     content: str
     input_tokens: int
     output_tokens: int
+    cached_tokens: int = 0   # tokens served from KV cache (0 if provider doesn't report)
 
     @property
     def tokens_used(self) -> int:
@@ -76,6 +77,10 @@ class LLMClient:
         self._timeout = timeout
         self._trace_fn = trace_fn
 
+    @property
+    def model(self) -> str:
+        return self._model
+
     async def complete(
         self,
         messages: list[dict[str, str]],
@@ -107,11 +112,20 @@ class LLMClient:
                     usage = response.usage
                     input_tokens = usage.prompt_tokens if usage else 0
                     output_tokens = usage.completion_tokens if usage else 0
+                    # cached_tokens: reported by OpenAI-compatible providers in
+                    # prompt_tokens_details.cached_tokens; Anthropic uses a
+                    # different field name but litellm normalises it.
+                    cached_tokens = 0
+                    if usage:
+                        details = getattr(usage, "prompt_tokens_details", None)
+                        if details:
+                            cached_tokens = getattr(details, "cached_tokens", 0) or 0
                     self._queue.record_tokens(input_tokens, output_tokens)
                     return LLMResponse(
                         content=content,
                         input_tokens=input_tokens,
                         output_tokens=output_tokens,
+                        cached_tokens=cached_tokens,
                     )
                 except asyncio.CancelledError:
                     raise
@@ -139,6 +153,7 @@ class LLMClient:
                     "response": resp.content,
                     "input_tokens": resp.input_tokens,
                     "output_tokens": resp.output_tokens,
+                    "cached_tokens": resp.cached_tokens,
                     "latency_s": round(time.monotonic() - t0, 3),
                 })
             except Exception:

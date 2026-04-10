@@ -502,8 +502,10 @@ def query(question: str, vault_path: Path, budget: int | None, trace: bool) -> N
             model = ev.get("model", "?").split("/")[-1]
             tin = ev.get("input_tokens", 0)
             tout = ev.get("output_tokens", 0)
+            cached = ev.get("cached_tokens", 0)
             latency = ev.get("latency_s", 0)
-            click.echo(f"  {label}  [{model} | {tin:,}→{tout:,} tok | {latency}s]")
+            cache_info = f" | {cached:,} cached" if cached else ""
+            click.echo(f"  {label}  [{model} | {tin:,}→{tout:,} tok{cache_info} | {latency}s]")
 
         import datetime as _dt
         import tempfile as _tmpfile
@@ -571,7 +573,11 @@ def _write_trace_file(trace_path: Path, source: Path, events: list[dict]) -> Non
         temp = ev.get("temperature", "?")
         tin = ev.get("input_tokens", 0)
         tout = ev.get("output_tokens", 0)
+        cached = ev.get("cached_tokens", 0)
         latency = ev.get("latency_s", 0)
+        token_str = f"{tin:,} in / {tout:,} out"
+        if cached:
+            token_str += f" / {cached:,} cached"
 
         lines += [
             "---",
@@ -582,7 +588,7 @@ def _write_trace_file(trace_path: Path, source: Path, events: list[dict]) -> Non
             f"|-------|-------|",
             f"| Model | `{model}` |",
             f"| Temperature | {temp} |",
-            f"| Tokens | {tin:,} in / {tout:,} out |",
+            f"| Tokens | {token_str} |",
             f"| Latency | {latency}s |",
             "",
         ]
@@ -707,11 +713,13 @@ def ingest(source_path: Path, vault_path: Path, dry_run: bool, trace: bool) -> N
             model = frame.get("model", "?")
             tin = frame.get("input_tokens", 0)
             tout = frame.get("output_tokens", 0)
+            cached = frame.get("cached_tokens", 0)
             latency = frame.get("latency_s", 0)
+            cache_info = f" ({cached:,} cached)" if cached else ""
             line = (
                 f"[TRACE] {label}  "
                 f"model={model.split('/')[-1]}  "
-                f"{tin:,}→{tout:,} tok  {latency}s"
+                f"{tin:,}→{tout:,} tok{cache_info}  {latency}s"
             )
             if spinner:
                 spinner.print_line(line)
