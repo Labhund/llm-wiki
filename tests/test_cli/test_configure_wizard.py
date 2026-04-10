@@ -75,3 +75,44 @@ def test_patch_legacy_skill_idempotent(tmp_path):
     skill.write_text(f"---\nname: llm-wiki\n---\n\n{_MCP_BANNER}\n# Body\n")
     patched = _patch_legacy_skill(skill)
     assert patched is False  # already patched
+
+
+def test_install_skills_to_hermes(tmp_path):
+    """Skills are copied and manifest is updated."""
+    from llm_wiki.cli.configure import _install_skills_to_hermes
+    hermes_home = tmp_path / ".hermes"
+    (hermes_home / "skills").mkdir(parents=True)
+    count = _install_skills_to_hermes(hermes_home)
+    assert count > 0
+    # At minimum the index skill should be installed
+    assert (hermes_home / "skills" / "llm-wiki" / "SKILL.md").exists()
+    assert (hermes_home / "skills" / ".bundled_manifest").exists()
+
+
+def test_patch_legacy_skills_in_hermes(tmp_path):
+    """Legacy llm-wiki* skills in research/ get the MCP banner."""
+    from llm_wiki.cli.configure import _patch_legacy_skills, _MCP_BANNER
+    hermes_home = tmp_path / ".hermes"
+    legacy_dir = hermes_home / "skills" / "research" / "llm-wiki-legacy"
+    legacy_dir.mkdir(parents=True)
+    skill_file = legacy_dir / "SKILL.md"
+    skill_file.write_text("---\nname: llm-wiki-legacy\n---\n\n# Old skill\n")
+    patched = _patch_legacy_skills(hermes_home)
+    assert patched == 1
+    assert _MCP_BANNER in skill_file.read_text()
+
+
+def test_merge_hermes_mcp_config(tmp_path):
+    """MCP server block is merged into Hermes config without losing other keys."""
+    import yaml
+    from llm_wiki.cli.configure import _merge_hermes_mcp
+    config_path = tmp_path / "config.yaml"
+    config_path.write_text("agent:\n  max_turns: 90\nmcp_servers:\n  other-tool:\n    command: foo\n")
+    vault_path = Path("/home/user/wiki")
+    _merge_hermes_mcp(config_path, vault_path)
+    content = yaml.safe_load(config_path.read_text())
+    assert "llm-wiki" in content["mcp_servers"]
+    assert content["mcp_servers"]["llm-wiki"]["command"] == "llm-wiki"
+    assert content["mcp_servers"]["llm-wiki"]["env"]["LLM_WIKI_VAULT"] == str(vault_path)
+    assert "other-tool" in content["mcp_servers"]   # existing entry preserved
+    assert content["agent"]["max_turns"] == 90       # unrelated key preserved

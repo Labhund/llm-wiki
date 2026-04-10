@@ -95,6 +95,137 @@ def _patch_legacy_skill(skill_path: Path) -> bool:
     return True
 
 
+def _install_skills_to_hermes(hermes_home: Path) -> int:
+    """Copy all bundled skills to hermes_home/skills/. Returns count installed."""
+    src_root = _skills_source()
+    manifest_path = hermes_home / "skills" / ".bundled_manifest"
+    count = 0
+    for md_path in sorted(src_root.rglob("*.md")):
+        name = _parse_skill_name(md_path)
+        if not name:
+            continue
+        dest = _skill_dest(name, hermes_home)
+        dest.parent.mkdir(parents=True, exist_ok=True)
+        content = md_path.read_bytes()
+        dest.write_bytes(content)
+        _update_manifest(manifest_path, name, content)
+        count += 1
+    return count
+
+
+def _patch_legacy_skills(hermes_home: Path) -> int:
+    """Patch all llm-wiki* skills in hermes_home/skills/research/ with MCP banner.
+    Returns count of skills patched (0 if all already patched)."""
+    research_dir = hermes_home / "skills" / "research"
+    if not research_dir.is_dir():
+        return 0
+    patched = 0
+    for skill_dir in research_dir.iterdir():
+        if not skill_dir.name.startswith("llm-wiki"):
+            continue
+        skill_file = skill_dir / "SKILL.md"
+        if skill_file.exists() and _patch_legacy_skill(skill_file):
+            patched += 1
+    return patched
+
+
+def _merge_hermes_mcp(config_path: Path, vault_path: Path) -> None:
+    """Merge llm-wiki MCP server entry into Hermes config.yaml."""
+    with open(config_path) as f:
+        config = yaml.safe_load(f) or {}
+    config.setdefault("mcp_servers", {})["llm-wiki"] = {
+        "command": "llm-wiki",
+        "args": ["mcp"],
+        "env": {"LLM_WIKI_VAULT": str(vault_path)},
+        "timeout": 120,
+        "connect_timeout": 30,
+    }
+    with open(config_path, "w") as f:
+        yaml.dump(config, f, default_flow_style=False, allow_unicode=True, sort_keys=False)
+
+
+def _setup_hermes() -> dict[str, Any] | None:
+    """Interactive Hermes integration setup. Returns result dict or None on abort."""
+    import os
+    # ── Detect Hermes home ────────────────────────────────────────────────────
+    default_hermes = Path(os.environ.get("HERMES_HOME", str(Path.home() / ".hermes")))
+    hermes_home_str = _prompt("Hermes home directory", str(default_hermes))
+    hermes_home = Path(hermes_home_str).expanduser()
+    if not hermes_home.is_dir():
+        _err(f"Directory not found: {hermes_home}")
+        _info("Is Hermes installed? Check https://github.com/NousResearch/hermes-agent")
+        return None
+
+    # ── Vault path ────────────────────────────────────────────────────────────
+    env_vault = os.environ.get("LLM_WIKI_VAULT", "")
+    if env_vault:
+        default_vault = env_vault
+        _info("  [from $LLM_WIKI_VAULT — override if stale]")
+    else:
+        default_vault = str(Path.home() / "wiki")
+    vault_str = _prompt("Vault path", default_vault)
+    vault_path = Path(vault_str).expanduser()
+
+    # ── Vault initialisation ──────────────────────────────────────────────────
+    vault_created = False
+    if not vault_path.exists():
+        _info(f"Creating vault at {vault_path}…")
+        for sub in ("raw", "wiki", "schema", "inbox"):
+            (vault_path / sub).mkdir(parents=True, exist_ok=True)
+        vault_created = True
+
+    if not (vault_path / "raw").is_dir():
+        for sub in ("raw", "wiki", "schema", "inbox"):
+            (vault_path / sub).mkdir(parents=True, exist_ok=True)
+        vault_created = True
+
+    if vault_created:
+        _info("Initialising vault index…")
+        from llm_wiki.vault import Vault
+        try:
+            Vault.scan(vault_path)
+            _ok("Vault initialised")
+        except Exception as e:
+            _warn(f"Vault init warning: {e}")
+
+    # ── Skill installation ────────────────────────────────────────────────────
+    _info("Installing companion skills…")
+    try:
+        count = _install_skills_to_hermes(hermes_home)
+        _ok(f"{count} skills installed")
+    except RuntimeError as e:
+        _err(str(e))
+        return None
+
+    # ── Legacy skill patching ─────────────────────────────────────────────────
+    patched = _patch_legacy_skills(hermes_home)
+    if patched:
+        _ok(f"{patched} legacy skill(s) patched with MCP routing banner")
+
+    # ── MCP registration ──────────────────────────────────────────────────────
+    hermes_config = hermes_home / "config.yaml"
+    if hermes_config.exists():
+        _merge_hermes_mcp(hermes_config, vault_path)
+        _ok("MCP server registered in Hermes config")
+    else:
+        _warn("Hermes config.yaml not found — skipping MCP registration")
+        _info(f"Add manually under mcp_servers: in {hermes_config}")
+
+    # ── Config check ──────────────────────────────────────────────────────────
+    wiki_config = vault_path / "schema" / "config.yaml"
+    config_missing = not wiki_config.exists() or wiki_config.stat().st_size == 0
+
+    _ok("Hermes integration complete")
+    _info("Restart Hermes to load the new skills.")
+
+    return {
+        "framework": "hermes",
+        "vault_path": vault_path,
+        "skills_installed": count,
+        "config_missing": config_missing,
+    }
+
+
 # ── ANSI colors ───────────────────────────────────────────────────────────────
 
 class _C:
