@@ -73,26 +73,37 @@ Reads frames in a loop until `type == "done"`, yielding each. A sync wrapper `st
 
 ### CLI
 
+All output goes to **stdout** so the stream is pipeable and grepable. The spinner is a local TTY concern rendered in-place on the same line — it does not emit its own output lines and is suppressed when stdout is not a TTY.
+
 The `ingest` command (non-dry-run):
 
 1. Adds `"stream": True` to the request
-2. Enters a frame loop:
-   - `progress / extracting` → start spinner (`⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏`) on stderr
-   - `progress / concepts_found` → update spinner label
-   - `progress / concept_done` → print `  ✓ <name>  (<action>)` and advance spinner
-   - `done` → stop spinner, print summary
-3. Spinner output to stderr; concept lines and summary to stdout
+2. Enters a frame loop, printing a line per frame:
+   - `progress / extracting` → start TTY spinner, no output line
+   - `progress / concepts_found` → `[PROGRESS] concepts_found: 8`
+   - `progress / concept_done` → `[DONE] boltz-diffusion-model (created)`
+   - `done` → `[SUMMARY] 7 created, 1 updated`
+3. When stdout is a TTY, a braille spinner (`⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏`) runs in-place between lines; when piped, output is plain line-per-event with no escape codes.
 
-Example output:
+Example piped output:
 
 ```
-⠸  Found 8 concepts — writing pages...
-  ✓ boltz-diffusion-model        (created)
-  ✓ structure-prediction         (updated)
-  ✓ se3-equivariant-networks     (created)
-  ...
-Done — 7 created, 1 updated
+[PROGRESS] concepts_found: 8
+[DONE] boltz-diffusion-model (created)
+[DONE] structure-prediction (updated)
+[DONE] se3-equivariant-networks (created)
+[SUMMARY] 7 created, 1 updated
 ```
+
+### Error handling mid-stream
+
+If a concept write fails after streaming has started (i.e. after at least one `concept_done` frame has been sent), the daemon sends an error frame and closes the connection:
+
+```json
+{"type": "error", "status": "error", "message": "...", "concepts_written": 3}
+```
+
+The daemon does **not** continue writing remaining concepts after a failure — partial states are confusing and the user should re-run. The CLI prints the error and exits non-zero. `concepts_written` is included so the user knows which concepts landed before the failure.
 
 ## Feature B: Lightweight Dry-Run
 
