@@ -46,6 +46,28 @@ Every supervised write is a git commit attributed to the writing agent via `Agen
 
 Open the vault in Obsidian and browse it normally. Connect an agent via MCP and let it navigate the same files. No impedance mismatch, no sync step, no separate representation.
 
+### Cited answers, honest gaps
+
+Queries answer from the wiki, not from model training knowledge. Every claim cites a page:
+
+```
+$ llm-wiki query "boltz"
+Boltz-2 is a component utilized within the structure prediction stage
+of the ProteinDJ pipeline [[protein-dj]].
+
+Its function is to "validate designs and predict binder-target
+interfaces" [[protein-dj#architecture]].
+
+**Missing Information:**
+The research notes do not provide specific technical details regarding
+boltz-2, such as the type of model it employs or its specific input
+and output formats.
+
+Citations: protein-dj
+```
+
+The "Missing Information" section is a feature: if the wiki doesn't have a detail, the answer says so rather than hallucinating from training. The adversary will eventually sample that gap, fetch the source, and fill it in — making the gap visible is what triggers that process.
+
 ### Talk pages for the uncitable
 
 Contradictions, half-formed connections, and ideas without sources live on talk pages alongside the pages they concern — visible to the agent, separate from sourced content. First-class path, not a consolation.
