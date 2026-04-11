@@ -55,7 +55,10 @@ def write_page(
     """
     if Path(concept_name).name != concept_name or concept_name.startswith("."):
         raise ValueError(f"Invalid concept slug: {concept_name!r}")
-    page_path = wiki_dir / f"{concept_name}.md"
+    if cluster:
+        page_path = wiki_dir / cluster / f"{concept_name}.md"
+    else:
+        page_path = wiki_dir / f"{concept_name}.md"
 
     if not page_path.exists():
         return _create_page(page_path, title, sections, source_ref,
@@ -149,6 +152,40 @@ _SECTION_MARKER_RE = re.compile(
     re.MULTILINE,
 )
 
+# Matches bare [[raw/file.pdf]] but NOT [[raw/file.pdf|1]] or [[raw/file.pdf|display]]
+_BARE_RAW_CITATION_RE = re.compile(r"\[\[(raw/[^|\]]+?)\]\]")
+
+
+def _renumber_citations(text: str) -> str:
+    """Renumber bare [[raw/...]] citations in the body to [[raw/...|N]].
+
+    Only touches citations with no pipe: [[raw/file.pdf]] -> [[raw/file.pdf|N]].
+    Already-numbered [[raw/file.pdf|3]] and aliased [[raw/file.pdf|display]] are untouched.
+    Frontmatter (between --- markers) is untouched.
+    N increments per source path independently.
+    """
+    if text.startswith("---\n"):
+        try:
+            fm_end = text.index("\n---", 4)
+        except ValueError:
+            return text
+        fm_end += 4
+        frontmatter = text[:fm_end]
+        body = text[fm_end:]
+    else:
+        frontmatter = ""
+        body = text
+
+    counters: dict[str, int] = {}
+    def _replace(m):
+        source = m.group(1)
+        n = counters.get(source, 1)
+        counters[source] = n + 1
+        return f"[[{source}|{n}]]"
+
+    new_body = _BARE_RAW_CITATION_RE.sub(_replace, body)
+    return frontmatter + new_body
+
 
 def patch_token_estimates(path: Path) -> None:
     """Rewrite %% section: name %% markers to include token counts.
@@ -181,7 +218,10 @@ def patch_token_estimates(path: Path) -> None:
         segments.append((current_marker, current_lines))
 
     if not segments:
-        return  # No section markers — nothing to patch
+        new_text = _renumber_citations(text)
+        if new_text != text:
+            path.write_text(new_text, encoding="utf-8")
+        return
 
     # Identify the header (everything before the first marker)
     first_marker_line = None

@@ -50,79 +50,86 @@ def _parse_frontmatter(text: str) -> dict:
 # _create_page / write_page — frontmatter completeness
 # ---------------------------------------------------------------------------
 
+def _page_path(wiki_dir: Path, cluster: str = "", slug: str = "pca") -> Path:
+    """Return the expected page path accounting for cluster subdirectory."""
+    if cluster:
+        return wiki_dir / cluster / f"{slug}.md"
+    return wiki_dir / f"{slug}.md"
+
+
 class TestCreatePageFrontmatter:
     """write_page (new page) must write all required frontmatter fields."""
 
     def test_title_present(self, wiki_dir: Path):
         write_page(wiki_dir, "pca", "PCA", _sections(), "raw/paper.pdf",
                    cluster="ml-methods", summary="PCA reduces dimensionality by projecting data.")
-        fm = _parse_frontmatter((wiki_dir / "pca.md").read_text())
+        fm = _parse_frontmatter(_page_path(wiki_dir, "ml-methods").read_text())
         assert fm["title"] == "PCA"
 
     def test_created_is_today(self, wiki_dir: Path):
         write_page(wiki_dir, "pca", "PCA", _sections(), "raw/paper.pdf",
                    cluster="ml-methods", summary="PCA reduces dimensionality.")
-        fm = _parse_frontmatter((wiki_dir / "pca.md").read_text())
+        fm = _parse_frontmatter(_page_path(wiki_dir, "ml-methods").read_text())
         assert fm["created"] == datetime.date.today().isoformat()
 
     def test_updated_equals_created_for_new_page(self, wiki_dir: Path):
         write_page(wiki_dir, "pca", "PCA", _sections(), "raw/paper.pdf",
                    cluster="ml-methods", summary="PCA reduces dimensionality.")
-        fm = _parse_frontmatter((wiki_dir / "pca.md").read_text())
+        fm = _parse_frontmatter(_page_path(wiki_dir, "ml-methods").read_text())
         assert fm["updated"] == fm["created"]
 
     def test_type_is_concept(self, wiki_dir: Path):
         write_page(wiki_dir, "pca", "PCA", _sections(), "raw/paper.pdf",
                    cluster="ml-methods", summary="PCA reduces dimensionality.")
-        fm = _parse_frontmatter((wiki_dir / "pca.md").read_text())
+        fm = _parse_frontmatter(_page_path(wiki_dir, "ml-methods").read_text())
         assert fm["type"] == "concept"
 
     def test_status_is_stub(self, wiki_dir: Path):
         write_page(wiki_dir, "pca", "PCA", _sections(), "raw/paper.pdf",
                    cluster="ml-methods", summary="PCA reduces dimensionality.")
-        fm = _parse_frontmatter((wiki_dir / "pca.md").read_text())
+        fm = _parse_frontmatter(_page_path(wiki_dir, "ml-methods").read_text())
         assert fm["status"] == "stub"
 
     def test_ingested_equals_created(self, wiki_dir: Path):
         write_page(wiki_dir, "pca", "PCA", _sections(), "raw/paper.pdf",
                    cluster="ml-methods", summary="PCA reduces dimensionality.")
-        fm = _parse_frontmatter((wiki_dir / "pca.md").read_text())
+        fm = _parse_frontmatter(_page_path(wiki_dir, "ml-methods").read_text())
         assert fm["ingested"] == fm["created"]
 
     def test_cluster_written(self, wiki_dir: Path):
         write_page(wiki_dir, "pca", "PCA", _sections(), "raw/paper.pdf",
                    cluster="structural-bio", summary="PCA reduces dimensionality.")
-        fm = _parse_frontmatter((wiki_dir / "pca.md").read_text())
+        fm = _parse_frontmatter(_page_path(wiki_dir, "structural-bio").read_text())
         assert fm["cluster"] == "structural-bio"
 
     def test_summary_written(self, wiki_dir: Path):
         write_page(wiki_dir, "pca", "PCA", _sections(), "raw/paper.pdf",
                    cluster="ml-methods", summary="PCA projects high-dimensional data to lower dimensions.")
-        fm = _parse_frontmatter((wiki_dir / "pca.md").read_text())
+        fm = _parse_frontmatter(_page_path(wiki_dir, "ml-methods").read_text())
         assert fm["summary"] == "PCA projects high-dimensional data to lower dimensions."
 
     def test_source_written(self, wiki_dir: Path):
         write_page(wiki_dir, "pca", "PCA", _sections(), "raw/paper.pdf",
                    cluster="ml-methods", summary="PCA reduces dimensionality.")
-        fm = _parse_frontmatter((wiki_dir / "pca.md").read_text())
+        fm = _parse_frontmatter(_page_path(wiki_dir, "ml-methods").read_text())
         assert fm["source"] == "[[raw/paper.pdf]]"
 
     def test_created_by_ingest(self, wiki_dir: Path):
         write_page(wiki_dir, "pca", "PCA", _sections(), "raw/paper.pdf",
                    cluster="ml-methods", summary="PCA reduces dimensionality.")
-        fm = _parse_frontmatter((wiki_dir / "pca.md").read_text())
+        fm = _parse_frontmatter(_page_path(wiki_dir, "ml-methods").read_text())
         assert fm["created_by"] == "ingest"
 
     def test_tags_is_empty_list(self, wiki_dir: Path):
         write_page(wiki_dir, "pca", "PCA", _sections(), "raw/paper.pdf",
                    cluster="ml-methods", summary="PCA reduces dimensionality.")
-        fm = _parse_frontmatter((wiki_dir / "pca.md").read_text())
+        fm = _parse_frontmatter(_page_path(wiki_dir, "ml-methods").read_text())
         assert fm["tags"] == []
 
     def test_all_required_fields_present(self, wiki_dir: Path):
         write_page(wiki_dir, "pca", "PCA", _sections(), "raw/paper.pdf",
                    cluster="ml-methods", summary="PCA reduces dimensionality.")
-        fm = _parse_frontmatter((wiki_dir / "pca.md").read_text())
+        fm = _parse_frontmatter(_page_path(wiki_dir, "ml-methods").read_text())
         required = ["title", "created", "updated", "type", "status", "ingested",
                     "cluster", "summary", "source", "created_by", "tags"]
         for field in required:
@@ -145,13 +152,15 @@ class TestCreatePageEdgeCases:
         """write_page without summary argument still produces valid frontmatter."""
         write_page(wiki_dir, "pca", "PCA", _sections(), "raw/paper.pdf",
                    cluster="ml-methods")
-        fm = _parse_frontmatter((wiki_dir / "pca.md").read_text())
+        fm = _parse_frontmatter(_page_path(wiki_dir, "ml-methods").read_text())
         assert "summary" in fm
 
     def test_update_path_unaffected(self, wiki_dir: Path):
         """Appending to an existing page still works (was_update=True)."""
-        # Create original
-        existing = wiki_dir / "pca.md"
+        # Create original in the cluster subdirectory
+        cluster_dir = wiki_dir / "ml-methods"
+        cluster_dir.mkdir(parents=True, exist_ok=True)
+        existing = cluster_dir / "pca.md"
         existing.write_text(
             "---\ntitle: PCA\nsource: '[[raw/orig.pdf]]'\ncreated_by: ingest\n---\n\n"
             "%% section: overview %%\n## Overview\n\nOriginal [[raw/orig.pdf]].\n"
@@ -176,7 +185,7 @@ class TestFrontmatterFieldOrder:
     def test_field_order(self, wiki_dir: Path):
         write_page(wiki_dir, "pca", "PCA", _sections(), "raw/paper.pdf",
                    cluster="ml-methods", summary="PCA reduces dimensionality.")
-        text = (wiki_dir / "pca.md").read_text()
+        text = _page_path(wiki_dir, "ml-methods").read_text()
         # Extract frontmatter block lines
         fm_end = text.index("\n---\n", 4)
         fm_block = text[4:fm_end]

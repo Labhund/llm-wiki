@@ -290,7 +290,10 @@ class IngestAgent:
         result: IngestResult,
     ) -> None:
         """Route a concept through the supervised write surface."""
-        page_path = wiki_dir / f"{concept.name}.md"
+        if concept.cluster:
+            page_path = wiki_dir / concept.cluster / f"{concept.name}.md"
+        else:
+            page_path = wiki_dir / f"{concept.name}.md"
         body = self._sections_to_body(sections)
         if not page_path.exists():
             wr = await service.create(
@@ -301,6 +304,7 @@ class IngestAgent:
                 connection_id=connection_id,
                 intent=f"ingest from {source_ref}",
                 force=True,  # ingest must not be blocked by near-match heuristics
+                cluster=concept.cluster,
             )
             if wr.status == "ok":
                 result.pages_created.append(concept.name)

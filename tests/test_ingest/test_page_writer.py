@@ -128,3 +128,93 @@ def test_write_page_creates_file_with_token_markers(wiki_dir):
     text = (wiki_dir / "boltz-2.md").read_text()
     import re
     assert re.search(r"%% section: overview, tokens: \d+ %%", text)
+
+
+def test_write_page_with_cluster_creates_subdirectory(wiki_dir: Path):
+    """write_page with cluster='structural-biology' creates wiki/structural-biology/boltz-2.md."""
+    sections = [PageSection(name="overview", heading="Overview", content="Boltz-2 is a model.")]
+    result = write_page(
+        wiki_dir, "boltz-2", "Boltz-2", sections, "raw/paper.pdf",
+        cluster="structural-biology",
+    )
+
+    expected_path = wiki_dir / "structural-biology" / "boltz-2.md"
+    assert result.path == expected_path
+    assert result.was_update is False
+    assert expected_path.exists()
+    text = expected_path.read_text()
+    assert text.startswith("---\n")
+    assert "title: Boltz-2" in text
+
+
+def test_write_page_without_cluster_writes_flat(wiki_dir: Path):
+    """write_page with no cluster writes wiki/boltz-2.md (existing behavior)."""
+    sections = [PageSection(name="overview", heading="Overview", content="Boltz-2 is a model.")]
+    result = write_page(
+        wiki_dir, "boltz-2", "Boltz-2", sections, "raw/paper.pdf",
+    )
+
+    expected_path = wiki_dir / "boltz-2.md"
+    assert result.path == expected_path
+    assert result.was_update is False
+    assert expected_path.exists()
+
+
+def test_patch_renumbers_bare_citations(tmp_path):
+    """Bare [[raw/...]] citations get renumbered to [[raw/...|N]]."""
+    from llm_wiki.ingest.page_writer import patch_token_estimates
+    page = tmp_path / "test.md"
+    page.write_text(
+        "---\ntitle: Test\n---\n\n"
+        "%% section: overview %%\n"
+        "## Overview\n\n"
+        "See [[raw/paper.pdf]] for details. Also [[raw/other.pdf]] mentions it.\n"
+        "And again [[raw/paper.pdf]] says more.\n",
+        encoding="utf-8",
+    )
+    patch_token_estimates(page)
+    text = page.read_text()
+    # paper.pdf should be numbered 1 and 2
+    assert "[[raw/paper.pdf|1]]" in text
+    assert "[[raw/paper.pdf|2]]" in text
+    # other.pdf should be numbered 1
+    assert "[[raw/other.pdf|1]]" in text
+    # No bare citations left in body
+    import re
+    # frontmatter may still have bare citations (source field), so check body only
+    fm_end = text.index("\n---", 4) + 4
+    body = text[fm_end:]
+    assert not re.search(r"\[\[raw/[^|\]]+?\]\]", body), f"Bare citations remain: {body}"
+
+
+def test_patch_already_numbered_idempotent(tmp_path):
+    """Already-numbered [[raw/...|N]] citations are left untouched."""
+    from llm_wiki.ingest.page_writer import patch_token_estimates
+    page = tmp_path / "test.md"
+    page.write_text(
+        "---\ntitle: Test\n---\n\n"
+        "%% section: overview %%\n"
+        "## Overview\n\n"
+        "See [[raw/paper.pdf|1]] and [[raw/paper.pdf|2]].\n",
+        encoding="utf-8",
+    )
+    patch_token_estimates(page)
+    text = page.read_text()
+    assert "[[raw/paper.pdf|1]]" in text
+    assert "[[raw/paper.pdf|2]]" in text
+
+
+def test_patch_preserves_wikilink_aliases(tmp_path):
+    """[[raw/paper.pdf|display text]] is not renumbered."""
+    from llm_wiki.ingest.page_writer import patch_token_estimates
+    page = tmp_path / "test.md"
+    page.write_text(
+        "---\ntitle: Test\n---\n\n"
+        "%% section: overview %%\n"
+        "## Overview\n\n"
+        "Check out [[raw/paper.pdf|the paper]] for details.\n",
+        encoding="utf-8",
+    )
+    patch_token_estimates(page)
+    text = page.read_text()
+    assert "[[raw/paper.pdf|the paper]]" in text
