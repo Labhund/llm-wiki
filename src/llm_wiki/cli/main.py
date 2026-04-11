@@ -234,17 +234,106 @@ def configure(vault_path: Path) -> None:
         click.echo("Daemon restarted with new config.")
 
 
+def _is_git_repo(path: Path) -> bool:
+    """Check if path is inside a git repository."""
+    try:
+        subprocess.run(
+            ["git", "-C", str(path), "rev-parse", "--git-dir"],
+            check=True,
+            capture_output=True,
+        )
+        return True
+    except subprocess.CalledProcessError:
+        return False
+
+
+def _ensure_git_repo(vault_path: Path, interactive: bool = True) -> bool:
+    """Ensure vault is a git repository. Returns True if initialized or already a repo."""
+    if _is_git_repo(vault_path):
+        return True
+
+    if interactive:
+        click.echo()
+        click.echo("⚠  This vault is not a git repository.")
+        click.echo()
+        click.echo("llm-wiki uses git as an audit trail for all writes. Without git:")
+        click.echo("  • Wiki writes (wiki_create, wiki_update, wiki_append) will fail")
+        click.echo("  • Session commits will fail")
+        click.echo("  • No attribution history (Agent: trailers, git log)")
+        click.echo()
+        if not click.confirm("Initialize git repository now?", default=True):
+            click.echo()
+            click.echo("Skipping git initialization. To initialize manually:")
+            click.echo()
+            click.echo(f"  cd {vault_path}")
+            click.echo("  git init")
+            click.echo("  git config user.name \"Your Name\"")
+            click.echo("  git config user.email \"your.email@example.com\"")
+            click.echo()
+            return False
+
+    try:
+        subprocess.run(["git", "init", "-q", str(vault_path)], check=True)
+        # Set sensible defaults for llm-wiki
+        subprocess.run(
+            ["git", "-C", str(vault_path), "config", "user.email", "llm-wiki@local"],
+            check=True,
+            capture_output=True,
+        )
+        subprocess.run(
+            ["git", "-C", str(vault_path), "config", "user.name", "llm-wiki"],
+            check=True,
+            capture_output=True,
+        )
+
+        # Create initial .gitignore
+        gitignore = vault_path / ".gitignore"
+        if not gitignore.exists():
+            gitignore.write_text(
+                "# llm-wiki state\n"
+                ".llm-wiki/\n"
+                ".DS_Store\n"
+            )
+            subprocess.run(
+                ["git", "-C", str(vault_path), "add", ".gitignore"],
+                check=True,
+                capture_output=True,
+            )
+            subprocess.run(
+                ["git", "-C", str(vault_path), "commit", "-q", "-m", "chore: initialize git repo"],
+                check=True,
+                capture_output=True,
+            )
+
+        if interactive:
+            click.echo("✓ Git repository initialized")
+        return True
+    except subprocess.CalledProcessError as e:
+        if interactive:
+            click.echo(f"✗ Failed to initialize git repository: {e}", err=True)
+        return False
+
+
 @cli.command()
 @click.argument("vault_path", type=click.Path(exists=True, path_type=Path))
 def init(vault_path: Path) -> None:
     """Scan and index a vault directory (no daemon needed)."""
     has_config = (vault_path / "schema" / "config.yaml").exists()
     has_vault_dir = (vault_path / "raw").is_dir() or (vault_path / "wiki").is_dir()
+    vault_created = False
     if not has_config and not has_vault_dir:
         (vault_path / "wiki").mkdir(exist_ok=True)
         (vault_path / "raw").mkdir(exist_ok=True)
         (vault_path / "inbox").mkdir(exist_ok=True)
+        vault_created = True
         click.echo(f"Initialised new vault at {vault_path}.")
+
+    # Ensure git repository for audit trail
+    git_ok = _ensure_git_repo(vault_path, interactive=True)
+    if not git_ok:
+        click.echo()
+        click.echo("⚠  Proceeding without git — write operations will fail.", err=True)
+
     # Create markers before Vault.scan — scan validates their presence before creating wiki/ internally
     vault = Vault.scan(vault_path)
     click.echo(

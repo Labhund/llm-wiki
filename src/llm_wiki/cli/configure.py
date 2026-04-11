@@ -180,6 +180,13 @@ def _setup_hermes() -> dict[str, Any] | None:
             (vault_path / sub).mkdir(parents=True, exist_ok=True)
         vault_created = True
 
+    # ── Git repository setup ───────────────────────────────────────────────────
+    _info("Checking git repository…")
+    from llm_wiki.cli.main import _ensure_git_repo
+
+    if not _ensure_git_repo(vault_path, interactive=True):
+        _warn("Proceeding without git — write operations will fail.")
+
     if vault_created:
         _info("Initialising vault index…")
         from llm_wiki.vault import Vault
@@ -257,10 +264,21 @@ def _setup_claude_code() -> dict[str, Any] | None:
     vault_path = Path(vault_str).expanduser()
 
     # ── Vault initialisation ──────────────────────────────────────────────────
+    vault_created = False
     if not (vault_path / "raw").is_dir():
         _info(f"Creating vault at {vault_path}…")
         for sub in ("raw", "wiki", "schema", "inbox"):
             (vault_path / sub).mkdir(parents=True, exist_ok=True)
+        vault_created = True
+
+    # ── Git repository setup ───────────────────────────────────────────────────
+    _info("Checking git repository…")
+    from llm_wiki.cli.main import _ensure_git_repo
+
+    if not _ensure_git_repo(vault_path, interactive=True):
+        _warn("Proceeding without git — write operations will fail.")
+
+    if vault_created:
         _info("Initialising vault index…")
         from llm_wiki.vault import Vault
         try:
