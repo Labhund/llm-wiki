@@ -70,10 +70,10 @@ def test_update_existing_page_appends(wiki_dir: Path):
 
     assert result.was_update is True
     text = result.path.read_text()
-    # Original content preserved
-    assert "Original content [[raw/original.pdf]]." in text
-    # New content appended
-    assert "New content [[raw/new.pdf]]." in text
+    # Original content preserved (citation may be renumbered)
+    assert "Original content [[raw/original.pdf" in text
+    # New content appended (citation may be renumbered)
+    assert "New content [[raw/new.pdf" in text
     import re as _re
     assert _re.search(r"%% section: from-new(?:, tokens: \d+)? %%", text)
 

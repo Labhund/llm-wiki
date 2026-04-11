@@ -249,5 +249,6 @@ def patch_token_estimates(path: Path) -> None:
     new_text = "\n".join(output_parts)
     if not new_text.endswith("\n"):
         new_text += "\n"
+    new_text = _renumber_citations(new_text)
     if new_text != text:
         path.write_text(new_text, encoding="utf-8")
