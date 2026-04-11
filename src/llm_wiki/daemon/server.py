@@ -423,6 +423,7 @@ class DaemonServer:
         via the debouncer. Removed pages purge their snapshot.
         """
         await self.rescan()
+        wiki_dir = self._vault_root / self._config.vault.wiki_dir.rstrip("/")
         for path in changed:
             try:
                 rel = path.relative_to(self._vault_root)
@@ -430,6 +431,8 @@ class DaemonServer:
                 continue
             if any(p.startswith(".") for p in rel.parts):
                 continue  # skip hidden dirs (e.g. .issues)
+            if not path.is_relative_to(wiki_dir):
+                continue  # only audit files under wiki/
             if self._dispatcher is not None:
                 self._dispatcher.submit(path)
         for path in removed:

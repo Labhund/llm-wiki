@@ -125,6 +125,7 @@ class PageWriteService:
         tags: list[str] | None = None,
         intent: str | None = None,
         force: bool = False,
+        cluster: str = "",
     ) -> WriteResult:
         """Create a new page with frontmatter, body, and citations."""
         if not author:
@@ -146,7 +147,10 @@ class PageWriteService:
             )
 
         slug = _slugify(title)
-        page_path = self._wiki_dir / f"{slug}.md"
+        if cluster:
+            page_path = self._wiki_dir / cluster / f"{slug}.md"
+        else:
+            page_path = self._wiki_dir / f"{slug}.md"
         journal_path_rel = str(page_path.relative_to(self._vault_root))
 
         # Hard collision check (case-insensitive exact match)

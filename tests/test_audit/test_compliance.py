@@ -365,3 +365,16 @@ def test_compliance_missing_citation_issue_is_moderate(tmp_path: Path):
         issue = queue.get(issue_id)
         assert issue is not None
         assert issue.severity == "moderate"
+
+
+def test_has_citation_recognises_numbered_raw_citations():
+    from llm_wiki.audit.compliance import ComplianceReviewer
+    assert ComplianceReviewer._has_citation("Claim [[raw/paper.pdf|1]].")
+    assert ComplianceReviewer._has_citation("Claim [[raw/paper.pdf|12]].")
+    assert ComplianceReviewer._has_citation("Claim [[raw/paper.pdf]].")
+
+
+def test_has_citation_rejects_uncited_sentences():
+    from llm_wiki.audit.compliance import ComplianceReviewer
+    assert not ComplianceReviewer._has_citation("Boltz-2 is a model.")
+    assert not ComplianceReviewer._has_citation("See [^1] for details.")
