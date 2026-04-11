@@ -178,3 +178,90 @@ def test_parse_content_synthesis_valid():
 def test_parse_content_synthesis_invalid_returns_empty():
     result = parse_content_synthesis("not json")
     assert result.sections == []
+
+
+# --- Citation-format tests (inline wikilinks, NOT footnotes) ---
+
+
+def test_page_content_messages_use_inline_wikilink_citations():
+    """compose_page_content_messages must instruct [[raw/...]] citations, not [^N] footnotes."""
+    msgs = compose_page_content_messages(
+        concept_title="Boltz-2",
+        passages=["Boltz-2 achieves SOTA performance."],
+        source_ref="raw/boltz2.pdf",
+    )
+    system = msgs[0]["content"]
+    # Must mention inline wikilink citation style
+    assert "[[raw/boltz2.pdf]]" in system
+    # Must NOT instruct footnote as the citation mechanism
+    assert "[^1]" not in system
+    # Must NOT have a mandatory "references" section in the structural contract
+    assert '"name": "references"' not in system
+
+
+def test_deep_read_synthesis_messages_use_inline_wikilink_citations():
+    """compose_deep_read_synthesis_messages must instruct [[raw/...]] citations, not [^N] footnotes."""
+    from llm_wiki.ingest.prompts import compose_deep_read_synthesis_messages
+
+    concept = ConceptPlan(name="boltz-2", title="Boltz-2")
+    msgs = compose_deep_read_synthesis_messages(
+        concept=concept,
+        paper_context="Boltz-2 is a structure prediction model.",
+        source_ref="raw/boltz2.pdf",
+        manifest_lines=["boltz-1  'Boltz-1'"],
+        batch_concepts=[concept],
+    )
+    # Handle multi-block content format (cache_control=False → plain string)
+    system = msgs[0]["content"]
+    if isinstance(system, list):
+        system = " ".join(b["text"] for b in system if b.get("type") == "text")
+    assert "[[raw/boltz2.pdf]]" in system
+    assert "[^1]" not in system
+    assert '"name": "references"' not in system
+
+
+def test_content_synthesis_messages_use_inline_wikilink_citations():
+    """compose_content_synthesis_messages must instruct [[raw/...]] citations."""
+    from llm_wiki.ingest.prompts import compose_content_synthesis_messages
+
+    concept = ConceptPlan(name="boltz-2", title="Boltz-2")
+    msgs = compose_content_synthesis_messages(
+        concept=concept,
+        passages=["Boltz-2 achieves SOTA."],
+        source_ref="raw/boltz2.pdf",
+        manifest_lines=[],
+        batch_concepts=[concept],
+    )
+    system = msgs[0]["content"]
+    assert "[[raw/boltz2.pdf]]" in system
+    assert "[^1]" not in system
+    assert '"name": "references"' not in system
+
+
+def test_parse_page_content_works_without_references_section():
+    """parse_page_content should accept output that has no 'references' section."""
+    text = json.dumps({
+        "sections": [
+            {"name": "overview", "heading": "Overview",
+             "content": "Boltz-2 is a model [[raw/boltz2.pdf]]."},
+        ]
+    })
+    result = parse_page_content(text)
+    assert len(result) == 1
+    assert result[0].name == "overview"
+    assert "[[raw/boltz2.pdf]]" in result[0].content
+
+
+def test_parse_content_synthesis_works_without_references_section():
+    """parse_content_synthesis should accept output that has no 'references' section."""
+    text = json.dumps({
+        "summary": "Boltz-2 predicts protein structure.",
+        "sections": [
+            {"name": "overview", "heading": "Overview",
+             "content": "Boltz-2 is a model [[raw/boltz2.pdf]]."},
+        ]
+    })
+    result = parse_content_synthesis(text)
+    assert len(result.sections) == 1
+    assert result.sections[0].name == "overview"
+    assert "[[raw/boltz2.pdf]]" in result.sections[0].content

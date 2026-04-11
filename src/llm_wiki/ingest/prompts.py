@@ -51,10 +51,11 @@ source document.
 
 ## Citation Rules (Non-Negotiable)
 
-Use numbered footnotes — `[^N]` inline, defined in a References section:
-- `[^1]` = [[{source_ref}]] (the primary source document)
-- Every factual claim MUST end with `[^1]`. No exceptions.
-- Do NOT embed [[raw/...]] links in body text — only in the References section.
+Use inline wikilink citations — [[{source_ref}]] — for every factual claim:
+- Every factual claim MUST end with [[{source_ref}]]. No exceptions.
+- Place citation at end of sentence, inside punctuation.
+- Example: "Boltz-2 achieves SOTA performance [[{source_ref}]]."
+- Do NOT use footnote syntax ([^N]).
 
 ## Wikilink Rules
 
@@ -73,19 +74,14 @@ get `[[slug]]` wikilinks:
 
 ## Structural Contract (Non-Negotiable)
 
-Respond with a SINGLE JSON object. Add "references" as the LAST section:
+Respond with a SINGLE JSON object:
 
 {{
   "sections": [
     {{
       "name": "section-slug",
       "heading": "Section Heading",
-      "content": "Markdown with [[wikilinks]] and [^1] footnote citations."
-    }},
-    {{
-      "name": "references",
-      "heading": "References",
-      "content": "[^1]: [[{source_ref}]]"
+      "content": "Markdown with [[wikilinks]] and [[source_ref]] inline citations."
     }}
   ]
 }}"""
@@ -244,10 +240,11 @@ You are writing wiki content for a specific concept using verbatim source passag
 
 ## Citation Rules (Non-Negotiable)
 
-Use numbered footnotes — `[^N]` inline, defined in a References section:
-- `[^1]` = [[<<<SOURCE_REF>>>]] (the primary source)
-- Every factual claim MUST end with `[^1]`. No exceptions.
-- Do NOT embed [[raw/...]] in body text — only in the References section.
+Use inline wikilink citations — [[<<<SOURCE_REF>>>]] — for every factual claim:
+- Every factual claim MUST end with [[<<<SOURCE_REF>>>]]. No exceptions.
+- Place citation at end of sentence, inside punctuation.
+- Example: "Boltz-2 achieves SOTA performance [[<<<SOURCE_REF>>>]]."
+- Do NOT use footnote syntax ([^N]).
 
 ## Wikilink Rules
 
@@ -277,7 +274,7 @@ get `[[slug]]` wikilinks:
 
 ## Structural Contract (Non-Negotiable)
 
-Respond with a SINGLE JSON object. Include "references" as the LAST section:
+Respond with a SINGLE JSON object:
 
 {
   "summary": "One sentence (≤20 words) describing the concept.",
@@ -285,12 +282,7 @@ Respond with a SINGLE JSON object. Include "references" as the LAST section:
     {
       "name": "section-slug",
       "heading": "Section Heading",
-      "content": "Markdown with [[wikilinks]] and [^1] footnote citations."
-    },
-    {
-      "name": "references",
-      "heading": "References",
-      "content": "[^1]: [[<<<SOURCE_REF>>>]]"
+      "content": "Markdown with [[wikilinks]] and [[<<<SOURCE_REF>>>]] inline citations."
     }
   ]
 }"""
@@ -325,10 +317,11 @@ Every sentence should carry information that earns its place.
 
 ## Citation Rules (Non-Negotiable)
 
-Use numbered footnotes — `[^N]` inline, defined in a References section:
-- `[^1]` = [[<<<SOURCE_REF>>>]] (the primary source)
-- Every factual claim MUST end with `[^1]`. No exceptions.
-- Do NOT embed [[raw/...]] in body text — only in the References section.
+Use inline wikilink citations — [[<<<SOURCE_REF>>>]] — for every factual claim:
+- Every factual claim MUST end with [[<<<SOURCE_REF>>>]]. No exceptions.
+- Place citation at end of sentence, inside punctuation.
+- Example: "Boltz-2 achieves SOTA performance [[<<<SOURCE_REF>>>]]."
+- Do NOT use footnote syntax ([^N]).
 
 ## Wikilink Rules
 
@@ -357,7 +350,7 @@ get `[[slug]]` wikilinks:
 
 ## Structural Contract (Non-Negotiable)
 
-Respond with a SINGLE JSON object. Include "references" as the LAST section:
+Respond with a SINGLE JSON object:
 
 {
   "summary": "One sentence (≤20 words) describing the concept.",
@@ -365,12 +358,7 @@ Respond with a SINGLE JSON object. Include "references" as the LAST section:
     {
       "name": "section-slug",
       "heading": "Section Heading",
-      "content": "Markdown with [[wikilinks]] and [^1] footnote citations."
-    },
-    {
-      "name": "references",
-      "heading": "References",
-      "content": "[^1]: [[<<<SOURCE_REF>>>]]"
+      "content": "Markdown with [[wikilinks]] and [[<<<SOURCE_REF>>>]] inline citations."
     }
   ]
 }"""
