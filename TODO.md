@@ -1,5 +1,13 @@
 # TODO
 
+## Notes:
+- matching in the mcp server is too aggressive especially for substring based pages 'trf' existing as a page blocks agent on creation of 'trf-quantification'
+- mcp tools might be too verbose in their descriptions
+- mcp fo rthe ingest pipeline should be removed.. in fact all the background process mcp tools should be removed there is no need to run them in an interactive session... just use the cli
+- the cli autoingest pipeline leaves a lot to be desired. this might be model depeendant... i have been using a smaller cheaper model (step-3.5-flash) which might be too stupid to do the task properly or perhaps my skills are not set up well
+- we need to do better at tagging
+
+
 ## Rendered Document Responses (Future Direction)
 
 **What:** Replace the JSON response envelope with rendered markdown documents. The daemon becomes a rendering layer: structured data stored and processed internally, markdown documents served to the agent. L1–L4 are incremental improvements; this is the architectural destination.

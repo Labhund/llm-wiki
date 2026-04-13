@@ -394,15 +394,16 @@ class IngestAgent:
         wiki_dir = vault_root / self._config.vault.wiki_dir.rstrip("/")
         existing_clusters = _get_cluster_dirs(wiki_dir)
 
-        # Overview pass on chunk 0
+        # Overview pass on full document (concatenate all chunks for complete context)
+        full_overview_text = "\n\n".join(chunks)
         overview_msgs = compose_overview_messages(
-            chunk_text=chunks[0],
+            chunk_text=full_overview_text,
             manifest_lines=manifest_lines,
             source_ref=source_ref,
             cluster_dir_names=existing_clusters,
         )
         overview_resp = await self._llm.complete(
-            overview_msgs, temperature=0.2, priority="ingest",
+            overview_msgs, temperature=0.9, priority="ingest",
             label=f"ingest:overview:{source_path.name}",
         )
         concepts = parse_overview_extraction(overview_resp.content)
@@ -413,6 +414,20 @@ class IngestAgent:
 
         if on_progress:
             await on_progress({"stage": "concepts_found", "count": len(concepts)})
+
+        # Build mapping of existing page content for updates
+        existing_pages: dict[str, str] = {}
+        for concept in concepts:
+            if concept.action == "update":
+                page_path = wiki_dir / f"{concept.name}.md"
+                if page_path.exists():
+                    existing_pages[concept.name] = page_path.read_text(encoding="utf-8")
+                else:
+                    # Check in cluster subdirectory
+                    if concept.cluster:
+                        cluster_page_path = wiki_dir / concept.cluster / f"{concept.name}.md"
+                        if cluster_page_path.exists():
+                            existing_pages[concept.name] = cluster_page_path.read_text(encoding="utf-8")
 
         # Dry-run: stop after overview — one LLM call on chunk[0], same prompt as live ingest
         if dry_run:
@@ -452,6 +467,7 @@ class IngestAgent:
                 manifest_lines=manifest_lines,
                 batch_concepts=concepts,
                 cache_control=use_cache_control,
+                existing_page=existing_pages.get(concept.name),
             )
             synth_resp = await self._llm.complete(
                 synth_msgs, temperature=synth_temp, priority="ingest",

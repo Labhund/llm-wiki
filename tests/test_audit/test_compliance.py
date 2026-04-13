@@ -378,3 +378,78 @@ def test_has_citation_rejects_uncited_sentences():
     from llm_wiki.audit.compliance import ComplianceReviewer
     assert not ComplianceReviewer._has_citation("Boltz-2 is a model.")
     assert not ComplianceReviewer._has_citation("See [^1] for details.")
+
+
+def test_compliance_catches_incorrect_citation_numbering(tmp_path: Path):
+    """Compliance reviewer detects incorrectly numbered citations on edit."""
+    _, queue, reviewer, page = _setup(tmp_path)
+    old = (
+        "---\ntitle: Test\n---\n\n## Overview\n\nContent.\n"
+    )
+    new = (
+        "---\ntitle: Test\n---\n\n## Overview\n\nContent citing [[raw/paper-a.pdf|3]] which should be |1|.\nThen [[raw/paper-b.pdf|1]].\nAnd [[raw/paper-a.pdf|5]] again which should be |2|.\n"
+    )
+    page.write_text(old)
+
+    result = reviewer.review_change(page, old, new)
+
+    # Should file a compliance issue
+    numbering_issues = [
+        i for i in result.issues_filed
+        if (issue := queue.get(i)) is not None
+        and issue.type == "compliance"
+        and issue.metadata.get("subtype") == "incorrect-citation-numbering"
+    ]
+    assert numbering_issues, "expected an incorrect-citation-numbering issue"
+
+    issue = queue.get(numbering_issues[0])
+    assert issue is not None
+    assert "incorrectly numbered" in issue.title.lower()
+    assert issue.severity == "minor"
+    assert "[[raw/paper-a.pdf|3]] should be [[raw/paper-a.pdf|1]]" in issue.body
+    assert "renumber-citations" in issue.body
+
+
+def test_compliance_passes_correct_citation_numbering(tmp_path: Path):
+    """Compliance reviewer does not flag correctly numbered citations."""
+    _, queue, reviewer, page = _setup(tmp_path)
+    old = (
+        "---\ntitle: Test\n---\n\n## Overview\n\nContent.\n"
+    )
+    new = (
+        "---\ntitle: Test\n---\n\n## Overview\n\nContent citing [[raw/paper-a.pdf|1]].\nThen [[raw/paper-b.pdf|1]].\nAnd [[raw/paper-a.pdf|2]] again.\n"
+    )
+    page.write_text(old)
+
+    result = reviewer.review_change(page, old, new)
+
+    # Should NOT file a citation numbering issue
+    numbering_issues = [
+        i for i in result.issues_filed
+        if (issue := queue.get(i)) is not None
+        and issue.type == "compliance"
+        and issue.metadata.get("subtype") == "incorrect-citation-numbering"
+    ]
+    assert not numbering_issues, "should not flag correct citation numbering"
+
+
+def test_compliance_citation_numbering_ignores_non_raw_links(tmp_path: Path):
+    """Compliance reviewer only checks [[raw/...|N]] not all wikilinks."""
+    _, queue, reviewer, page = _setup(tmp_path)
+    old = "---\ntitle: Test\n---\n\n## Overview\n\nContent.\n"
+    new = (
+        "---\ntitle: Test\n---\n\n## Overview\n\nSee [[other-page]] and [[another-concept]] for details.\n"
+    )
+    page.write_text(old)
+
+    result = reviewer.review_change(page, old, new)
+
+    # Should NOT file a citation numbering issue (no raw/ citations present)
+    numbering_issues = [
+        i for i in result.issues_filed
+        if (issue := queue.get(i)) is not None
+        and issue.type == "compliance"
+        and issue.metadata.get("subtype") == "incorrect-citation-numbering"
+    ]
+    assert not numbering_issues, "should not flag non-raw wikilinks"
+

@@ -4,6 +4,7 @@ import re
 from dataclasses import dataclass, field
 from pathlib import Path
 
+from llm_wiki.audit.checks import _body_only
 from llm_wiki.config import WikiConfig
 from llm_wiki.issues.queue import Issue, IssueQueue
 
@@ -80,6 +81,7 @@ class ComplianceReviewer:
         # Auto-fix structural drift first; downstream checks see the fixed content.
         new_content = self._check_structural_drift(result, page_path, new_content)
         self._check_missing_citation(result, old_content, new_content)
+        self._check_incorrect_citation_numbering(result, page_path, new_content)
         self._check_new_idea(result, old_content, new_content)
 
         # Patch token counts into section markers as a bookkeeping step.
@@ -88,6 +90,67 @@ class ComplianceReviewer:
         patch_token_estimates(page_path)
 
         return result
+
+    def _check_incorrect_citation_numbering(
+        self,
+        result: ComplianceResult,
+        page_path: Path,
+        new_content: str,
+    ) -> None:
+        """Check if [[raw/...|N]] citations follow first-appearance order.
+
+        Pure Python check — fast and scoped to the single page being edited.
+        Files issues for each incorrectly numbered citation.
+        """
+        body = _body_only(new_content)
+
+        # Track expected number for each source path
+        expected_numbers: dict[str, int] = {}
+        errors: list[tuple[str, int, int]] = []  # (source_path, expected, actual)
+
+        # Find all numbered raw citations in order (reuse the regex from checks.py)
+        _NUMBERED_RAW_CITATION_RE = re.compile(r"\[\[(raw/[^|\]]+?)\|(\d+)\]\]")
+
+        for match in _NUMBERED_RAW_CITATION_RE.finditer(body):
+            source_path = match.group(1)
+            actual_number = int(match.group(2))
+
+            # Get expected number for this source (first appearance = 1)
+            expected = expected_numbers.get(source_path, 1)
+            expected_numbers[source_path] = expected + 1
+
+            if actual_number != expected:
+                errors.append((source_path, expected, actual_number))
+
+        if errors:
+            result.reasons.append("incorrect-citation-numbering")
+            # File one issue per page with details in the body
+            error_details = []
+            for source_path, expected, actual in errors[:5]:  # Show max 5 examples
+                error_details.append(f"[[{source_path}|{actual}]] should be [[{source_path}|{expected}]]")
+            if len(errors) > 5:
+                error_details.append(f"... and {len(errors) - 5} more")
+
+            issue = Issue(
+                id=Issue.make_id("compliance", result.page, f"incorrect-citation-numbering:{len(errors)}"),
+                type="compliance",
+                status="open",
+                severity="minor",
+                title=f"[{result.page}] has {len(errors)} incorrectly numbered citations",
+                page=result.page,
+                body=(
+                    f"The page [[{result.page}]] has {len(errors)} citations with incorrect "
+                    f"numbers. Citations should be numbered by first-appearance order:\n\n"
+                    + "\n".join(f"- {err}" for err in error_details) +
+                    "\n\nRun `llm-wiki renumber-citations {result.page}` to fix automatically."
+                ),
+                created=Issue.now_iso(),
+                detected_by="compliance",
+                metadata={"error_count": len(errors), "subtype": "incorrect-citation-numbering"},
+            )
+            _, was_new = self._queue.add(issue)
+            if was_new:
+                result.issues_filed.append(issue.id)
 
     def _check_new_idea(
         self,

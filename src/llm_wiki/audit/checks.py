@@ -923,6 +923,77 @@ def execute_proposal_merges(
 _WIKILINK_RE = re.compile(r"\[\[([^\]|]+)(?:\|[^\]]+)?\]\]")
 
 
+# Matches [[raw/path|N]] citations with a numeric pipe suffix
+# Captures the raw/ path and the numeric citation number
+_NUMBERED_RAW_CITATION_RE = re.compile(r"\[\[(raw/[^|\]]+?)\|(\d+)\]\]")
+
+
+def find_incorrect_citation_numbering(vault: Vault) -> CheckResult:
+    """Pages with incorrect citation numbering (not following first-appearance order).
+
+    Only checks [[raw/...|N]] citations (not all wikilinks). For each source path,
+    the first occurrence should be |1|, second |2|, etc. If a citation appears with
+    the wrong number, it's flagged as an issue.
+
+    Pure Python — no LLM.
+    """
+    issues: list[Issue] = []
+
+    for name, entry in vault.manifest_entries().items():
+        page = vault.read_page(name)
+        if page is None:
+            continue
+
+        body = _body_only(page.raw_content)
+
+        # Track expected number for each source path
+        expected_numbers: dict[str, int] = {}
+        errors: list[tuple[str, int, int]] = []  # (source_path, expected, actual)
+
+        # Find all numbered raw citations in order
+        for match in _NUMBERED_RAW_CITATION_RE.finditer(body):
+            source_path = match.group(1)
+            actual_number = int(match.group(2))
+
+            # Get expected number for this source (first appearance = 1)
+            expected = expected_numbers.get(source_path, 1)
+            expected_numbers[source_path] = expected + 1
+
+            if actual_number != expected:
+                errors.append((source_path, expected, actual_number))
+
+        if errors:
+            # Build a helpful error message showing the first few errors
+            error_details = []
+            for source_path, expected, actual in errors[:3]:  # Show max 3 examples
+                error_details.append(f"[[{source_path}|{actual}]] should be [[{source_path}|{expected}]]")
+            if len(errors) > 3:
+                error_details.append(f"... and {len(errors) - 3} more")
+
+            issues.append(
+                Issue(
+                    id=Issue.make_id("incorrect-citation-numbering", name, ""),
+                    type="incorrect-citation-numbering",
+                    status="open",
+                    severity="minor",
+                    title=f"Page '{name}' has {len(errors)} incorrectly numbered citations",
+                    page=name,
+                    body=(
+                        f"The page [[{name}]] has {len(errors)} citations with incorrect "
+                        f"numbers. Citations should be numbered by first-appearance order:\n\n"
+                        + "\n".join(f"- {err}" for err in error_details) +
+                        "\n\nRun `llm-wiki renumber-citations {name}` to fix automatically, "
+                        "or edit the page to correct the numbers manually."
+                    ),
+                    created=Issue.now_iso(),
+                    detected_by="auditor",
+                    metadata={"error_count": len(errors)},
+                )
+            )
+
+    return CheckResult(check="incorrect-citation-numbering", issues=issues)
+
+
 def find_index_out_of_sync(vault: Vault) -> CheckResult:
     """Detect drift between wiki/index.md and the vault manifest.
 

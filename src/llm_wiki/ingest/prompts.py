@@ -51,11 +51,14 @@ source document.
 
 ## Citation Rules (Non-Negotiable)
 
-Use inline wikilink citations — [[{source_ref}]] — for every factual claim:
-- Every factual claim MUST end with [[{source_ref}]]. No exceptions.
+Use inline wikilink citations — [[{source_ref}|N]] — for every factual claim:
+- Every factual claim MUST end with [[{source_ref}|N]]. No exceptions.
 - Place citation at end of sentence, inside punctuation.
-- Example: "Boltz-2 achieves SOTA performance [[{source_ref}]]."
+- Example: "Boltz-2 achieves SOTA performance [[{source_ref}|1]]."
 - Do NOT use footnote syntax ([^N]).
+- **Citation numbering is by FIRST APPEARANCE in text**: Assign numbers based on the order
+  each source is first mentioned. If source A appears first, it gets |1|. If source B
+  appears second, it gets |2|. If source A appears again later, it's still |1|.
 
 ## Wikilink Rules
 
@@ -167,26 +170,39 @@ def parse_concept_extraction(text: str) -> list[ConceptPlan]:
 
 
 _OVERVIEW_SYSTEM = """\
-You are analyzing the opening of a scientific document to identify its primary \
-concepts for a knowledge wiki.
+You are analyzing a scientific document to identify ALL topics that merit wiki coverage.
 
 ## Task
 
-Identify PRIMARY concepts — named models, datasets, methods, or tools that:
-- Exist independently and may be referenced by other papers
-- Warrant their own wiki page
+This paper contains rich information about multiple topics. Your job is to identify EVERY substantive topic that could warrant a wiki page update or creation, regardless of whether it's the paper's primary contribution.
 
-Do NOT create concepts for paper-specific details like "training data curation", \
-"ablation study", "experimental setup", "loss function variants" — these become \
-sections WITHIN a primary concept page.
+Look for:
+- Named models, datasets, methods, or tools (primary focus or mentioned in detail)
+- General techniques, algorithms, or approaches that are described in depth
+- Biological systems, proteins, or molecules studied
+- Experimental or computational methods with detailed descriptions
+- Concepts with rich information or interesting findings
 
-For each concept:
-1. Assign a URL-safe slug (lowercase, hyphens only)
+**CRITICAL**: Be INCLUSIVE, not exclusive. If a topic is discussed in detail with substantial content, identify it. Examples:
+- A paper about GROMACS software should identify "gromacs", "copernicus" AND "molecular-dynamics-simulations", "domain-decomposition", "simd-acceleration", "gpu-acceleration", "verlet-neighbor-searching", "particle-mesh-ewald", "free-energy-calculations" if each is discussed in depth
+- A paper about a specific protein should identify the protein AND "protein-docking", "molecular-dynamics-simulations", "binding-affinity-calculations" if discussed in detail
+
+For each topic:
+1. Assign a DESCRIPTIVE URL-safe slug (lowercase, hyphens only). Make slugs specific \
+   and self-explanatory. Prefer existing patterns like:
+   - Models: "boltz-2", "alphafold3", "gemma-4"
+   - Methods: "free-energy-perturbation", "protein-docking"
+   - Proteins: include species and name: "human-trpv1", "mouse-p2x7"
+   - Datasets: "fep-benchmark", "atlas-md"
+   - General concepts: "molecular-dynamics-simulations", "protein-structure-prediction"
+   AVOID vague slugs like "model-1", "method-a", "technique-x".
 2. Check if it matches an existing wiki page slug — if yes, set action to "update" \
 and use the EXACT existing slug
-3. If new, set action to "create"
-4. List 2-6 section names (sub-topics that will be sections on the page)
-5. Assign a cluster (wiki subdirectory). Use an EXISTING cluster name if it fits; \
+3. Check if it's SEMANTICALLY RELATED to any existing page (even with different slug) — \
+   if yes, set action to "update" and use the EXISTING page's slug
+4. If new and not related to any existing page, set action to "create"
+5. List 2-6 section names (sub-topics that will be sections on the page)
+6. Assign a cluster (wiki subdirectory). Use an EXISTING cluster name if it fits; \
 otherwise invent a short lowercase-hyphenated name (e.g. "structural-biology", \
 "ml-methods"). All concepts from one paper should share a cluster unless they \
 clearly belong to different domains.
@@ -240,11 +256,14 @@ You are writing wiki content for a specific concept using verbatim source passag
 
 ## Citation Rules (Non-Negotiable)
 
-Use inline wikilink citations — [[<<<SOURCE_REF>>>]] — for every factual claim:
-- Every factual claim MUST end with [[<<<SOURCE_REF>>>]]. No exceptions.
+Use inline wikilink citations — [[<<<SOURCE_REF>>>|N]] — for every factual claim:
+- Every factual claim MUST end with [[<<<SOURCE_REF>>>|N]]. No exceptions.
 - Place citation at end of sentence, inside punctuation.
-- Example: "Boltz-2 achieves SOTA performance [[<<<SOURCE_REF>>>]]."
+- Example: "Boltz-2 achieves SOTA performance [[<<<SOURCE_REF>>>|1]]."
 - Do NOT use footnote syntax ([^N]).
+- **Citation numbering is by FIRST APPEARANCE in text**: Assign numbers based on the order
+  each source is first mentioned. If source A appears first, it gets |1|. If source B
+  appears second, it gets |2|. If source A appears again later, it's still |1|.
 
 ## Wikilink Rules
 
@@ -256,6 +275,17 @@ get `[[slug]]` wikilinks:
    invent a kebab-case slug (e.g. `[[free-energy-perturbation]]`, `[[tyk2]]`). \
    Red links are fine — they flag pages to create.
 4. Generic terms with no standalone identity → plain text, no brackets.
+
+## Protein Residue References (Context-Aware)
+
+When discussing specific amino acid residues on proteins:
+- If the page context is ALREADY about a specific protein (e.g., the page is "human-trpv1"), \
+  you may use the shorthand form: `[[human-trpv1-his123|his123]]` where "his123" is the \
+  display text but "human-trpv1-his123" is the full-resolvable slug.
+- If the page is NOT about that protein, include the full name: `[[human-trpv1-his123]]` \
+  or `[[human-trpv1|human TRPV1]] His123`.
+- Pattern: `[[species-protein-residue|short-form]]` or `[[species-protein-residue]]`
+- This ensures residue references make sense in isolation while remaining concise in context.
 
 ## Existing wiki pages (use [[slug]] for these)
 
@@ -306,7 +336,7 @@ Return ONLY the updated digest text — no preamble, no JSON."""
 
 
 _DEEP_READ_SYNTHESIS_SYSTEM = """\
-You are writing a wiki page for a specific concept.
+You are writing or updating a wiki page for a specific concept.
 
 You have a comprehensive digest of the full paper — you understand the \
 whole document. Write from that understanding. Do not transcribe; synthesize.
@@ -315,13 +345,46 @@ Think like an expert explaining this concept to a knowledgeable colleague: \
 integrate the methodology, results, comparisons to baselines, and limitations. \
 Every sentence should carry information that earns its place.
 
+## UPDATE MODE: Intelligent Integration
+
+<<<UPDATE_INSTRUCTIONS>>>
+"""
+
+_UPDATE_INSTRUCTIONS_TEXT = """
+This is an UPDATE to an existing page. The current page content is provided below.
+
+## Existing Page Content
+
+<<<EXISTING_PAGE>>>
+
+Your task: Integrate new information from this paper into the existing page INTELLIGENTLY:
+
+1. READ the existing page to understand its structure and narrative flow
+2. Identify where new content fits:
+   - Does it belong in an existing section? Add it there with smooth transitions
+   - Does it warrant a new section? Create one with an appropriate heading
+   - Does it expand or contradict existing content? Address it appropriately
+3. Consider the PAGE'S CONTEXT, not just the paper:
+   - What would a reader of this page need to know?
+   - How does this new information connect to existing content?
+4. Maintain the page's existing voice and structure
+5. Return the COMPLETE updated page with all sections (existing + new), not just additions
+
+Do NOT simply append everything to the end. Integrate it where it makes narrative and logical sense.
+"""
+
+_DEEP_READ_SYNTHESIS_SYSTEM = """\
+
 ## Citation Rules (Non-Negotiable)
 
-Use inline wikilink citations — [[<<<SOURCE_REF>>>]] — for every factual claim:
-- Every factual claim MUST end with [[<<<SOURCE_REF>>>]]. No exceptions.
+Use inline wikilink citations — [[<<<SOURCE_REF>>>|N]] — for every factual claim:
+- Every factual claim MUST end with [[<<<SOURCE_REF>>>|N]]. No exceptions.
 - Place citation at end of sentence, inside punctuation.
-- Example: "Boltz-2 achieves SOTA performance [[<<<SOURCE_REF>>>]]."
+- Example: "Boltz-2 achieves SOTA performance [[<<<SOURCE_REF>>>|1]]."
 - Do NOT use footnote syntax ([^N]).
+- **Citation numbering is by FIRST APPEARANCE in text**: Assign numbers based on the order
+  each source is first mentioned. If source A appears first, it gets |1|. If source B
+  appears second, it gets |2|. If source A appears again later, it's still |1|.
 
 ## Wikilink Rules
 
@@ -331,6 +394,17 @@ get `[[slug]]` wikilinks:
 2. Slug in BATCH list → use that exact slug.
 3. Named concept NOT in either list → invent a kebab-case slug. Red links are fine.
 4. Generic terms → plain text.
+
+## Protein Residue References (Context-Aware)
+
+When discussing specific amino acid residues on proteins:
+- If the page context is ALREADY about a specific protein (e.g., the page is "human-trpv1"), \
+  you may use the shorthand form: `[[human-trpv1-his123|his123]]` where "his123" is the \
+  display text but "human-trpv1-his123" is the full-resolvable slug.
+- If the page is NOT about that protein, include the full name: `[[human-trpv1-his123]]` \
+  or `[[human-trpv1|human TRPV1]] His123`.
+- Pattern: `[[species-protein-residue|short-form]]` or `[[species-protein-residue]]`
+- This ensures residue references make sense in isolation while remaining concise in context.
 
 ## Existing wiki pages
 
@@ -392,6 +466,7 @@ def compose_deep_read_synthesis_messages(
     batch_concepts: "list[ConceptPlan]",
     *,
     cache_control: bool = False,
+    existing_page: str | None = None,
 ) -> list[dict]:
     """Build messages for deep-read synthesis — full paper context, no pre-collected passages.
 
@@ -402,10 +477,23 @@ def compose_deep_read_synthesis_messages(
     etc.) auto-prefix-caching kicks in automatically because the paper context
     is placed first in the user message.
     """
-    manifest = "\n".join(manifest_lines) if manifest_lines else "(empty wiki)"
-    batch_slugs = "\n".join(f"- {c.name}: {c.title}" for c in batch_concepts)
+    # Determine if this is an update with existing page content
+    is_update = concept.action == "update" and existing_page is not None
+    
+    # Populate update instructions if this is an update
+    update_instructions = ""
+    if is_update:
+        update_instructions = _UPDATE_INSTRUCTIONS_TEXT.replace(
+            "<<<EXISTING_PAGE>>>", existing_page or "(no existing content)"
+        )
+    else:
+        update_instructions = "CREATE MODE: Generate new page content from scratch."
+    
+    manifest = "\\n".join(manifest_lines) if manifest_lines else "(empty wiki)"
+    batch_slugs = "\\n".join(f"- {c.name}: {c.title}" for c in batch_concepts)
     system_text = (
         _DEEP_READ_SYNTHESIS_SYSTEM
+        .replace("<<<UPDATE_INSTRUCTIONS>>>", update_instructions)
         .replace("<<<SOURCE_REF>>>", source_ref)
         .replace("<<<MANIFEST>>>", manifest)
         .replace("<<<BATCH_SLUGS>>>", batch_slugs or "(none)")

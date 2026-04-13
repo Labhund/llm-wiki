@@ -877,6 +877,56 @@ def ingest(source_path: Path, vault_path: Path, dry_run: bool, trace: bool) -> N
         raise click.ClickException(error_seen[0])
 
 
+@cli.command("renumber-citations")
+@click.argument("page")
+@click.option(
+    "--vault", "vault_path", type=click.Path(exists=True, path_type=Path),
+    default=_default_vault_path, help="Path to vault",
+)
+def renumber_citations(page: str, vault_path: Path) -> None:
+    """Renumber all citations in a page to follow first-appearance order.
+
+    Strips existing citation numbers from [[raw/...|N]] and renumbers them
+    correctly based on first-appearance order.
+    """
+    from llm_wiki.ingest.page_writer import _renumber_citations
+
+    wiki_dir = vault_path / "wiki"
+    if not wiki_dir.exists():
+        raise click.ClickException(f"wiki directory not found at {wiki_dir}")
+
+    # Find the page file
+    page_path = None
+    for md_file in wiki_dir.rglob(f"{page}.md"):
+        page_path = md_file
+        break
+
+    if page_path is None:
+        raise click.ClickException(f"Page '{page}' not found in wiki directory")
+
+    # Read current content
+    text = page_path.read_text(encoding="utf-8")
+
+    # Strip existing citation numbers from [[raw/...|N]] -> [[raw/...]]
+    import re
+    _STRIP_NUMBER_RE = re.compile(r"\[\[(raw/[^|\]]+?)\|\d+\]\]")
+
+    def _strip_number(m):
+        return f"[[{m.group(1)}]]"
+
+    stripped_text = _STRIP_NUMBER_RE.sub(_strip_number, text)
+
+    # Apply standard renumbering
+    renumbered_text = _renumber_citations(stripped_text)
+
+    # Write back if changed
+    if renumbered_text != text:
+        page_path.write_text(renumbered_text, encoding="utf-8")
+        click.echo(f"Renumbered citations in {page_path.relative_to(vault_path)}")
+    else:
+        click.echo("No changes needed - citations are already correctly numbered")
+
+
 @cli.group()
 def issues() -> None:
     """Query and manage the issue queue."""

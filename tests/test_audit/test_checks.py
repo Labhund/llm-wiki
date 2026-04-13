@@ -670,3 +670,89 @@ def test_find_pending_proposals_create_always_issues(tmp_path):
     _make_proposal(tmp_path, action="create", score=0.95)
     result = find_pending_proposals(tmp_path, wiki_dir=wiki_dir)
     assert any(i.type == "proposal" for i in result.issues)
+
+
+def test_find_incorrect_citation_numbering_detects_wrong_numbers(tmp_path):
+    """Detects citations with incorrect first-appearance numbers."""
+    from llm_wiki.audit.checks import find_incorrect_citation_numbering
+    wiki_dir = tmp_path / "wiki"
+    wiki_dir.mkdir()
+
+    # Page with incorrect numbering: [[raw/a.pdf|2]] should be |1|
+    page_path = wiki_dir / "test.md"
+    page_path.write_text("""---
+title: Test
+created: 2024-01-01
+updated: 2024-01-01
+type: concept
+status: draft
+---
+
+Content citing [[raw/paper-a.pdf|2]] which should be |1|, then [[raw/paper-b.pdf|1]].
+""")
+
+    vault = Vault.scan(tmp_path)
+    result = find_incorrect_citation_numbering(vault)
+
+    assert result.check == "incorrect-citation-numbering"
+    assert len(result.issues) == 1
+    issue = result.issues[0]
+    assert issue.page == "test"
+    assert issue.type == "incorrect-citation-numbering"
+    assert "incorrectly numbered" in issue.title.lower()
+    assert "[[raw/paper-a.pdf|2]] should be [[raw/paper-a.pdf|1]]" in issue.body
+
+
+def test_find_incorrect_citation_numbering_correct_numbers_pass(tmp_path):
+    """Correctly numbered citations produce no issues."""
+    from llm_wiki.audit.checks import find_incorrect_citation_numbering
+    wiki_dir = tmp_path / "wiki"
+    wiki_dir.mkdir()
+
+    # Page with correct numbering (each source numbered independently by first appearance)
+    # paper-a: 1st = |1|, 2nd = |2|
+    # paper-b: 1st = |1|
+    page_path = wiki_dir / "test.md"
+    page_path.write_text("""---
+title: Test
+created: 2024-01-01
+updated: 2024-01-01
+type: concept
+status: draft
+---
+
+Content citing [[raw/paper-a.pdf|1]], then [[raw/paper-b.pdf|1]], and [[raw/paper-a.pdf|2]] again.
+""")
+
+    vault = Vault.scan(tmp_path)
+    result = find_incorrect_citation_numbering(vault)
+
+    assert result.check == "incorrect-citation-numbering"
+    assert len(result.issues) == 0
+
+
+def test_find_incorrect_citation_numbering_ignores_non_raw_wikilinks(tmp_path):
+    """Only checks [[raw/...|N]] citations, not all wikilinks."""
+    from llm_wiki.audit.checks import find_incorrect_citation_numbering
+    wiki_dir = tmp_path / "wiki"
+    wiki_dir.mkdir()
+
+    # Page with wikilinks but no raw citations
+    page_path = wiki_dir / "test.md"
+    page_path.write_text("""---
+title: Test
+created: 2024-01-01
+updated: 2024-01-01
+type: concept
+status: draft
+---
+
+See [[other-page]] and [[another-concept]] for details.
+""")
+
+    vault = Vault.scan(tmp_path)
+    result = find_incorrect_citation_numbering(vault)
+
+    assert result.check == "incorrect-citation-numbering"
+    assert len(result.issues) == 0
+
