@@ -43,7 +43,7 @@ def is_near_match(
             jaccard = len(a_tokens & b_tokens) / len(union)
             if jaccard > jaccard_threshold:
                 return True
-        if a_tokens < b_tokens or b_tokens < a_tokens:
+        if min(len(a_tokens), len(b_tokens)) >= 2 and (a_tokens < b_tokens or b_tokens < a_tokens):
             return True
 
     a_str = _normalize(name)

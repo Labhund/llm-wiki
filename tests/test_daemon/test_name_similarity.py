@@ -62,6 +62,19 @@ def test_find_near_matches_returns_subset():
     assert matches == ["srna-tquant"]
 
 
+def test_is_near_match_single_token_not_blocked_by_subset():
+    from llm_wiki.daemon.name_similarity import is_near_match
+    # 'trf' is a single-token slug — should NOT block 'trf-quantification'
+    assert not is_near_match(
+        "trf-quantification", "trf",
+        jaccard_threshold=0.5, levenshtein_threshold=0.85,
+    )
+    assert not is_near_match(
+        "trf", "trf-quantification",
+        jaccard_threshold=0.5, levenshtein_threshold=0.85,
+    )
+
+
 def test_find_near_matches_empty_when_nothing_close():
     from llm_wiki.daemon.name_similarity import find_near_matches
     cfg = WriteConfig()

@@ -1,11 +1,11 @@
 # TODO
 
-## Notes:
-- matching in the mcp server is too aggressive especially for substring based pages 'trf' existing as a page blocks agent on creation of 'trf-quantification'
-- mcp tools might be too verbose in their descriptions
-- mcp fo rthe ingest pipeline should be removed.. in fact all the background process mcp tools should be removed there is no need to run them in an interactive session... just use the cli
-- the cli autoingest pipeline leaves a lot to be desired. this might be model depeendant... i have been using a smaller cheaper model (step-3.5-flash) which might be too stupid to do the task properly or perhaps my skills are not set up well
-- we need to do better at tagging
+## Known Issues
+
+- **MCP tool descriptions too verbose** — agents receive noisy context; trim descriptions across the 27 tools
+- **`wiki_ingest` should be removed from MCP** — it dispatches a long-running background agent pipeline (minutes); wrong for interactive sessions. Ingest belongs on the CLI only
+- **Autoingest quality is model-dependent** — tested with `step-3.5-flash`; unclear whether failures are model capability or skill/prompt quality
+- **Tagging needs improvement** — Librarian agent auto-tags post-ingest but quality is poor; likely a prompt issue in `librarian/prompts.py`
 
 
 ## Rendered Document Responses (Future Direction)
