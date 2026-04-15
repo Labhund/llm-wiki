@@ -1,5 +1,9 @@
 # LLM Wiki
 
+> **This project is deprecated.** Development has moved to [lacuna-wiki](https://github.com/Labhund/lacuna-wiki), a cleaner rewrite with a simpler single-tool MCP surface, structured agent skills, and a compounding knowledge graph. Use that instead.
+
+---
+
 An agent-first knowledge base: plain markdown with wikilinks, a daemon that keeps it indexed and honest, and an MCP server that lets agents navigate it the way a researcher reads Wikipedia.
 
 > *The LLM writes and maintains the wiki; the human reads and asks questions.*
